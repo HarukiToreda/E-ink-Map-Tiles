@@ -5,6 +5,7 @@ import json
 import math
 import os
 import queue
+import re
 import tempfile
 import threading
 import tkinter as tk
@@ -21,6 +22,10 @@ from . import cli
 
 
 DEFAULT_OUTPUT_BASE = Path.home() / "Downloads" / "EinkMapTiles"
+DEFAULT_BRIGHTNESS = 0.9722627737226277
+DEFAULT_CONTRAST = 0.9328467153284672
+DEFAULT_THRESHOLD = 177.44525547445255
+DESKTOP_RATE_LIMIT_SECONDS = 0.05
 DEFAULT_ELEMENTS = list(cli.MAP_ELEMENTS)
 ELEMENT_LABELS = {
     "land": "Land",
@@ -89,6 +94,7 @@ class DesktopApp(tk.Tk):
         self.preview_after_id: str | None = None
         self.live_update_after_id: str | None = None
         self.preview_tile_cache: dict[tuple, Any] = {}
+        self.export_total = 0
 
         self.vars = self.make_vars()
         self.configure_styles()
@@ -119,13 +125,18 @@ class DesktopApp(tk.Tk):
             "style": tk.StringVar(value="osm-eink"),
             "layout": tk.StringVar(value="inkhud-dev"),
             "mode": tk.StringVar(value="mono"),
-            "brightness": tk.DoubleVar(value=0.8),
-            "contrast": tk.DoubleVar(value=1.3),
-            "threshold": tk.IntVar(value=201),
+            "brightness": tk.DoubleVar(value=DEFAULT_BRIGHTNESS),
+            "contrast": tk.DoubleVar(value=DEFAULT_CONTRAST),
+            "threshold": tk.DoubleVar(value=DEFAULT_THRESHOLD),
             "output": tk.StringVar(value=str(DEFAULT_OUTPUT_BASE / f"osm-eink-{timestamp}")),
             "tile_count": tk.StringVar(value="Estimate: not calculated"),
             "preview_status": tk.StringVar(value="Loading OpenFreeMap overview preview..."),
             "status": tk.StringVar(value="Ready"),
+            "progress_text": tk.StringVar(value="No export running"),
+            "progress_value": tk.DoubleVar(value=0),
+            "brightness_text": tk.StringVar(value=f"{DEFAULT_BRIGHTNESS:.2f}"),
+            "contrast_text": tk.StringVar(value=f"{DEFAULT_CONTRAST:.2f}"),
+            "threshold_text": tk.StringVar(value=f"{DEFAULT_THRESHOLD:.0f}"),
         }
         for element in cli.MAP_ELEMENTS:
             variables[f"element_{element}"] = tk.BooleanVar(value=element in DEFAULT_ELEMENTS)
@@ -219,13 +230,14 @@ class DesktopApp(tk.Tk):
         self.build_area(controls).grid(row=2, column=0, sticky="ew", pady=(0, 10))
         self.build_settings(controls).grid(row=3, column=0, sticky="ew", pady=(0, 10))
         self.build_elements(controls).grid(row=4, column=0, sticky="ew", pady=(0, 10))
-        self.log = tk.Text(controls, height=1)
-        self.log.grid_remove()
 
     def bind_live_controls(self) -> None:
         preview_keys = ("mode", "brightness", "contrast", "threshold", "source", "url")
         for key in preview_keys:
             self.vars[key].trace_add("write", lambda *_args: self.queue_live_update(preview=True, estimate=False))
+        self.vars["brightness"].trace_add("write", lambda *_args: self.update_slider_labels())
+        self.vars["contrast"].trace_add("write", lambda *_args: self.update_slider_labels())
+        self.vars["threshold"].trace_add("write", lambda *_args: self.update_slider_labels())
 
         export_keys = ("min_zoom", "max_zoom", "style", "layout")
         for key in export_keys:
@@ -253,6 +265,11 @@ class DesktopApp(tk.Tk):
                 self.schedule_preview(delay_ms=180)
 
         self.live_update_after_id = self.after(250, run_update)
+
+    def update_slider_labels(self) -> None:
+        self.vars["brightness_text"].set(f"{float(self.vars['brightness'].get()):.2f}")
+        self.vars["contrast_text"].set(f"{float(self.vars['contrast'].get()):.2f}")
+        self.vars["threshold_text"].set(f"{float(self.vars['threshold'].get()):.0f}")
 
     def build_scrollable_controls(self, parent: ttk.Frame) -> ttk.Frame:
         shell = ttk.Frame(parent, style="Panel.TFrame")
@@ -388,7 +405,7 @@ class DesktopApp(tk.Tk):
             padx=(6, 10),
             pady=(10, 0),
         )
-        ttk.Label(content, textvariable=self.vars["brightness"]).grid(row=3, column=3, sticky="w", pady=(10, 0))
+        ttk.Label(content, textvariable=self.vars["brightness_text"]).grid(row=3, column=3, sticky="w", pady=(10, 0))
 
         ttk.Label(content, text="Contrast").grid(row=4, column=0, sticky="w", pady=(10, 0))
         ttk.Scale(content, from_=0.6, to=3.0, variable=self.vars["contrast"], orient="horizontal").grid(
@@ -399,7 +416,7 @@ class DesktopApp(tk.Tk):
             padx=(6, 10),
             pady=(10, 0),
         )
-        ttk.Label(content, textvariable=self.vars["contrast"]).grid(row=4, column=3, sticky="w", pady=(10, 0))
+        ttk.Label(content, textvariable=self.vars["contrast_text"]).grid(row=4, column=3, sticky="w", pady=(10, 0))
 
         ttk.Label(content, text="Mono threshold").grid(row=5, column=0, sticky="w", pady=(10, 0))
         ttk.Scale(content, from_=80, to=230, variable=self.vars["threshold"], orient="horizontal").grid(
@@ -410,7 +427,7 @@ class DesktopApp(tk.Tk):
             padx=(6, 10),
             pady=(10, 0),
         )
-        ttk.Label(content, textvariable=self.vars["threshold"]).grid(row=5, column=3, sticky="w", pady=(10, 0))
+        ttk.Label(content, textvariable=self.vars["threshold_text"]).grid(row=5, column=3, sticky="w", pady=(10, 0))
 
         ttk.Label(content, text="Output").grid(row=6, column=0, sticky="w", pady=(10, 0))
         ttk.Entry(content, textvariable=self.vars["output"]).grid(row=7, column=0, columnspan=3, sticky="ew", pady=(4, 0))
@@ -493,6 +510,19 @@ class DesktopApp(tk.Tk):
         self.export_button = self.flat_button(content, "Export Tiles", self.export_tiles, primary=True)
         self.export_button.grid(row=2, column=1, sticky="ew", padx=6)
         self.flat_button(content, "Open Folder", self.open_output_folder).grid(row=2, column=2, sticky="ew", padx=(6, 0))
+        self.progress_bar = ttk.Progressbar(content, variable=self.vars["progress_value"], maximum=1, mode="determinate")
+        self.progress_bar.grid(row=3, column=0, columnspan=3, sticky="ew", pady=(12, 4))
+        ttk.Label(content, textvariable=self.vars["progress_text"], style="Hint.TLabel").grid(row=4, column=0, columnspan=3, sticky="ew")
+        self.log = tk.Text(
+            content,
+            height=5,
+            wrap="word",
+            font=("Consolas", 8),
+            background="#f7faf7",
+            relief="flat",
+            borderwidth=0,
+        )
+        self.log.grid(row=5, column=0, columnspan=3, sticky="ew", pady=(8, 0))
         return frame
 
     def apply_source_preset(self) -> None:
@@ -894,10 +924,18 @@ class DesktopApp(tk.Tk):
         output = Path(self.vars["output"].get()).expanduser()
         self.last_output = output
         self.log.delete("1.0", "end")
+        self.reset_export_progress(job)
         self.export_button.configure(state="disabled")
         self.vars["status"].set("Exporting...")
         self.export_thread = threading.Thread(target=self.run_export, args=(job, output), daemon=True)
         self.export_thread.start()
+
+    def reset_export_progress(self, job: dict[str, Any]) -> None:
+        bbox = cli.BBox(**job["bbox"])
+        self.export_total = len(cli.tiles_for_bbox(bbox, job["zooms"]))
+        self.vars["progress_value"].set(0)
+        self.progress_bar.configure(maximum=max(self.export_total, 1), mode="determinate")
+        self.vars["progress_text"].set(f"Exporting 0 / {self.export_total:,} tiles...")
 
     def validate_export(self, job: dict[str, Any]) -> None:
         self.validate_tile_url(job["urlTemplate"])
@@ -911,18 +949,35 @@ class DesktopApp(tk.Tk):
                 job_path = Path(temp_dir) / "inkhud-tile-job.json"
                 job_path.write_text(json.dumps(job, indent=2) + "\n", encoding="utf-8")
                 writer = QueueWriter(self.messages)
-                argv = ["--job", str(job_path), "--output", str(output), "--zip"]
+                argv = [
+                    "--job",
+                    str(job_path),
+                    "--output",
+                    str(output),
+                    "--zip",
+                    "--rate-limit",
+                    str(DESKTOP_RATE_LIMIT_SECONDS),
+                ]
                 with redirect_stdout(writer):
                     exit_code = cli.main(argv)
                 if exit_code:
                     raise RuntimeError(f"Export failed with exit code {exit_code}")
             self.messages.put(f"\nDone. Output: {output}\nZIP: {output.with_suffix('.zip')}\n")
-            self.after(0, lambda: self.vars["status"].set("Export complete"))
+            self.after(0, self.finish_export_success)
         except Exception as exc:  # noqa: BLE001 - report worker errors in GUI.
             self.messages.put(f"\nExport failed: {exc}\n")
-            self.after(0, lambda: self.vars["status"].set("Export failed"))
+            self.after(0, lambda: self.finish_export_failed(str(exc)))
         finally:
             self.after(0, lambda: self.export_button.configure(state="normal"))
+
+    def finish_export_success(self) -> None:
+        self.vars["status"].set("Export complete")
+        self.vars["progress_value"].set(self.export_total)
+        self.vars["progress_text"].set(f"Complete: {self.export_total:,} tiles exported")
+
+    def finish_export_failed(self, error: str) -> None:
+        self.vars["status"].set("Export failed")
+        self.vars["progress_text"].set(f"Export failed: {error}")
 
     def open_output_folder(self) -> None:
         path = self.last_output or Path(self.vars["output"].get()).expanduser()
@@ -941,7 +996,17 @@ class DesktopApp(tk.Tk):
                 break
             self.log.insert("end", message)
             self.log.see("end")
+            self.update_export_progress_from_message(message)
         self.after(100, self.poll_messages)
+
+    def update_export_progress_from_message(self, message: str) -> None:
+        for completed_text, total_text in re.findall(r"\[(\d+)/(\d+)\]", message):
+            completed = int(completed_text)
+            total = int(total_text)
+            self.export_total = total
+            self.progress_bar.configure(maximum=max(total, 1), mode="determinate")
+            self.vars["progress_value"].set(completed)
+            self.vars["progress_text"].set(f"Exporting {completed:,} / {total:,} tiles...")
 
 
 def main() -> int:
