@@ -41,7 +41,7 @@ For the cleanest free workflow:
 Example local-renderer URL:
 
 ```powershell
-eink-map-tiles --bbox -122.55,47.45,-122.15,47.75 --zooms 6-13 --mode grayscale --url-template "http://127.0.0.1:8080/styles/eink/{z}/{x}/{y}.png" --zip
+eink-map-tiles --bbox="-122.55,47.45,-122.15,47.75" --zooms 6-13 --mode grayscale --url-template "http://127.0.0.1:8080/styles/eink/{z}/{x}/{y}.png" --zip
 ```
 
 ## Install
@@ -60,7 +60,9 @@ Use it to:
 
 - Pan and zoom to an area.
 - Estimate tile counts before downloading anything.
+- Choose which vector map elements to include in the renderer style.
 - Export a CLI command or `inkhud-tile-job.json`.
+- Export an `osm-eink.json` MapLibre style for a local vector renderer.
 - Optionally create a ZIP in the browser when your tile source supports CORS and explicitly permits offline export.
 
 Run an exported job with:
@@ -86,13 +88,13 @@ eink-map-tiles --center-lat 47.6062 --center-lon -122.3321 --radius-km 10 --zoom
 Create a 1-bit black/white test bundle:
 
 ```powershell
-eink-map-tiles --bbox -122.55,47.45,-122.15,47.75 --zooms 6-13 --mode mono --contrast 1.4 --url-template "http://127.0.0.1:8080/{z}/{x}/{y}.png" --zip
+eink-map-tiles --bbox="-122.55,47.45,-122.15,47.75" --zooms 6-13 --mode mono --contrast 1.4 --url-template "http://127.0.0.1:8080/{z}/{x}/{y}.png" --zip
 ```
 
 Use a different XYZ tile server:
 
 ```powershell
-eink-map-tiles --bbox -122.55,47.45,-122.15,47.75 --zooms 6-13 --style my-style --url-template "https://example.com/tiles/{z}/{x}/{y}.png" --zip
+eink-map-tiles --bbox="-122.55,47.45,-122.15,47.75" --zooms 6-13 --style my-style --url-template "https://example.com/tiles/{z}/{x}/{y}.png" --zip
 ```
 
 The default output folder is `build/inkhud-tiles`. The ZIP contains:
@@ -123,6 +125,12 @@ Other layouts are available for experiments:
 - `--mode palette --colors 256` writes indexed-color PNGs.
 - `--brightness` and `--contrast` tune readability before conversion.
 - `--threshold` controls the black/white cutoff for mono exports.
+
+## Map Elements
+
+The picker can include or exclude broad vector-renderer categories: land, water, roads, highways, paths, buildings, boundaries, labels, POI, and transit.
+
+These choices are written to the job and manifest, and the picker can download a simple MapLibre style JSON using those choices. They should be applied before raster tile export by your local vector renderer; already-rendered PNG tiles cannot reliably have individual map elements removed afterward.
 
 ## Provider Notes
 

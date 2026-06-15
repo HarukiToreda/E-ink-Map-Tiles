@@ -17,6 +17,7 @@ from pathlib import Path
 DEFAULT_URL_TEMPLATE = None
 DEFAULT_USER_AGENT = "eink-map-tiles/0.1 (+https://github.com/HarukiToreda/E-ink-Map-Tiles)"
 MAX_MERCATOR_LAT = 85.05112878
+MAP_ELEMENTS = ("land", "water", "roads", "highways", "paths", "buildings", "boundaries", "labels", "pois", "transit")
 
 
 @dataclass(frozen=True)
@@ -70,6 +71,19 @@ def parse_bbox(value: str) -> BBox:
     if south >= north:
         raise argparse.ArgumentTypeError("south must be less than north")
     return BBox(west=west, south=south, east=east, north=north)
+
+
+def parse_elements(value: str) -> list[str]:
+    selected = []
+    valid = set(MAP_ELEMENTS)
+    for item in value.split(","):
+        element = item.strip().lower()
+        if not element:
+            continue
+        if element not in valid:
+            raise argparse.ArgumentTypeError(f"Unknown map element: {element}")
+        selected.append(element)
+    return selected
 
 
 def bbox_from_center(lat: float, lon: float, radius_km: float) -> BBox:
@@ -174,6 +188,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--brightness", type=float, default=1.0, help="Brightness multiplier")
     parser.add_argument("--contrast", type=float, default=1.0, help="Contrast multiplier")
     parser.add_argument("--threshold", type=int, default=201, help="Black/white cutoff for --mode mono")
+    parser.add_argument(
+        "--include-elements",
+        type=parse_elements,
+        default=list(MAP_ELEMENTS),
+        help="Comma-separated vector-style element categories to include in the manifest.",
+    )
     return parser
 
 
@@ -208,6 +228,9 @@ def apply_job_file(args: argparse.Namespace) -> None:
     args.brightness = float(job.get("brightness", args.brightness))
     args.contrast = float(job.get("contrast", args.contrast))
     args.threshold = int(job.get("threshold", args.threshold))
+    job_elements = job.get("elements")
+    if isinstance(job_elements, dict):
+        args.include_elements = [element for element in job_elements.get("include", []) if element in MAP_ELEMENTS]
     args.layout = job.get("layout") or args.layout
     args.url_template = job.get("urlTemplate") or job.get("url_template") or args.url_template
 
@@ -322,6 +345,10 @@ def write_manifest(output_root: Path, args: argparse.Namespace, bbox: BBox, tile
         "brightness": args.brightness,
         "contrast": args.contrast,
         "threshold": args.threshold if args.mode == "mono" else None,
+        "elements": {
+            "include": args.include_elements,
+            "exclude": [element for element in MAP_ELEMENTS if element not in args.include_elements],
+        },
     }
     output_root.mkdir(parents=True, exist_ok=True)
     (output_root / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")

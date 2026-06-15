@@ -108,6 +108,24 @@ h2 {
   justify-content: space-between;
 }
 
+.button-row {
+  flex-wrap: wrap;
+}
+
+.button-row button {
+  flex: 1 1 140px;
+}
+
+.element-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 9px 12px;
+}
+
+.element-grid .check-row {
+  min-height: 28px;
+}
+
 .grid {
   display: grid;
   gap: 10px;

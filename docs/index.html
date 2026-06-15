@@ -115,8 +115,62 @@
 
         <section class="panel">
           <div class="panel-title">
+            <h2>Elements</h2>
+            <button id="allElementsButton" type="button">All</button>
+          </div>
+          <div class="element-grid">
+            <label class="check-row">
+              <input class="element-input" type="checkbox" value="land" checked />
+              <span>Land</span>
+            </label>
+            <label class="check-row">
+              <input class="element-input" type="checkbox" value="water" checked />
+              <span>Water</span>
+            </label>
+            <label class="check-row">
+              <input class="element-input" type="checkbox" value="roads" checked />
+              <span>Roads</span>
+            </label>
+            <label class="check-row">
+              <input class="element-input" type="checkbox" value="highways" checked />
+              <span>Highways</span>
+            </label>
+            <label class="check-row">
+              <input class="element-input" type="checkbox" value="paths" />
+              <span>Paths</span>
+            </label>
+            <label class="check-row">
+              <input class="element-input" type="checkbox" value="buildings" />
+              <span>Buildings</span>
+            </label>
+            <label class="check-row">
+              <input class="element-input" type="checkbox" value="boundaries" checked />
+              <span>Boundaries</span>
+            </label>
+            <label class="check-row">
+              <input class="element-input" type="checkbox" value="labels" checked />
+              <span>Labels</span>
+            </label>
+            <label class="check-row">
+              <input class="element-input" type="checkbox" value="pois" />
+              <span>POI</span>
+            </label>
+            <label class="check-row">
+              <input class="element-input" type="checkbox" value="transit" />
+              <span>Transit</span>
+            </label>
+          </div>
+          <p class="hint">Element choices are applied in the downloaded style/job for your local vector renderer.</p>
+        </section>
+
+        <section class="panel">
+          <div class="panel-title">
             <h2>Legal Source</h2>
           </div>
+          <label>
+            Vector TileJSON URL
+            <input id="vectorSourceInput" type="text" placeholder="mbtiles://openmaptiles" />
+          </label>
           <label>
             Tile URL template
             <input id="urlInput" type="url" placeholder="http://127.0.0.1:8080/styles/eink/{z}/{x}/{y}.png" />
@@ -139,6 +193,7 @@
           <div class="button-row">
             <button id="copyButton" type="button">Copy Command</button>
             <button id="jobButton" type="button">Download Job</button>
+            <button id="styleButton" type="button">Download Style</button>
             <button id="zipButton" type="button">Download ZIP</button>
           </div>
           <p id="statusText" class="status" role="status"></p>

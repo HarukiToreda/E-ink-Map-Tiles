@@ -1,4 +1,5 @@
 const MAX_MERCATOR_LAT = 85.05112878;
+const ELEMENTS = ["land", "water", "roads", "highways", "paths", "buildings", "boundaries", "labels", "pois", "transit"];
 
 const elements = {
   west: document.getElementById("westInput"),
@@ -7,7 +8,7 @@ const elements = {
   north: document.getElementById("northInput"),
   minZoom: document.getElementById("minZoomInput"),
   maxZoom: document.getElementById("maxZoomInput"),
-  style: document.getElementById("styleInput"),
+  styleName: document.getElementById("styleInput"),
   mode: document.getElementById("modeInput"),
   preview: document.getElementById("previewInput"),
   contrast: document.getElementById("contrastInput"),
@@ -16,6 +17,8 @@ const elements = {
   brightnessOutput: document.getElementById("brightnessOutput"),
   threshold: document.getElementById("thresholdInput"),
   thresholdOutput: document.getElementById("thresholdOutput"),
+  vectorSource: document.getElementById("vectorSourceInput"),
+  elementInputs: [...document.querySelectorAll(".element-input")],
   layout: document.getElementById("layoutInput"),
   url: document.getElementById("urlInput"),
   permission: document.getElementById("permissionInput"),
@@ -23,8 +26,10 @@ const elements = {
   command: document.getElementById("commandOutput"),
   status: document.getElementById("statusText"),
   useView: document.getElementById("useViewButton"),
+  allElements: document.getElementById("allElementsButton"),
   copy: document.getElementById("copyButton"),
   job: document.getElementById("jobButton"),
+  styleButton: document.getElementById("styleButton"),
   zip: document.getElementById("zipButton"),
 };
 
@@ -62,6 +67,17 @@ elements.copy.addEventListener("click", async () => {
 
 elements.job.addEventListener("click", () => {
   downloadText("inkhud-tile-job.json", JSON.stringify(buildJob(), null, 2) + "\n", "application/json");
+});
+
+elements.styleButton.addEventListener("click", () => {
+  const job = buildJob();
+  downloadText(`${job.style}.json`, JSON.stringify(buildEinkStyle(job), null, 2) + "\n", "application/json");
+});
+
+elements.allElements.addEventListener("click", () => {
+  const enableAll = elements.elementInputs.some((input) => !input.checked);
+  for (const input of elements.elementInputs) input.checked = enableAll;
+  refresh();
 });
 
 elements.zip.addEventListener("click", async () => {
@@ -120,11 +136,13 @@ function buildJob() {
       north: Number(elements.north.value),
     },
     zooms: zoomRange(Number(elements.minZoom.value), Number(elements.maxZoom.value)),
-    style: sanitizeStyle(elements.style.value),
+    style: sanitizeStyle(elements.styleName.value),
     mode: elements.mode.value,
     brightness: Number(elements.brightness.value),
     contrast: Number(elements.contrast.value),
     threshold: Math.round(Number(elements.threshold.value)),
+    elements: selectedElements(),
+    vectorSource: elements.vectorSource.value.trim(),
     layout: elements.layout.value,
     urlTemplate: elements.url.value.trim(),
   };
@@ -135,8 +153,7 @@ function buildCommand(job) {
   const zooms = compactZooms(job.zooms);
   const parts = [
     "eink-map-tiles",
-    "--bbox",
-    quote(bbox),
+    `--bbox=${quote(bbox)}`,
     "--zooms",
     quote(zooms),
     "--style",
@@ -149,6 +166,8 @@ function buildCommand(job) {
     quote(job.contrast.toFixed(2)),
     "--threshold",
     quote(job.threshold),
+    "--include-elements",
+    quote(job.elements.include.join(",")),
     "--layout",
     quote(job.layout),
   ];
@@ -262,6 +281,164 @@ async function fetchConvertedTile(url, job) {
 
   context.putImageData(imageData, 0, 0);
   return await new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
+}
+
+function selectedElements() {
+  const include = elements.elementInputs.filter((input) => input.checked).map((input) => input.value);
+  return {
+    include,
+    exclude: ELEMENTS.filter((name) => !include.includes(name)),
+  };
+}
+
+function buildEinkStyle(job) {
+  const sourceId = "openmaptiles";
+  const sourceUrl = job.vectorSource || "mbtiles://openmaptiles";
+  return {
+    version: 8,
+    name: job.style,
+    glyphs: "https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf",
+    sources: {
+      [sourceId]: {
+        type: "vector",
+        url: sourceUrl,
+      },
+    },
+    layers: [
+      { id: "background", type: "background", paint: { "background-color": "#f8f8f8" } },
+      ...styleLayersForElements(sourceId, job.elements.include),
+    ],
+  };
+}
+
+function styleLayersForElements(sourceId, include) {
+  const enabled = new Set(include);
+  const layers = [];
+  if (enabled.has("land")) {
+    layers.push(
+      {
+        id: "landcover",
+        type: "fill",
+        source: sourceId,
+        "source-layer": "landcover",
+        paint: { "fill-color": "#eeeeee", "fill-opacity": 0.55 },
+      },
+      {
+        id: "landuse",
+        type: "fill",
+        source: sourceId,
+        "source-layer": "landuse",
+        paint: { "fill-color": "#e6e6e6", "fill-opacity": 0.45 },
+      },
+    );
+  }
+  if (enabled.has("water")) {
+    layers.push(
+      {
+        id: "water",
+        type: "fill",
+        source: sourceId,
+        "source-layer": "water",
+        paint: { "fill-color": "#ffffff" },
+      },
+      {
+        id: "waterway",
+        type: "line",
+        source: sourceId,
+        "source-layer": "waterway",
+        paint: { "line-color": "#444444", "line-width": ["interpolate", ["linear"], ["zoom"], 8, 0.4, 14, 1.1] },
+      },
+    );
+  }
+  if (enabled.has("buildings")) {
+    layers.push({
+      id: "building",
+      type: "fill",
+      source: sourceId,
+      "source-layer": "building",
+      paint: { "fill-color": "#d0d0d0", "fill-outline-color": "#777777" },
+    });
+  }
+  if (enabled.has("boundaries")) {
+    layers.push({
+      id: "boundary",
+      type: "line",
+      source: sourceId,
+      "source-layer": "boundary",
+      paint: { "line-color": "#8c8c8c", "line-dasharray": [2, 2], "line-width": 0.8 },
+    });
+  }
+  if (enabled.has("paths")) {
+    layers.push({
+      id: "paths",
+      type: "line",
+      source: sourceId,
+      "source-layer": "transportation",
+      filter: ["in", ["get", "class"], ["literal", ["path", "track", "footway", "cycleway", "pedestrian"]]],
+      paint: { "line-color": "#777777", "line-dasharray": [1, 1.5], "line-width": ["interpolate", ["linear"], ["zoom"], 10, 0.5, 16, 1.6] },
+    });
+  }
+  if (enabled.has("roads")) {
+    layers.push({
+      id: "roads",
+      type: "line",
+      source: sourceId,
+      "source-layer": "transportation",
+      filter: ["in", ["get", "class"], ["literal", ["minor", "service", "tertiary", "secondary"]]],
+      paint: { "line-color": "#222222", "line-width": ["interpolate", ["linear"], ["zoom"], 6, 0.45, 16, 2.4] },
+    });
+  }
+  if (enabled.has("highways")) {
+    layers.push({
+      id: "highways",
+      type: "line",
+      source: sourceId,
+      "source-layer": "transportation",
+      filter: ["in", ["get", "class"], ["literal", ["motorway", "trunk", "primary"]]],
+      paint: { "line-color": "#000000", "line-width": ["interpolate", ["linear"], ["zoom"], 5, 0.8, 16, 3.3] },
+    });
+  }
+  if (enabled.has("transit")) {
+    layers.push({
+      id: "rail",
+      type: "line",
+      source: sourceId,
+      "source-layer": "transportation",
+      filter: ["==", ["get", "class"], "rail"],
+      paint: { "line-color": "#333333", "line-dasharray": [3, 2], "line-width": 1 },
+    });
+  }
+  if (enabled.has("labels")) {
+    layers.push(
+      {
+        id: "place-labels",
+        type: "symbol",
+        source: sourceId,
+        "source-layer": "place",
+        layout: { "text-field": ["coalesce", ["get", "name:en"], ["get", "name"]], "text-size": ["interpolate", ["linear"], ["zoom"], 4, 10, 12, 16] },
+        paint: { "text-color": "#000000", "text-halo-color": "#ffffff", "text-halo-width": 2 },
+      },
+      {
+        id: "road-labels",
+        type: "symbol",
+        source: sourceId,
+        "source-layer": "transportation_name",
+        layout: { "symbol-placement": "line", "text-field": ["get", "name"], "text-size": 10 },
+        paint: { "text-color": "#111111", "text-halo-color": "#ffffff", "text-halo-width": 1.5 },
+      },
+    );
+  }
+  if (enabled.has("pois")) {
+    layers.push({
+      id: "poi-labels",
+      type: "symbol",
+      source: sourceId,
+      "source-layer": "poi",
+      layout: { "text-field": ["coalesce", ["get", "name:en"], ["get", "name"]], "text-size": 9 },
+      paint: { "text-color": "#222222", "text-halo-color": "#ffffff", "text-halo-width": 1.5 },
+    });
+  }
+  return layers;
 }
 
 function updatePreview(job) {
