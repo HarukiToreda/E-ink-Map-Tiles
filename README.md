@@ -130,7 +130,7 @@ Other layouts are available for experiments:
 
 The picker can include or exclude broad vector-renderer categories: land, water, roads, highways, paths, buildings, boundaries, labels, POI, and transit.
 
-These choices are written to the job and manifest, and the picker can download a simple MapLibre style JSON using those choices. They should be applied before raster tile export by your local vector renderer; already-rendered PNG tiles cannot reliably have individual map elements removed afterward.
+These choices update the live vector preview, are written to the job and manifest, and can be downloaded as a simple MapLibre style JSON. They should be applied before raster tile export by your local vector renderer; already-rendered PNG tiles cannot reliably have individual map elements removed afterward.
 
 ## Provider Notes
 
