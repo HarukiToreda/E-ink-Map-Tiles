@@ -12,7 +12,7 @@ Run the executable:
 .\dist\EinkMapTiles.exe
 ```
 
-The app is a native desktop window. It does not open a browser, does not use GitHub Pages, and does not download a runner script.
+The app is a native desktop window.
 
 Basic flow:
 
@@ -23,7 +23,7 @@ Basic flow:
 5. Choose zoom levels and e-paper settings.
 6. Click **Export Tiles**.
 
-The default source downloads OpenFreeMap vector tiles for the selected area and renders e-paper PNG tiles locally. No TileServer GL setup or custom tile URL is needed for the default path.
+The default source downloads OpenFreeMap vector tiles for the selected area and renders e-paper PNG tiles locally. No separate map server or custom tile URL is needed.
 
 During export, the app shows a progress bar, current tile count, and a log of completed tile paths.
 
@@ -78,7 +78,6 @@ A local executable does not make every map source legal. The source still has to
 Good directions:
 
 - Built-in OpenFreeMap vector tiles, which the app renders locally.
-- A local renderer backed by data you are allowed to use.
 - OpenFreeMap or OpenMapTiles data used according to their license and attribution terms.
 - Protomaps PMTiles extracts used according to their license and attribution terms.
 - A provider API only when the provider explicitly allows offline or bulk export.
@@ -89,20 +88,12 @@ Avoid:
 - Scraping public raster tile servers.
 - Assuming "free to view" means "free to bulk download."
 
-Advanced users can still switch to a local TileServer GL raster URL or a custom XYZ PNG URL.
-
 ## CLI
 
 The desktop app wraps the CLI. You can also run the CLI directly with the built-in OpenFreeMap source:
 
 ```powershell
 eink-map-tiles --source openfreemap-vector --bbox="-122.55,47.45,-122.15,47.75" --zooms 6-12 --mode mono --contrast 1.4 --brightness 0.95 --threshold 201 --zip
-```
-
-Or use a custom XYZ raster source:
-
-```powershell
-eink-map-tiles --bbox="-122.55,47.45,-122.15,47.75" --zooms 6-12 --mode mono --contrast 1.4 --brightness 0.95 --threshold 201 --url-template "http://127.0.0.1:8080/styles/basic/{z}/{x}/{y}.png" --zip
 ```
 
 Preview tile count without downloading:

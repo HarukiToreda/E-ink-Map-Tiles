@@ -49,17 +49,7 @@ SOURCE_PRESETS = {
         "source": "openfreemap-vector",
         "url": cli.OPENFREEMAP_VECTOR_TEMPLATE,
         "help": "Default open map source. No setup needed.",
-    },
-    "Local TileServer GL raster": {
-        "source": "xyz",
-        "url": "http://127.0.0.1:8080/styles/basic/{z}/{x}/{y}.png",
-        "help": "Advanced. Use when you are running TileServer GL locally with a legal .mbtiles file.",
-    },
-    "Custom XYZ PNG URL": {
-        "source": "xyz",
-        "url": "",
-        "help": "Use only a local/self-hosted source or provider URL that explicitly allows offline export.",
-    },
+    }
 }
 
 
@@ -531,7 +521,7 @@ class DesktopApp(tk.Tk):
         return frame
 
     def apply_source_preset(self) -> None:
-        preset = SOURCE_PRESETS.get(str(self.vars["source_preset"].get()), SOURCE_PRESETS["Custom XYZ PNG URL"])
+        preset = SOURCE_PRESETS.get(str(self.vars["source_preset"].get()), SOURCE_PRESETS["OpenFreeMap open vector tiles"])
         self.vars["source"].set(preset["source"])
         self.vars["source_help"].set(preset["help"])
         if preset["url"]:
