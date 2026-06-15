@@ -15,6 +15,7 @@ dependencies = [
 
 [project.scripts]
 eink-map-tiles = "eink_map_tiles.cli:main"
+eink-map-tiles-app = "eink_map_tiles.local_app:main"
 
 [tool.setuptools]
 package-dir = { "" = "src" }

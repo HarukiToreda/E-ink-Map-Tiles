@@ -4,16 +4,19 @@ Generate offline map tiles for future e-ink map rendering work, especially a lat
 
 This repo is intentionally focused on the asset pipeline, not the firmware integration. It takes tiles from a legal tile source that you control or are allowed to bulk export, converts them into e-paper-friendly PNGs, writes a predictable folder structure, and records a manifest that future firmware code can consume or transform.
 
-## Plan
+## Direction: Local App First
 
-1. Use open map data or packaged open vector tiles, not scraped public raster tiles.
-2. Render tiles locally from that source, or use a provider that explicitly allows bulk/offline export.
-3. Generate a small test bundle around one known location.
-4. Tune e-paper readability using grayscale, mono, brightness, and contrast options.
-5. Keep the output as normal XYZ tiles: `{z}/{x}/{y}.png`.
-6. Store generated tiles under `tiles/{style}/z/x/y.png` with a `manifest.json`.
-7. Later, in the firmware repo, add an InkHUD map applet that can load this manifest or the same tile path convention.
-8. After the renderer exists, decide whether the firmware should consume PNGs directly, preprocessed 1-bit bitmaps, or a compact custom tile format.
+The GitHub Pages picker was useful for proving the idea, but it is not the right main workflow. The better product is a local app/exe:
+
+1. Open one local map picker.
+2. Select an area.
+3. Choose an allowed map source.
+4. Click export.
+5. Get a ready-to-copy ZIP/folder of e-paper tiles.
+
+A local app does not make an arbitrary map source legal by itself. The legal win is that the app can work from sources that are meant to be downloaded or self-hosted, such as PMTiles/MBTiles archives or a tile server you control. It also avoids the confusing hosted-site flow where a web page downloads a PowerShell script that then asks for another tile URL.
+
+The current CLI remains useful as the export engine. The next implementation should wrap it in a local UI instead of making users assemble the pieces manually.
 
 ## Legal Free Map Sources
 
@@ -28,115 +31,58 @@ Good free/legal paths:
 
 Avoid using `https://tile.openstreetmap.org/{z}/{x}/{y}.png` for offline bundles. OSM data is free, but the public OSM tile servers are not for bulk downloading or prefetching.
 
-## Recommended Workflow
+## New Recommended Workflow
 
-For the cleanest free workflow:
+The simplest legal user experience should be:
 
-1. Get vector tiles legally, preferably from OpenFreeMap MBTiles or a Protomaps PMTiles regional extract.
-2. Run a local raster renderer such as TileServer GL so it exposes PNG tiles on `localhost`.
-3. Point this tool at that local endpoint with `--url-template`.
-4. Convert the rendered tiles to grayscale or 1-bit e-paper PNGs.
-5. Keep the generated ZIP and manifest with attribution notes.
+1. Run `EinkMapTiles.exe`.
+2. Pick an area on the map.
+3. Choose one of these source options:
+   - **Local PMTiles/MBTiles file**: safest free path once the file is downloaded.
+   - **Local tile server**: good for advanced users who already run TileServer GL, Martin, or another renderer.
+   - **Provider URL**: only when that provider explicitly permits offline/bulk export.
+4. Pick zooms and e-paper settings.
+5. Click **Export Tiles**.
 
-Example local-renderer URL:
-
-```powershell
-eink-map-tiles --bbox="-122.55,47.45,-122.15,47.75" --zooms 6-13 --mode grayscale --url-template "http://127.0.0.1:8080/styles/eink/{z}/{x}/{y}.png" --zip
-```
-
-## Hosted Tile Packs
-
-Yes, you can make testing easier by hosting prebuilt tiles from this repo, as long as the tiles were generated from a source that allows redistribution and you keep the required attribution.
-
-Best use for this repo:
-
-- Host small demo/test packs, not continent-scale or world-scale tiles.
-- Generate them from self-hosted/open packaged data such as OpenFreeMap MBTiles, Protomaps PMTiles, OpenMapTiles tooling, or raw OSM extracts.
-- Store them under `docs/tiles/{pack-name}/z/x/y.png`.
-- Set the picker tile URL template to:
+The app should write:
 
 ```text
-https://harukitoreda.github.io/E-ink-Map-Tiles/tiles/{pack-name}/{z}/{x}/{y}.png
+build/inkhud-tiles/
+  tiles/{style}/{z}/{x}/{y}.png
+  manifest.json
+  inkhud-tiles.zip
 ```
 
-This makes browser ZIP downloads much easier because the tiles are same-origin with the GitHub Pages site.
+## Map Source Rules
 
-Important limits:
+Use sources that are designed for download, self-hosting, or offline export.
 
-- GitHub Pages published sites may be no larger than 1 GB.
-- GitHub Pages has a soft bandwidth limit of 100 GB per month.
-- Tile pyramids grow quickly, so keep hosted packs small and low/medium zoom.
-- Do not create hosted packs by scraping public OpenStreetMap raster tiles.
+Good source directions:
 
-If you need large areas, use object storage or a real tile server instead of committing the tiles to Git.
+- Protomaps PMTiles: downloadable OSM-derived vector basemap. Regional extracts can be created with the `pmtiles` CLI. Attribution required.
+- OpenFreeMap downloads: open-source stack with weekly full-planet downloads in Btrfs and MBTiles formats. Attribution required.
+- OpenMapTiles tooling/data: useful when self-hosting or building your own tiles from OSM data. Attribution required.
+- Your own tile server: legal when you control the data source and its license allows the export.
+- A paid/free provider API: legal only if the provider's terms explicitly allow offline export or bulk tile generation.
 
-## Getting A Tile Source
+Avoid:
 
-The **Tile URL template** field needs an XYZ raster PNG endpoint. In plain English, that means a URL where changing `{z}`, `{x}`, and `{y}` returns one 256x256 map image.
+- Downloading from `https://tile.openstreetmap.org/{z}/{x}/{y}.png` for offline bundles.
+- Building hosted packs by scraping public raster tile servers.
+- Assuming "free to view" means "free to bulk download and redistribute."
 
-Example shape:
+## Local App Implementation Plan
 
-```text
-http://127.0.0.1:8080/styles/eink/{z}/{x}/{y}.png
-```
+Build the next version around a local executable:
 
-Do not paste `https://tile.openstreetmap.org/{z}/{x}/{y}.png` for exports. That public service is for interactive viewing, not building offline tile bundles.
+1. Keep `eink-map-tiles` as the command-line export engine.
+2. Add `eink-map-tiles-app`, a local web UI served from `127.0.0.1`.
+3. The local UI should call a local export API instead of downloading a runner script.
+4. First source support: local/self-hosted XYZ PNG URL, because the current CLI already supports it.
+5. Next source support: local PMTiles/MBTiles file with a bundled/local renderer, so users do not need to understand tile URL templates.
+6. Keep GitHub Pages only as documentation or a non-exporting demo.
 
-### Option A: Local TileServer GL
-
-This is the most practical legal path for testing.
-
-You need:
-
-- Docker Desktop
-- A legal `.mbtiles` file, such as one downloaded/generated from OpenFreeMap, OpenMapTiles, MapTiler data, or your own OSM extract pipeline
-
-Put the `.mbtiles` file in a folder, for example:
-
-```text
-C:\maps\my-area.mbtiles
-```
-
-Run TileServer GL:
-
-```powershell
-cd C:\maps
-docker run --rm -it -v ${PWD}:/data -p 8080:8080 maptiler/tileserver-gl:latest --file my-area.mbtiles
-```
-
-Open this in your browser to confirm it is running:
-
-```text
-http://127.0.0.1:8080
-```
-
-TileServer GL shows available styles and tile endpoints. Use the PNG raster endpoint it shows as the picker's **Tile URL template**. It will usually look similar to:
-
-```text
-http://127.0.0.1:8080/styles/basic/{z}/{x}/{y}.png
-```
-
-Then return to the picker, paste that URL, check the permission box, and click **Download Runner** or **Download ZIP**.
-
-### Option B: Hosted Demo Tiles
-
-For the easiest public testing, generate a small legal tile pack once and commit it under:
-
-```text
-docs/tiles/demo/z/x/y.png
-```
-
-Then use:
-
-```text
-https://harukitoreda.github.io/E-ink-Map-Tiles/tiles/demo/{z}/{x}/{y}.png
-```
-
-This avoids every tester needing Docker, but it only works for areas and zooms already included in the hosted pack.
-
-### Option C: Provider Tile API
-
-Some providers offer raster tile APIs and may allow offline export under specific plans or terms. If a provider explicitly allows your use case, paste their XYZ PNG URL into the picker. If their terms only allow live display, do not use them for offline bundles.
+This gives users a normal desktop-app flow while preserving the legal line: the app exports from an allowed source, not from public viewing-only tiles.
 
 ## Install
 
@@ -146,9 +92,29 @@ python -m venv .venv
 pip install -e .
 ```
 
+## Run The Local App
+
+```powershell
+eink-map-tiles-app
+```
+
+This opens:
+
+```text
+http://127.0.0.1:8765/
+```
+
+Use the map picker, enter a legal tile source, confirm permission, then click **Export Locally**. The app saves output under:
+
+```text
+%USERPROFILE%\Downloads\EinkMapTiles\
+```
+
+Current local-app limitation: it still expects an XYZ PNG tile URL. That should be treated as a stepping stone. The next major source upgrade should let users choose a local PMTiles/MBTiles file so they do not need to understand tile URL templates.
+
 ## GitHub Pages Picker
 
-The static picker lives in `docs/` so this repo can publish it with GitHub Pages using the `docs` folder as the Pages source.
+The static picker lives in `docs/` so this repo can publish a demo with GitHub Pages, but GitHub Pages is no longer the recommended export workflow.
 
 Live test site:
 
@@ -162,17 +128,16 @@ Use it to:
 - Estimate tile counts before downloading anything.
 - Choose which vector map elements to include in the renderer style.
 - Export a CLI command or `inkhud-tile-job.json`.
-- Export a Windows runner script that installs/runs the generator for that selected area.
 - Export an `osm-eink.json` MapLibre style for a local vector renderer.
-- Optionally create a ZIP in the browser when your tile source supports CORS and explicitly permits offline export.
+- Try browser ZIP export only when your tile source supports CORS and explicitly permits offline export.
 
-Easiest test path:
+Recommended export path:
 
-1. Open the live site.
+1. Run `eink-map-tiles-app`.
 2. Choose an area and click **Use View**.
-3. Add a legal tile URL template, or leave it blank and the runner will ask later.
-4. Click **Download Runner**.
-5. Run `run-inkhud-tile-job.ps1` in PowerShell.
+3. Add a legal tile URL template.
+4. Confirm permission.
+5. Click **Export Locally**.
 
 Run an exported job with:
 

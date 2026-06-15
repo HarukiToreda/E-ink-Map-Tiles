@@ -34,6 +34,7 @@ const elements = {
   useView: document.getElementById("useViewButton"),
   allElements: document.getElementById("allElementsButton"),
   copy: document.getElementById("copyButton"),
+  localExport: document.getElementById("localExportButton"),
   job: document.getElementById("jobButton"),
   runner: document.getElementById("runnerButton"),
   styleButton: document.getElementById("styleButton"),
@@ -50,6 +51,7 @@ L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
 let areaLayer = null;
 setInputsFromBounds(map.getBounds());
 refresh();
+detectLocalApp();
 
 map.on("moveend", () => {
   setInputsFromBounds(map.getBounds());
@@ -70,6 +72,29 @@ for (const element of Object.values(elements)) {
 elements.copy.addEventListener("click", async () => {
   await navigator.clipboard.writeText(elements.command.value);
   setStatus("Command copied.");
+});
+
+elements.localExport.addEventListener("click", async () => {
+  const job = buildJob();
+  if (!job.urlTemplate) {
+    setStatus("Add a legal tile URL template before exporting locally.", true);
+    return;
+  }
+  if (!elements.permission.checked) {
+    setStatus("Confirm that this source allows offline or bulk tile export.", true);
+    return;
+  }
+
+  elements.localExport.disabled = true;
+  try {
+    setStatus("Exporting locally...");
+    const result = await exportLocally(job);
+    setStatus(`Export complete: ${result.zipPath || result.outputPath}`);
+  } catch (error) {
+    setStatus(`Local export failed: ${error.message}`, true);
+  } finally {
+    elements.localExport.disabled = false;
+  }
 });
 
 elements.job.addEventListener("click", () => {
@@ -324,6 +349,33 @@ async function downloadZip(job, tiles) {
 
   const zipBlob = await zip.generateAsync({ type: "blob" });
   downloadBlob(`${job.style}-inkhud-tiles.zip`, zipBlob);
+}
+
+async function detectLocalApp() {
+  try {
+    const response = await fetch("/api/status", { cache: "no-store" });
+    if (!response.ok) return;
+    const status = await response.json();
+    if (status.localApp) {
+      elements.localExport.hidden = false;
+      elements.runner.hidden = true;
+    }
+  } catch {
+    elements.localExport.hidden = true;
+  }
+}
+
+async function exportLocally(job) {
+  const response = await fetch("/api/export", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(job),
+  });
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(result.error || `HTTP ${response.status}`);
+  }
+  return result;
 }
 
 async function fetchConvertedTile(url, job) {
