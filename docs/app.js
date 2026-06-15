@@ -1,5 +1,11 @@
 const MAX_MERCATOR_LAT = 85.05112878;
 const ELEMENTS = ["land", "water", "roads", "highways", "paths", "buildings", "boundaries", "labels", "pois", "transit"];
+const DEFAULT_ATTRIBUTION = {
+  mapData: "\u00a9 OpenStreetMap contributors",
+  mapDataLicense: "Open Database License (ODbL) 1.0",
+  openMapTiles: "\u00a9 OpenMapTiles, if using OpenMapTiles schema/data",
+  notes: "Verify and preserve attribution required by your tile source/provider.",
+};
 
 const elements = {
   west: document.getElementById("westInput"),
@@ -143,6 +149,7 @@ function buildJob() {
     threshold: Math.round(Number(elements.threshold.value)),
     elements: selectedElements(),
     vectorSource: elements.vectorSource.value.trim(),
+    attribution: DEFAULT_ATTRIBUTION,
     layout: elements.layout.value,
     urlTemplate: elements.url.value.trim(),
   };

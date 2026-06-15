@@ -18,6 +18,12 @@ DEFAULT_URL_TEMPLATE = None
 DEFAULT_USER_AGENT = "eink-map-tiles/0.1 (+https://github.com/HarukiToreda/E-ink-Map-Tiles)"
 MAX_MERCATOR_LAT = 85.05112878
 MAP_ELEMENTS = ("land", "water", "roads", "highways", "paths", "buildings", "boundaries", "labels", "pois", "transit")
+DEFAULT_ATTRIBUTION = {
+    "map_data": "\u00a9 OpenStreetMap contributors",
+    "map_data_license": "Open Database License (ODbL) 1.0",
+    "openmaptiles": "\u00a9 OpenMapTiles, if using OpenMapTiles schema/data",
+    "notes": "Verify and preserve attribution required by your tile source/provider.",
+}
 
 
 @dataclass(frozen=True)
@@ -349,6 +355,7 @@ def write_manifest(output_root: Path, args: argparse.Namespace, bbox: BBox, tile
             "include": args.include_elements,
             "exclude": [element for element in MAP_ELEMENTS if element not in args.include_elements],
         },
+        "attribution": DEFAULT_ATTRIBUTION,
     }
     output_root.mkdir(parents=True, exist_ok=True)
     (output_root / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")

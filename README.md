@@ -136,6 +136,30 @@ These choices are written to the job and manifest, and the picker can download a
 
 This tool intentionally has no default online tile URL. For downloads, pass `--url-template` for a local tile renderer, your own tile server, or a provider that explicitly allows the kind of offline bundle you are generating.
 
+## Compliance Notes
+
+This is a practical checklist, not legal advice.
+
+Current repo status:
+
+- Leaflet is used by the GitHub Pages picker from a CDN. Leaflet is BSD 2-Clause licensed. The local CSS includes a small Leaflet-compatible layout fallback, so keep Leaflet's license/copyright notice in downstream distributions.
+- JSZip is used by the picker from a CDN for browser ZIP creation. JSZip is dual licensed; this project uses it under the MIT license option.
+- Pillow is the Python image-processing dependency. Pillow is MIT-CMU licensed.
+- OpenStreetMap public raster tiles are used only for the interactive preview map the user is actively viewing, with visible `© OpenStreetMap contributors` attribution. Do not use `tile.openstreetmap.org` as a download source for bundles.
+- Generated bundles require a tile URL you provide. Use a local renderer, your own tile server, or a provider that explicitly allows offline/bulk export.
+- OpenFreeMap, OpenMapTiles, Protomaps, and raw OSM extracts are valid directions only when you follow their attribution/license terms. Most OSM-derived outputs require `© OpenStreetMap contributors` and ODbL notice; OpenMapTiles-derived outputs also require OpenMapTiles attribution.
+
+Recommended attribution to keep with generated tile bundles:
+
+```text
+© OpenStreetMap contributors
+OpenStreetMap data is available under the Open Database License (ODbL) 1.0.
+© OpenMapTiles, if using OpenMapTiles schema/data.
+Additional attribution may be required by the tile source or renderer.
+```
+
+The CLI and browser picker now write attribution guidance into generated job files and manifests. If you publish or redistribute generated tile bundles, keep those manifest files with the tiles and add visible attribution wherever the map is displayed.
+
 ## Test
 
 ```powershell
