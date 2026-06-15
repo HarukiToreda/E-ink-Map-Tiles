@@ -66,6 +66,115 @@ class QueueWriter(io.TextIOBase):
         return None
 
 
+class RoundedButton(tk.Canvas):
+    def __init__(
+        self,
+        parent: tk.Misc,
+        text: str,
+        command,
+        background: str,
+        foreground: str,
+        activebackground: str,
+        border: str,
+        min_width: int,
+        height: int,
+        font: tuple[str, int, str] | tuple[str, int],
+    ) -> None:
+        try:
+            parent_background = str(parent.cget("background"))  # type: ignore[attr-defined]
+        except tk.TclError:
+            parent_background = "#ffffff"
+        super().__init__(
+            parent,
+            width=min_width,
+            height=height,
+            background=parent_background,
+            highlightthickness=0,
+            borderwidth=0,
+            cursor="hand2",
+        )
+        self.button_text = text
+        self.command = command
+        self.fill = background
+        self.foreground = foreground
+        self.active_fill = activebackground
+        self.border = border
+        self.min_width = min_width
+        self.button_height = height
+        self.button_font = font
+        self.state = "normal"
+        self.is_hovered = False
+        self.bind("<Configure>", lambda _event: self.redraw())
+        self.bind("<Enter>", self.on_enter)
+        self.bind("<Leave>", self.on_leave)
+        self.bind("<ButtonRelease-1>", self.on_click)
+        self.redraw()
+
+    def configure(self, cnf=None, **kwargs):  # type: ignore[override]
+        if "state" in kwargs:
+            self.state = kwargs.pop("state")
+        if "text" in kwargs:
+            self.button_text = kwargs.pop("text")
+        result = super().configure(cnf or {}, **kwargs)
+        self.redraw()
+        return result
+
+    config = configure
+
+    def on_enter(self, _event) -> None:
+        self.is_hovered = True
+        self.redraw()
+
+    def on_leave(self, _event) -> None:
+        self.is_hovered = False
+        self.redraw()
+
+    def on_click(self, _event) -> None:
+        if self.state != "disabled" and self.command:
+            self.command()
+
+    def redraw(self) -> None:
+        self.delete("all")
+        width = max(self.winfo_width(), self.min_width)
+        height = max(self.winfo_height(), self.button_height)
+        radius = min(8, height // 2)
+        fill = self.active_fill if self.is_hovered and self.state != "disabled" else self.fill
+        text_fill = self.foreground if self.state != "disabled" else "#8a948d"
+        if self.state == "disabled":
+            fill = "#eef2ef"
+        self.round_rect(1, 1, width - 2, height - 2, radius, fill=fill, outline=self.border)
+        self.create_text(width / 2, height / 2, text=self.button_text, fill=text_fill, font=self.button_font)
+
+    def round_rect(self, x1: int, y1: int, x2: int, y2: int, radius: int, **kwargs) -> None:
+        points = [
+            x1 + radius,
+            y1,
+            x2 - radius,
+            y1,
+            x2,
+            y1,
+            x2,
+            y1 + radius,
+            x2,
+            y2 - radius,
+            x2,
+            y2,
+            x2 - radius,
+            y2,
+            x1 + radius,
+            y2,
+            x1,
+            y2,
+            x1,
+            y2 - radius,
+            x1,
+            y1 + radius,
+            x1,
+            y1,
+        ]
+        self.create_polygon(points, smooth=True, splinesteps=12, **kwargs)
+
+
 class DesktopApp(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
@@ -158,8 +267,8 @@ class DesktopApp(tk.Tk):
         style.configure("TLabelframe.Label", background="#edf2ee", foreground="#102019", font=("Segoe UI", 10, "bold"))
         style.configure("TLabel", background="#ffffff", foreground="#102019", font=("Segoe UI", 9))
         style.configure("Shell.TLabel", background="#edf2ee", foreground="#334139")
-        style.configure("Title.TLabel", background="#edf2ee", foreground="#06130f", font=("Segoe UI", 21, "bold"))
-        style.configure("Section.TLabel", background="#ffffff", foreground="#06130f", font=("Segoe UI", 10, "bold"))
+        style.configure("Title.TLabel", background="#edf2ee", foreground="#06130f", font=("Segoe UI", 19, "bold"))
+        style.configure("Section.TLabel", background="#ffffff", foreground="#06130f", font=("Segoe UI", 9, "bold"))
         style.configure("Hint.TLabel", background="#ffffff", foreground="#536158", wraplength=330)
         style.configure("MapHint.TLabel", background="#ffffff", foreground="#536158", wraplength=620)
         style.configure("Accent.TButton", font=("Segoe UI", 10, "bold"))
@@ -167,22 +276,22 @@ class DesktopApp(tk.Tk):
     def section_frame(self, parent: tk.Misc, title: str) -> tk.Frame:
         frame = tk.Frame(parent, background="#ffffff", highlightbackground="#d7e2db", highlightthickness=1, borderwidth=0)
         frame.columnconfigure(0, weight=1)
-        ttk.Label(frame, text=title, style="Section.TLabel").grid(row=0, column=0, sticky="w", padx=14, pady=(12, 6))
+        ttk.Label(frame, text=title, style="Section.TLabel").grid(row=0, column=0, sticky="w", padx=10, pady=(7, 4))
         return frame
 
     def collapsible_section(self, parent: tk.Misc, title: str, variable_name: str) -> tuple[tk.Frame, ttk.Frame]:
         frame = tk.Frame(parent, background="#ffffff", highlightbackground="#d7e2db", highlightthickness=1, borderwidth=0)
         frame.columnconfigure(0, weight=1)
         header = ttk.Frame(frame, style="Card.TFrame")
-        header.grid(row=0, column=0, sticky="ew", padx=14, pady=(9, 6))
+        header.grid(row=0, column=0, sticky="ew", padx=10, pady=(5, 4))
         header.columnconfigure(1, weight=1)
 
         expanded = bool(self.vars[variable_name].get())
         toggle = self.flat_button(header, "v" if expanded else ">", lambda: self.toggle_section(variable_name), width=2)
-        toggle.grid(row=0, column=0, sticky="w", padx=(0, 8))
+        toggle.grid(row=0, column=0, sticky="w", padx=(0, 6))
         ttk.Label(header, text=title, style="Section.TLabel").grid(row=0, column=1, sticky="w")
 
-        content = ttk.Frame(frame, style="Card.TFrame", padding=(14, 0, 14, 14))
+        content = ttk.Frame(frame, style="Card.TFrame", padding=(10, 0, 10, 8))
         self.collapsible_sections[variable_name] = {"content": content, "toggle": toggle}
         if expanded:
             content.grid(row=1, column=0, sticky="ew")
@@ -209,27 +318,24 @@ class DesktopApp(tk.Tk):
         bg = "#0f766e" if primary else "#f7faf7"
         fg = "#ffffff" if primary else "#102019"
         active = "#0b5f59" if primary else "#e8eee9"
-        return tk.Button(
+        min_width = 28 if width else max(74, len(text) * 8 + 22)
+        if width:
+            min_width = max(28, width * 13 + 8)
+        return RoundedButton(
             parent,
             text=text,
             command=command,
-            width=width or 0,
             background=bg,
             foreground=fg,
             activebackground=active,
-            activeforeground=fg,
-            relief="flat",
-            borderwidth=0,
-            highlightthickness=1,
-            highlightbackground="#c7d3cb",
-            padx=12,
-            pady=7,
+            border="#c7d3cb",
+            min_width=min_width,
+            height=28,
             font=("Segoe UI", 9, "bold" if primary else "normal"),
-            cursor="hand2",
         )
 
     def build_ui(self) -> None:
-        root = ttk.Frame(self, padding=16)
+        root = ttk.Frame(self, padding=10)
         root.grid(row=0, column=0, sticky="nsew")
         root.columnconfigure(0, weight=1)
         root.rowconfigure(1, weight=1)
@@ -242,16 +348,16 @@ class DesktopApp(tk.Tk):
             header,
             text="Select an area, preview e-paper map tiles, then export an offline bundle.",
             style="Shell.TLabel",
-        ).grid(row=0, column=1, sticky="e", padx=(20, 4))
+        ).grid(row=0, column=1, sticky="e", padx=(16, 2))
 
         body = ttk.Frame(root)
-        body.grid(row=1, column=0, sticky="nsew", pady=(14, 0))
+        body.grid(row=1, column=0, sticky="nsew", pady=(8, 0))
         body.columnconfigure(0, weight=3)
         body.columnconfigure(1, weight=0)
         body.rowconfigure(0, weight=1)
 
         preview_panel = ttk.Frame(body, style="Panel.TFrame", padding=0)
-        preview_panel.grid(row=0, column=0, sticky="nsew", padx=(0, 14))
+        preview_panel.grid(row=0, column=0, sticky="nsew", padx=(0, 10))
         preview_panel.columnconfigure(0, weight=1)
         preview_panel.rowconfigure(0, weight=1)
         self.build_preview(preview_panel).grid(row=0, column=0, sticky="nsew")
@@ -259,11 +365,11 @@ class DesktopApp(tk.Tk):
         controls = self.build_scrollable_controls(body)
         controls.columnconfigure(0, weight=1)
 
-        self.build_actions(controls).grid(row=0, column=0, sticky="ew", pady=(0, 10))
-        self.build_source(controls).grid(row=1, column=0, sticky="ew", pady=(0, 10))
-        self.build_area(controls).grid(row=2, column=0, sticky="ew", pady=(0, 10))
-        self.build_settings(controls).grid(row=3, column=0, sticky="ew", pady=(0, 10))
-        self.build_elements(controls).grid(row=4, column=0, sticky="ew", pady=(0, 10))
+        self.build_actions(controls).grid(row=0, column=0, sticky="ew", pady=(0, 6))
+        self.build_source(controls).grid(row=1, column=0, sticky="ew", pady=(0, 6))
+        self.build_area(controls).grid(row=2, column=0, sticky="ew", pady=(0, 6))
+        self.build_settings(controls).grid(row=3, column=0, sticky="ew", pady=(0, 6))
+        self.build_elements(controls).grid(row=4, column=0, sticky="ew", pady=(0, 6))
 
     def bind_live_controls(self) -> None:
         preview_keys = ("mode", "brightness", "contrast", "threshold", "source", "url")
@@ -311,13 +417,13 @@ class DesktopApp(tk.Tk):
         shell.columnconfigure(0, weight=1)
         shell.rowconfigure(0, weight=1)
 
-        canvas = tk.Canvas(shell, background="#ffffff", highlightthickness=0, borderwidth=0, width=430)
+        canvas = tk.Canvas(shell, background="#ffffff", highlightthickness=0, borderwidth=0, width=420)
         scrollbar = ttk.Scrollbar(shell, orient="vertical", command=canvas.yview)
         canvas.configure(yscrollcommand=scrollbar.set)
         canvas.grid(row=0, column=0, sticky="nsew")
         scrollbar.grid(row=0, column=1, sticky="ns")
 
-        controls = ttk.Frame(canvas, style="Panel.TFrame", padding=12)
+        controls = ttk.Frame(canvas, style="Panel.TFrame", padding=8)
         window_id = canvas.create_window((0, 0), window=controls, anchor="nw")
 
         def resize_controls(_event=None) -> None:
@@ -346,21 +452,21 @@ class DesktopApp(tk.Tk):
             values=list(SOURCE_PRESETS),
             state="readonly",
         )
-        preset.grid(row=1, column=0, sticky="ew", pady=(4, 8))
+        preset.grid(row=1, column=0, sticky="ew", pady=(2, 4))
         preset.bind("<<ComboboxSelected>>", lambda _event: self.apply_source_preset())
 
         ttk.Label(content, textvariable=self.vars["source_help"], style="Hint.TLabel").grid(row=2, column=0, sticky="ew")
 
         self.source_url_label = ttk.Label(content, text="Source URL")
         self.source_url_entry = ttk.Entry(content, textvariable=self.vars["url"])
-        self.source_url_label.grid(row=3, column=0, sticky="w", pady=(10, 0))
-        self.source_url_entry.grid(row=4, column=0, sticky="ew", pady=(4, 0))
+        self.source_url_label.grid(row=3, column=0, sticky="w", pady=(6, 0))
+        self.source_url_entry.grid(row=4, column=0, sticky="ew", pady=(2, 0))
 
         ttk.Checkbutton(
             content,
             text="I will keep required map attribution with exported tiles.",
             variable=self.vars["permission"],
-        ).grid(row=5, column=0, sticky="w", pady=(8, 0))
+        ).grid(row=5, column=0, sticky="w", pady=(4, 0))
         return frame
 
     def build_area(self, parent: ttk.Frame) -> ttk.LabelFrame:
@@ -373,19 +479,19 @@ class DesktopApp(tk.Tk):
         ttk.Label(content, text="Center lon").grid(row=0, column=2, sticky="w")
         ttk.Entry(content, textvariable=self.vars["center_lon"], width=12).grid(row=0, column=3, sticky="ew", padx=(6, 0))
 
-        ttk.Label(content, text="Radius km").grid(row=1, column=0, sticky="w", pady=(8, 0))
-        ttk.Entry(content, textvariable=self.vars["radius_km"], width=12).grid(row=1, column=1, sticky="ew", padx=(6, 10), pady=(8, 0))
+        ttk.Label(content, text="Radius km").grid(row=1, column=0, sticky="w", pady=(4, 0))
+        ttk.Entry(content, textvariable=self.vars["radius_km"], width=12).grid(row=1, column=1, sticky="ew", padx=(6, 10), pady=(4, 0))
         self.flat_button(content, "Set BBox From Center", self.set_bbox_from_center).grid(
             row=1,
             column=2,
             columnspan=2,
             sticky="ew",
-            pady=(8, 0),
+            pady=(4, 0),
         )
 
-        ttk.Label(content, text="BBox").grid(row=2, column=0, sticky="w", pady=(10, 0))
+        ttk.Label(content, text="BBox").grid(row=2, column=0, sticky="w", pady=(6, 0))
         bbox_grid = ttk.Frame(content, style="Card.TFrame")
-        bbox_grid.grid(row=3, column=0, columnspan=4, sticky="ew", pady=(4, 0))
+        bbox_grid.grid(row=3, column=0, columnspan=4, sticky="ew", pady=(2, 0))
         for column in range(4):
             bbox_grid.columnconfigure(column, weight=1)
         for index, (label, key) in enumerate((("W", "west"), ("S", "south"), ("E", "east"), ("N", "north"))):
@@ -403,68 +509,69 @@ class DesktopApp(tk.Tk):
         ttk.Label(content, text="Max zoom").grid(row=0, column=2, sticky="w")
         ttk.Entry(content, textvariable=self.vars["max_zoom"], width=8).grid(row=0, column=3, sticky="ew", padx=(6, 0))
 
-        ttk.Label(content, text="Mode").grid(row=1, column=0, sticky="w", pady=(8, 0))
+        ttk.Label(content, text="Mode").grid(row=1, column=0, sticky="w", pady=(4, 0))
         ttk.Combobox(
             content,
             textvariable=self.vars["mode"],
             values=["mono", "grayscale", "palette", "original"],
             state="readonly",
             width=12,
-        ).grid(row=1, column=1, sticky="ew", padx=(6, 10), pady=(8, 0))
+        ).grid(row=1, column=1, sticky="ew", padx=(6, 10), pady=(4, 0))
 
-        ttk.Label(content, text="Layout").grid(row=1, column=2, sticky="w", pady=(8, 0))
+        ttk.Label(content, text="Layout").grid(row=1, column=2, sticky="w", pady=(4, 0))
         ttk.Combobox(
             content,
             textvariable=self.vars["layout"],
             values=["inkhud-dev", "style-root", "single-map", "meshtastic-sd"],
             state="readonly",
             width=16,
-        ).grid(row=1, column=3, sticky="ew", padx=(6, 0), pady=(8, 0))
+        ).grid(row=1, column=3, sticky="ew", padx=(6, 0), pady=(4, 0))
 
-        ttk.Label(content, text="Style").grid(row=2, column=0, sticky="w", pady=(8, 0))
-        ttk.Entry(content, textvariable=self.vars["style"], width=12).grid(row=2, column=1, columnspan=3, sticky="ew", padx=(6, 0), pady=(8, 0))
+        ttk.Label(content, text="Style").grid(row=2, column=0, sticky="w", pady=(4, 0))
+        ttk.Entry(content, textvariable=self.vars["style"], width=12).grid(row=2, column=1, columnspan=3, sticky="ew", padx=(6, 0), pady=(4, 0))
 
-        ttk.Label(content, text="Brightness").grid(row=3, column=0, sticky="w", pady=(10, 0))
+        ttk.Label(content, text="Brightness").grid(row=3, column=0, sticky="w", pady=(6, 0))
         ttk.Scale(content, from_=0.6, to=1.6, variable=self.vars["brightness"], orient="horizontal").grid(
             row=3,
             column=1,
             columnspan=2,
             sticky="ew",
             padx=(6, 10),
-            pady=(10, 0),
+            pady=(6, 0),
         )
-        ttk.Label(content, textvariable=self.vars["brightness_text"]).grid(row=3, column=3, sticky="w", pady=(10, 0))
+        ttk.Label(content, textvariable=self.vars["brightness_text"]).grid(row=3, column=3, sticky="w", pady=(6, 0))
 
-        ttk.Label(content, text="Contrast").grid(row=4, column=0, sticky="w", pady=(10, 0))
+        ttk.Label(content, text="Contrast").grid(row=4, column=0, sticky="w", pady=(6, 0))
         ttk.Scale(content, from_=0.6, to=3.0, variable=self.vars["contrast"], orient="horizontal").grid(
             row=4,
             column=1,
             columnspan=2,
             sticky="ew",
             padx=(6, 10),
-            pady=(10, 0),
+            pady=(6, 0),
         )
-        ttk.Label(content, textvariable=self.vars["contrast_text"]).grid(row=4, column=3, sticky="w", pady=(10, 0))
+        ttk.Label(content, textvariable=self.vars["contrast_text"]).grid(row=4, column=3, sticky="w", pady=(6, 0))
 
-        ttk.Label(content, text="Mono threshold").grid(row=5, column=0, sticky="w", pady=(10, 0))
+        ttk.Label(content, text="Mono threshold").grid(row=5, column=0, sticky="w", pady=(6, 0))
         ttk.Scale(content, from_=80, to=230, variable=self.vars["threshold"], orient="horizontal").grid(
             row=5,
             column=1,
             columnspan=2,
             sticky="ew",
             padx=(6, 10),
-            pady=(10, 0),
+            pady=(6, 0),
         )
-        ttk.Label(content, textvariable=self.vars["threshold_text"]).grid(row=5, column=3, sticky="w", pady=(10, 0))
+        ttk.Label(content, textvariable=self.vars["threshold_text"]).grid(row=5, column=3, sticky="w", pady=(6, 0))
 
-        ttk.Label(content, text="Output").grid(row=6, column=0, sticky="w", pady=(10, 0))
-        ttk.Entry(content, textvariable=self.vars["output"]).grid(row=7, column=0, columnspan=3, sticky="ew", pady=(4, 0))
-        self.flat_button(content, "Browse", self.choose_output).grid(row=7, column=3, sticky="ew", padx=(8, 0), pady=(4, 0))
+        ttk.Label(content, text="Output").grid(row=6, column=0, sticky="w", pady=(6, 0))
+        ttk.Entry(content, textvariable=self.vars["output"]).grid(row=6, column=1, columnspan=2, sticky="ew", padx=(6, 8), pady=(6, 0))
+        self.flat_button(content, "Browse", self.choose_output).grid(row=6, column=3, sticky="ew", pady=(6, 0))
         return frame
 
     def build_elements(self, parent: ttk.Frame) -> tk.Frame:
         frame, content = self.collapsible_section(parent, "Map Elements", "collapse_map_elements")
-        for column in range(2):
+        element_columns = 3
+        for column in range(element_columns):
             content.columnconfigure(column, weight=1)
 
         for index, element in enumerate(cli.MAP_ELEMENTS):
@@ -472,10 +579,10 @@ class DesktopApp(tk.Tk):
                 content,
                 text=ELEMENT_LABELS.get(element, element.title()),
                 variable=self.vars[f"element_{element}"],
-            ).grid(row=index // 2, column=index % 2, sticky="w", pady=3)
+            ).grid(row=index // element_columns, column=index % element_columns, sticky="w", pady=1)
 
         buttons = ttk.Frame(content, style="Card.TFrame")
-        buttons.grid(row=6, column=0, columnspan=2, sticky="ew", pady=(8, 0))
+        buttons.grid(row=math.ceil(len(cli.MAP_ELEMENTS) / element_columns), column=0, columnspan=element_columns, sticky="ew", pady=(4, 0))
         buttons.columnconfigure(0, weight=1)
         buttons.columnconfigure(1, weight=1)
         self.flat_button(buttons, "All", lambda: self.set_all_elements(True), primary=True).grid(row=0, column=0, sticky="ew", padx=(0, 6))
@@ -526,30 +633,31 @@ class DesktopApp(tk.Tk):
 
     def build_actions(self, parent: ttk.Frame) -> ttk.Frame:
         frame = self.section_frame(parent, "Export")
-        content = ttk.Frame(frame, style="Card.TFrame", padding=(14, 0, 14, 14))
+        content = ttk.Frame(frame, style="Card.TFrame", padding=(10, 0, 10, 8))
         content.grid(row=1, column=0, sticky="ew")
-        for column in range(3):
+        for column in range(4):
             content.columnconfigure(column, weight=1)
-        ttk.Label(content, textvariable=self.vars["tile_count"], style="Hint.TLabel").grid(row=0, column=0, columnspan=3, sticky="ew", pady=(0, 6))
-        ttk.Label(content, textvariable=self.vars["status"], style="Hint.TLabel").grid(row=1, column=0, columnspan=3, sticky="ew", pady=(0, 10))
-        self.flat_button(content, "Estimate", self.estimate_tiles).grid(row=2, column=0, sticky="ew", padx=(0, 6))
+        ttk.Label(content, textvariable=self.vars["tile_count"], style="Hint.TLabel").grid(row=0, column=0, columnspan=4, sticky="ew", pady=(0, 2))
+        ttk.Label(content, textvariable=self.vars["status"], style="Hint.TLabel").grid(row=1, column=0, columnspan=4, sticky="ew", pady=(0, 6))
+        self.flat_button(content, "Estimate", self.estimate_tiles).grid(row=2, column=0, sticky="ew", padx=(0, 5))
         self.export_button = self.flat_button(content, "Export Tiles", self.export_tiles, primary=True)
-        self.export_button.grid(row=2, column=1, sticky="ew", padx=6)
-        self.flat_button(content, "Open Folder", self.open_output_folder).grid(row=2, column=2, sticky="ew", padx=(6, 0))
+        self.export_button.grid(row=2, column=1, sticky="ew", padx=5)
+        self.flat_button(content, "Folder", self.open_output_folder).grid(row=2, column=2, sticky="ew", padx=5)
+        self.flat_button(content, "About", self.show_about_licenses).grid(row=2, column=3, sticky="ew", padx=(5, 0))
         self.progress_bar = ttk.Progressbar(content, variable=self.vars["progress_value"], maximum=1, mode="determinate")
-        self.progress_bar.grid(row=3, column=0, columnspan=3, sticky="ew", pady=(12, 4))
-        ttk.Label(content, textvariable=self.vars["progress_text"], style="Hint.TLabel").grid(row=4, column=0, columnspan=3, sticky="ew")
-        self.flat_button(content, "About / Licenses", self.show_about_licenses).grid(row=5, column=0, columnspan=3, sticky="ew", pady=(8, 0))
+        self.progress_bar.grid(row=3, column=0, columnspan=4, sticky="ew", pady=(8, 2))
+        ttk.Label(content, textvariable=self.vars["progress_text"], style="Hint.TLabel").grid(row=4, column=0, columnspan=4, sticky="ew")
         self.log = tk.Text(
             content,
-            height=5,
+            height=3,
             wrap="word",
             font=("Consolas", 8),
             background="#f7faf7",
             relief="flat",
             borderwidth=0,
         )
-        self.log.grid(row=6, column=0, columnspan=3, sticky="ew", pady=(8, 0))
+        self.log.grid(row=5, column=0, columnspan=4, sticky="ew", pady=(6, 0))
+        self.log.grid_remove()
         return frame
 
     def apply_source_preset(self) -> None:
@@ -1001,6 +1109,7 @@ class DesktopApp(tk.Tk):
         output = Path(self.vars["output"].get()).expanduser()
         self.last_output = output
         self.log.delete("1.0", "end")
+        self.log.grid()
         self.reset_export_progress(job)
         self.export_button.configure(state="disabled")
         self.vars["status"].set("Exporting...")
@@ -1071,6 +1180,8 @@ class DesktopApp(tk.Tk):
                 message = self.messages.get_nowait()
             except queue.Empty:
                 break
+            if not self.log.grid_info():
+                self.log.grid()
             self.log.insert("end", message)
             self.log.see("end")
             self.update_export_progress_from_message(message)
