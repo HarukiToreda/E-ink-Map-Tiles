@@ -25,7 +25,7 @@ Basic flow:
 
 The default source downloads OpenFreeMap vector tiles for the selected area and renders e-paper PNG tiles locally. No TileServer GL setup or custom tile URL is needed for the default path.
 
-The interactive preview uses fast raster map tiles for display only, with attribution shown in the preview. Exported tile bundles are generated from the selected export source.
+The interactive preview uses fast raster map tiles for display only, with attribution shown in the preview. It is softened into stepped grayscale so the area picker stays readable on a normal monitor while approximating an e-paper look. Exported tile bundles are generated from the selected export source.
 
 Output is saved under:
 
@@ -129,8 +129,8 @@ Default desktop settings are tuned toward e-paper readability:
 
 ```text
 mode: mono
-contrast: 1.40
-brightness: 0.95
+contrast: 1.30
+brightness: 0.80
 threshold: 201
 ```
 
