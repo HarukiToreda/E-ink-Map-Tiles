@@ -84,18 +84,26 @@ Build the next version around a local executable:
 
 This gives users a normal desktop-app flow while preserving the legal line: the app exports from an allowed source, not from public viewing-only tiles.
 
-## Install
-
-```powershell
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-pip install -e .
-```
-
 ## Run The Local App
 
+If the Windows executable has already been built, just run:
+
 ```powershell
-eink-map-tiles-app
+.\dist\EinkMapTiles.exe
+```
+
+That is the intended simple path. It opens the local app in your browser.
+
+To rebuild the exe:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\build-windows-exe.ps1
+```
+
+The built exe is written to:
+
+```text
+dist\EinkMapTiles.exe
 ```
 
 This opens:
@@ -104,13 +112,33 @@ This opens:
 http://127.0.0.1:8765/
 ```
 
-Use the map picker, enter a legal tile source, confirm permission, then click **Export Locally**. The app saves output under:
+## Export Tiles
+
+With the local app open:
+
+1. Pan/zoom the map to your area.
+2. Click **Use View**.
+3. Choose min/max zoom and e-paper settings.
+4. Enter a legal tile source.
+5. Check the permission box.
+6. Click **Export Locally**.
+
+The app saves output under:
 
 ```text
 %USERPROFILE%\Downloads\EinkMapTiles\
 ```
 
-Current local-app limitation: it still expects an XYZ PNG tile URL. That should be treated as a stepping stone. The next major source upgrade should let users choose a local PMTiles/MBTiles file so they do not need to understand tile URL templates.
+Current limitation: exports still expect an XYZ PNG tile URL. That should be treated as a stepping stone. The next major source upgrade should let users choose a local PMTiles/MBTiles file so they do not need to understand tile URL templates.
+
+## Install For Development
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -e .
+eink-map-tiles-app
+```
 
 ## GitHub Pages Picker
 

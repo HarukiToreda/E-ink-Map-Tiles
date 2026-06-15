@@ -2,8 +2,11 @@
 /.ruff_cache/
 /build/
 /dist/
+/.build-venv/
+/*.spec
 /htmlcov/
 /*.egg-info/
+*.egg-info/
 __pycache__/
 *.py[cod]
 .venv/
