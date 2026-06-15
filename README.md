@@ -71,6 +71,36 @@ Run an exported job with:
 eink-map-tiles --job .\inkhud-tile-job.json --zip
 ```
 
+### Publish It
+
+Yes, this can be hosted with GitHub Pages for others to test.
+
+Repository setup:
+
+1. Push this repo to GitHub.
+2. Open the repository's **Settings**.
+3. Go to **Pages**.
+4. Set **Source** to **Deploy from a branch**.
+5. Set the branch to `main` and the folder to `/docs`.
+6. Save, then wait for GitHub to publish the site.
+
+What works from GitHub Pages:
+
+- Area selection on the preview map.
+- E-paper contrast, brightness, threshold preview.
+- Tile count estimates.
+- Job JSON download.
+- MapLibre style JSON download.
+- CLI command generation.
+
+What needs extra setup:
+
+- Browser ZIP downloads require a tile source that allows offline/bulk export and sends CORS headers.
+- A `localhost` tile renderer may work for a tester running a local renderer, but that renderer must allow browser requests from the GitHub Pages origin.
+- GitHub Pages cannot run the Python CLI for visitors. For larger or more reliable exports, testers should download the job JSON and run `eink-map-tiles --job .\inkhud-tile-job.json --zip` locally.
+
+The preview map uses public OpenStreetMap raster tiles only for interactive area selection with visible attribution. Do not use the public OSM tile server as the export/download source.
+
 ## Examples
 
 Preview the tile count for a 10 km radius around Seattle:
