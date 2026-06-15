@@ -566,6 +566,30 @@ def write_manifest(output_root: Path, args: argparse.Namespace, bbox: BBox, tile
     }
     output_root.mkdir(parents=True, exist_ok=True)
     (output_root / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    write_attribution_file(output_root, args)
+
+
+def write_attribution_file(output_root: Path, args: argparse.Namespace) -> None:
+    text = f"""E-ink Map Tiles export attribution
+
+Map data:
+  (c) OpenStreetMap contributors
+  OpenStreetMap data is available under the Open Database License (ODbL) 1.0.
+  https://www.openstreetmap.org/copyright
+  https://opendatacommons.org/licenses/odbl/1-0/
+
+OpenMapTiles schema/data:
+  (c) OpenMapTiles, if using OpenMapTiles-derived schema or data.
+  https://openmaptiles.org/
+
+Export source:
+  source: {args.source}
+  url_template: {args.url_template}
+
+Keep this file and manifest.json with the exported tiles. Additional attribution may be required by
+your tile source, local renderer, or downstream use case.
+"""
+    (output_root / "ATTRIBUTION.txt").write_text(text, encoding="utf-8")
 
 
 def make_zip(output_root: Path) -> Path:

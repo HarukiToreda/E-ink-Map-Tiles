@@ -29,6 +29,8 @@ During export, the app shows a progress bar, current tile count, and a log of co
 
 The interactive preview uses fast raster map tiles for display only, with attribution shown in the preview. It is softened into stepped grayscale so the area picker stays readable on a normal monitor while approximating an e-paper look. Exported tile bundles are generated from the selected export source.
 
+Preview tiles are cached locally for at least 7 days under the user's local app data folder to respect OpenStreetMap public tile usage expectations.
+
 Output is saved under:
 
 ```text
@@ -40,6 +42,7 @@ Each export writes:
 ```text
 tiles/{style}/{z}/{x}/{y}.png
 manifest.json
+ATTRIBUTION.txt
 {export-name}.zip
 ```
 
@@ -54,6 +57,8 @@ The built executable is:
 ```text
 dist\EinkMapTiles.exe
 ```
+
+The build script also copies `README.md`, `LICENSE`, and `NOTICE.md` into `dist\` for release packaging.
 
 ## Development
 
@@ -138,7 +143,7 @@ threshold: 177
 
 ## Attribution
 
-Generated bundles include attribution guidance in `manifest.json`. Keep that manifest with exported tiles.
+Generated bundles include attribution guidance in `manifest.json` and `ATTRIBUTION.txt`. Keep those files with exported tiles.
 
 Recommended baseline attribution for OSM-derived sources:
 

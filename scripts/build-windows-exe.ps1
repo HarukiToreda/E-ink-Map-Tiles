@@ -40,6 +40,13 @@ try {
     throw "PyInstaller failed with exit code $LASTEXITCODE"
   }
 
+  foreach ($NoticeFile in @("README.md", "LICENSE", "NOTICE.md")) {
+    $SourcePath = Join-Path $RepoRoot $NoticeFile
+    if (Test-Path -LiteralPath $SourcePath) {
+      Copy-Item -LiteralPath $SourcePath -Destination (Join-Path (Join-Path $RepoRoot "dist") $NoticeFile) -Force
+    }
+  }
+
   Write-Host ""
   Write-Host "Built:"
   Write-Host $ExePath

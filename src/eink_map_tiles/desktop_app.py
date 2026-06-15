@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import json
+import hashlib
 import math
 import os
 import queue
@@ -26,6 +27,9 @@ DEFAULT_BRIGHTNESS = 0.9722627737226277
 DEFAULT_CONTRAST = 0.9328467153284672
 DEFAULT_THRESHOLD = 177.44525547445255
 DESKTOP_RATE_LIMIT_SECONDS = 0.05
+PREVIEW_CACHE_DAYS = 7
+PREVIEW_CACHE_SECONDS = PREVIEW_CACHE_DAYS * 24 * 60 * 60
+PREVIEW_CACHE_DIR = Path(os.environ.get("LOCALAPPDATA", str(Path.home() / ".cache"))) / "EinkMapTiles" / "preview-tiles"
 DEFAULT_ELEMENTS = list(cli.MAP_ELEMENTS)
 ELEMENT_LABELS = {
     "land": "Land",
@@ -513,6 +517,7 @@ class DesktopApp(tk.Tk):
         self.progress_bar = ttk.Progressbar(content, variable=self.vars["progress_value"], maximum=1, mode="determinate")
         self.progress_bar.grid(row=3, column=0, columnspan=3, sticky="ew", pady=(12, 4))
         ttk.Label(content, textvariable=self.vars["progress_text"], style="Hint.TLabel").grid(row=4, column=0, columnspan=3, sticky="ew")
+        self.flat_button(content, "About / Licenses", self.show_about_licenses).grid(row=5, column=0, columnspan=3, sticky="ew", pady=(8, 0))
         self.log = tk.Text(
             content,
             height=5,
@@ -522,7 +527,7 @@ class DesktopApp(tk.Tk):
             relief="flat",
             borderwidth=0,
         )
-        self.log.grid(row=5, column=0, columnspan=3, sticky="ew", pady=(8, 0))
+        self.log.grid(row=6, column=0, columnspan=3, sticky="ew", pady=(8, 0))
         return frame
 
     def apply_source_preset(self) -> None:
@@ -546,6 +551,27 @@ class DesktopApp(tk.Tk):
         for element in cli.MAP_ELEMENTS:
             self.vars[f"element_{element}"].set(enabled)
         self.queue_live_update(preview=True, estimate=False)
+
+    def show_about_licenses(self) -> None:
+        messagebox.showinfo(
+            "About / Licenses",
+            "\n".join(
+                [
+                    "E-ink Map Tiles is MIT licensed.",
+                    "",
+                    "Map data is derived from OpenStreetMap and must retain attribution:",
+                    "(c) OpenStreetMap contributors, ODbL 1.0.",
+                    "",
+                    "Default exports use OpenFreeMap vector tiles and local rendering.",
+                    "The preview uses OSM raster tiles only for interactive viewing and caches them locally for at least 7 days.",
+                    "",
+                    "Bundled libraries include Pillow, mapbox-vector-tile, Shapely, pyclipper, protobuf, and NumPy.",
+                    "See NOTICE.md in the repository or release folder for dependency license notes.",
+                    "",
+                    "Each exported bundle includes manifest.json and ATTRIBUTION.txt.",
+                ]
+            ),
+        )
 
     def set_bbox_from_center(self) -> None:
         try:
@@ -842,14 +868,43 @@ class DesktopApp(tk.Tk):
         if cached is not None:
             return cached.copy()
 
-        request = urllib.request.Request(url, headers={"User-Agent": cli.DEFAULT_USER_AGENT})
-        with urllib.request.urlopen(request, timeout=12) as response:
-            if response.status != 200:
-                raise RuntimeError(f"HTTP {response.status} for {url}")
-            data = response.read()
+        cache_path = self.preview_cache_path(url)
+        data = self.read_preview_cache(cache_path)
+        if data is None:
+            request = urllib.request.Request(url, headers={"User-Agent": cli.DEFAULT_USER_AGENT})
+            try:
+                with urllib.request.urlopen(request, timeout=12) as response:
+                    if response.status != 200:
+                        raise RuntimeError(f"HTTP {response.status} for {url}")
+                    data = response.read()
+                self.write_preview_cache(cache_path, data)
+            except Exception:
+                data = self.read_preview_cache(cache_path, allow_expired=True)
+                if data is None:
+                    raise
         image = Image.open(BytesIO(data)).convert("RGBA")
         self.preview_tile_cache[cache_key] = image.copy()
         return image
+
+    def preview_cache_path(self, url: str) -> Path:
+        digest = hashlib.sha256(url.encode("utf-8")).hexdigest()
+        return PREVIEW_CACHE_DIR / digest[:2] / f"{digest}.png"
+
+    def read_preview_cache(self, cache_path: Path, allow_expired: bool = False) -> bytes | None:
+        try:
+            age = datetime.now().timestamp() - cache_path.stat().st_mtime
+            if not allow_expired and age > PREVIEW_CACHE_SECONDS:
+                return None
+            return cache_path.read_bytes()
+        except OSError:
+            return None
+
+    def write_preview_cache(self, cache_path: Path, data: bytes) -> None:
+        try:
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            cache_path.write_bytes(data)
+        except OSError:
+            return
 
     def convert_preview_tile(self, image, job: dict[str, Any]):
         from PIL import Image, ImageEnhance
