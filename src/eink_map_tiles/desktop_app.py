@@ -21,7 +21,19 @@ from . import cli
 
 
 DEFAULT_OUTPUT_BASE = Path.home() / "Downloads" / "EinkMapTiles"
-DEFAULT_ELEMENTS = ["land", "water", "roads", "highways", "boundaries", "labels"]
+DEFAULT_ELEMENTS = list(cli.MAP_ELEMENTS)
+ELEMENT_LABELS = {
+    "land": "Land",
+    "water": "Water",
+    "roads": "Roads",
+    "highways": "Highways",
+    "paths": "Paths",
+    "buildings": "Buildings",
+    "boundaries": "Boundaries",
+    "labels": "Labels",
+    "pois": "POI",
+    "transit": "Transit",
+}
 PREVIEW_RASTER_TEMPLATE = "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
 SOURCE_PRESETS = {
     "OpenFreeMap open vector tiles": {
@@ -75,11 +87,13 @@ class DesktopApp(tk.Tk):
         self.map_drag_center: tuple[float, float] | None = None
         self.preview_render_id = 0
         self.preview_after_id: str | None = None
+        self.live_update_after_id: str | None = None
         self.preview_tile_cache: dict[tuple, Any] = {}
 
         self.vars = self.make_vars()
         self.configure_styles()
         self.build_ui()
+        self.bind_live_controls()
         self.apply_source_preset()
         self.estimate_tiles()
         self.after(700, self.refresh_preview)
@@ -87,7 +101,7 @@ class DesktopApp(tk.Tk):
 
     def make_vars(self) -> dict[str, tk.Variable]:
         timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-        return {
+        variables: dict[str, tk.Variable] = {
             "source_preset": tk.StringVar(value="OpenFreeMap open vector tiles"),
             "source": tk.StringVar(value="openfreemap-vector"),
             "source_help": tk.StringVar(value=SOURCE_PRESETS["OpenFreeMap open vector tiles"]["help"]),
@@ -113,6 +127,9 @@ class DesktopApp(tk.Tk):
             "preview_status": tk.StringVar(value="Loading OpenFreeMap overview preview..."),
             "status": tk.StringVar(value="Ready"),
         }
+        for element in cli.MAP_ELEMENTS:
+            variables[f"element_{element}"] = tk.BooleanVar(value=element in DEFAULT_ELEMENTS)
+        return variables
 
     def configure_styles(self) -> None:
         self.columnconfigure(0, weight=1)
@@ -201,8 +218,41 @@ class DesktopApp(tk.Tk):
         self.build_source(controls).grid(row=1, column=0, sticky="ew", pady=(0, 10))
         self.build_area(controls).grid(row=2, column=0, sticky="ew", pady=(0, 10))
         self.build_settings(controls).grid(row=3, column=0, sticky="ew", pady=(0, 10))
+        self.build_elements(controls).grid(row=4, column=0, sticky="ew", pady=(0, 10))
         self.log = tk.Text(controls, height=1)
         self.log.grid_remove()
+
+    def bind_live_controls(self) -> None:
+        preview_keys = ("mode", "brightness", "contrast", "threshold", "source", "url")
+        for key in preview_keys:
+            self.vars[key].trace_add("write", lambda *_args: self.queue_live_update(preview=True, estimate=False))
+
+        export_keys = ("min_zoom", "max_zoom", "style", "layout")
+        for key in export_keys:
+            self.vars[key].trace_add("write", lambda *_args: self.queue_live_update(preview=False, estimate=True))
+
+        area_keys = ("west", "south", "east", "north")
+        for key in area_keys:
+            self.vars[key].trace_add("write", lambda *_args: self.queue_live_update(preview=True, estimate=True))
+
+        for element in cli.MAP_ELEMENTS:
+            self.vars[f"element_{element}"].trace_add("write", lambda *_args: self.queue_live_update(preview=True, estimate=False))
+
+    def queue_live_update(self, preview: bool, estimate: bool) -> None:
+        if self.live_update_after_id is not None:
+            try:
+                self.after_cancel(self.live_update_after_id)
+            except tk.TclError:
+                pass
+
+        def run_update() -> None:
+            self.live_update_after_id = None
+            if estimate:
+                self.estimate_tiles(show_errors=False)
+            if preview:
+                self.schedule_preview(delay_ms=180)
+
+        self.live_update_after_id = self.after(250, run_update)
 
     def build_scrollable_controls(self, parent: ttk.Frame) -> ttk.Frame:
         shell = ttk.Frame(parent, style="Panel.TFrame")
@@ -367,6 +417,28 @@ class DesktopApp(tk.Tk):
         self.flat_button(content, "Browse", self.choose_output).grid(row=7, column=3, sticky="ew", padx=(8, 0), pady=(4, 0))
         return frame
 
+    def build_elements(self, parent: ttk.Frame) -> tk.Frame:
+        frame = self.section_frame(parent, "Map Elements")
+        content = ttk.Frame(frame, style="Card.TFrame", padding=(14, 0, 14, 14))
+        content.grid(row=1, column=0, sticky="ew")
+        for column in range(2):
+            content.columnconfigure(column, weight=1)
+
+        for index, element in enumerate(cli.MAP_ELEMENTS):
+            ttk.Checkbutton(
+                content,
+                text=ELEMENT_LABELS.get(element, element.title()),
+                variable=self.vars[f"element_{element}"],
+            ).grid(row=index // 2, column=index % 2, sticky="w", pady=3)
+
+        buttons = ttk.Frame(content, style="Card.TFrame")
+        buttons.grid(row=6, column=0, columnspan=2, sticky="ew", pady=(8, 0))
+        buttons.columnconfigure(0, weight=1)
+        buttons.columnconfigure(1, weight=1)
+        self.flat_button(buttons, "All", lambda: self.set_all_elements(True), primary=True).grid(row=0, column=0, sticky="ew", padx=(0, 6))
+        self.flat_button(buttons, "None", lambda: self.set_all_elements(False)).grid(row=0, column=1, sticky="ew", padx=(6, 0))
+        return frame
+
     def build_log(self, parent: ttk.Frame) -> ttk.LabelFrame:
         frame = ttk.LabelFrame(parent, text="Output Log", padding=12)
         frame.columnconfigure(0, weight=1)
@@ -436,6 +508,14 @@ class DesktopApp(tk.Tk):
         else:
             self.source_url_label.grid()
             self.source_url_entry.grid()
+
+    def selected_elements(self) -> list[str]:
+        return [element for element in cli.MAP_ELEMENTS if bool(self.vars[f"element_{element}"].get())]
+
+    def set_all_elements(self, enabled: bool) -> None:
+        for element in cli.MAP_ELEMENTS:
+            self.vars[f"element_{element}"].set(enabled)
+        self.queue_live_update(preview=True, estimate=False)
 
     def set_bbox_from_center(self) -> None:
         try:
@@ -532,21 +612,22 @@ class DesktopApp(tk.Tk):
             "contrast": float(self.vars["contrast"].get()),
             "threshold": int(float(self.vars["threshold"].get())),
             "elements": {
-                "include": DEFAULT_ELEMENTS,
-                "exclude": [element for element in cli.MAP_ELEMENTS if element not in DEFAULT_ELEMENTS],
+                "include": self.selected_elements(),
+                "exclude": [element for element in cli.MAP_ELEMENTS if element not in self.selected_elements()],
             },
             "layout": self.vars["layout"].get(),
             "urlTemplate": url_template,
             "attribution": cli.DEFAULT_ATTRIBUTION,
         }
 
-    def estimate_tiles(self) -> None:
+    def estimate_tiles(self, show_errors: bool = True) -> None:
         try:
             job = self.build_job()
             bbox = cli.BBox(**job["bbox"])
             tiles = cli.tiles_for_bbox(bbox, job["zooms"])
         except Exception as exc:  # noqa: BLE001 - show validation errors in GUI.
-            messagebox.showerror("Invalid export settings", str(exc))
+            if show_errors:
+                messagebox.showerror("Invalid export settings", str(exc))
             return
         self.vars["tile_count"].set(f"Estimate: {len(tiles):,} tiles across zooms {job['zooms'][0]}-{job['zooms'][-1]}")
         self.vars["status"].set("Estimate updated")
@@ -717,7 +798,7 @@ class DesktopApp(tk.Tk):
 
         with tempfile.TemporaryDirectory(prefix="eink-map-preview-") as temp_dir:
             tile_path = Path(temp_dir) / "tile.png"
-            cli.render_openfreemap_tile(tile, tile_path, cli.DEFAULT_USER_AGENT, timeout=12, retries=2)
+            cli.render_openfreemap_tile(tile, tile_path, cli.DEFAULT_USER_AGENT, timeout=12, retries=2, elements=DEFAULT_ELEMENTS)
             with Image.open(tile_path) as image:
                 rendered = image.convert("RGBA")
         self.preview_tile_cache[cache_key] = rendered.copy()
@@ -751,7 +832,20 @@ class DesktopApp(tk.Tk):
         gray = image.convert("L")
         if mode == "mono":
             # Keep the interactive picker legible. Export still uses the true 1-bit mono conversion.
-            return gray.point(lambda pixel: 246 if pixel >= 228 else 218 if pixel >= 190 else 172 if pixel >= 145 else 112 if pixel >= 95 else 48 if pixel >= 45 else 18)
+            threshold = int(job["threshold"])
+            return gray.point(
+                lambda pixel: 246
+                if pixel >= threshold + 42
+                else 218
+                if pixel >= threshold + 18
+                else 172
+                if pixel >= threshold
+                else 112
+                if pixel >= threshold - 28
+                else 48
+                if pixel >= threshold - 70
+                else 18
+            )
         if mode == "grayscale":
             return gray
         if mode == "palette":

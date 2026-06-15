@@ -311,24 +311,40 @@ def fetch_bytes(url: str, user_agent: str, timeout: float, retries: int) -> byte
     raise RuntimeError(f"Failed to fetch {url}: {last_error}")
 
 
-def render_openfreemap_tile(tile: Tile, destination: Path, user_agent: str, timeout: float, retries: int) -> None:
+def render_openfreemap_tile(
+    tile: Tile,
+    destination: Path,
+    user_agent: str,
+    timeout: float,
+    retries: int,
+    elements: list[str] | tuple[str, ...] | None = None,
+) -> None:
     from mapbox_vector_tile import decode
     from PIL import Image, ImageDraw, ImageFont
 
+    selected = set(elements if elements is not None else MAP_ELEMENTS)
     raw = fetch_bytes(tile_url(OPENFREEMAP_VECTOR_TEMPLATE, tile), user_agent, timeout, retries)
     data = decode(raw, default_options={"y_coord_down": True})
     image = Image.new("RGB", (256, 256), "#f7f8f4")
     draw = ImageDraw.Draw(image)
 
-    draw_polygon_layer(draw, data, "landcover", "#eceee9", "#d5ddd2")
-    draw_polygon_layer(draw, data, "landuse", "#e9ebe5", "#d5ddd2")
-    draw_polygon_layer(draw, data, "park", "#e1e6de", "#cbd6cc")
-    draw_polygon_layer(draw, data, "water", "#ffffff", "#9aa5a0")
-    draw_line_layer(draw, data, "waterway", "#707b76", width=1)
-    draw_polygon_layer(draw, data, "building", "#d2d7d1", "#8d9891")
-    draw_line_layer(draw, data, "boundary", "#929c96", width=1)
-    draw_transportation(draw, data, tile.z)
-    draw_labels(draw, data, tile.z, ImageFont.load_default())
+    if "land" in selected:
+        draw_polygon_layer(draw, data, "landcover", "#eceee9", "#d5ddd2")
+        draw_polygon_layer(draw, data, "landuse", "#e9ebe5", "#d5ddd2")
+        draw_polygon_layer(draw, data, "park", "#e1e6de", "#cbd6cc")
+    if "water" in selected:
+        draw_polygon_layer(draw, data, "water", "#ffffff", "#9aa5a0")
+        draw_line_layer(draw, data, "waterway", "#707b76", width=1)
+    if "buildings" in selected:
+        draw_polygon_layer(draw, data, "building", "#d2d7d1", "#8d9891")
+    if "boundaries" in selected:
+        draw_line_layer(draw, data, "boundary", "#929c96", width=1)
+    if {"roads", "highways", "paths", "transit"} & selected:
+        draw_transportation(draw, data, tile.z, selected)
+    if "labels" in selected:
+        draw_labels(draw, data, tile.z, ImageFont.load_default())
+    if "pois" in selected:
+        draw_pois(draw, data, tile.z, ImageFont.load_default())
 
     destination.parent.mkdir(parents=True, exist_ok=True)
     image.save(destination, format="PNG", optimize=True)
@@ -359,7 +375,7 @@ def draw_line_layer(draw, data: dict, layer_name: str, color: str, width: int = 
         draw_geometry_lines(draw, feature.get("geometry", {}), color, width)
 
 
-def draw_transportation(draw, data: dict, z: int) -> None:
+def draw_transportation(draw, data: dict, z: int, elements: set[str]) -> None:
     class_styles = {
         "motorway": ("#111111", 3 if z >= 10 else 2),
         "trunk": ("#151515", 3 if z >= 10 else 2),
@@ -375,6 +391,14 @@ def draw_transportation(draw, data: dict, z: int) -> None:
     for feature in data.get("transportation", {}).get("features", []):
         properties = feature.get("properties", {})
         road_class = properties.get("class", "")
+        if road_class in {"motorway", "trunk", "primary"} and "highways" not in elements:
+            continue
+        if road_class in {"secondary", "tertiary", "minor", "service"} and "roads" not in elements:
+            continue
+        if road_class in {"track", "path"} and "paths" not in elements:
+            continue
+        if road_class == "rail" and "transit" not in elements:
+            continue
         color, width = class_styles.get(road_class, ("#555555", 1))
         draw_geometry_lines(draw, feature.get("geometry", {}), color, width)
 
@@ -422,6 +446,26 @@ def draw_labels(draw, data: dict, z: int, font) -> None:
             draw.text((x + 1, y + 1), name, fill="#ffffff", font=font)
             draw.text((x, y), name, fill="#111111", font=font)
             labels_drawn += 1
+
+
+def draw_pois(draw, data: dict, z: int, font) -> None:
+    if z < 13:
+        return
+    labels_drawn = 0
+    for feature in data.get("poi", {}).get("features", []):
+        if labels_drawn >= 18:
+            return
+        geometry = feature.get("geometry", {})
+        point = representative_point(geometry)
+        if not point:
+            continue
+        name = label_text(feature.get("properties", {}))
+        if not name:
+            continue
+        x, y = scale_point(point)
+        draw.ellipse([x - 2, y - 2, x + 2, y + 2], fill="#111111")
+        draw.text((x + 4, y - 4), name, fill="#111111", font=font)
+        labels_drawn += 1
 
 
 def representative_point(geometry: dict) -> list[float] | None:
@@ -561,7 +605,7 @@ def run(args: argparse.Namespace) -> int:
         with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as temp_file:
             temp_path = Path(temp_file.name)
         if args.source == "openfreemap-vector":
-            render_openfreemap_tile(tile, temp_path, args.user_agent, args.timeout, args.retries)
+            render_openfreemap_tile(tile, temp_path, args.user_agent, args.timeout, args.retries, args.include_elements)
         else:
             fetch_tile(tile_url(args.url_template, tile), temp_path, args.user_agent, args.timeout, args.retries)
         optimize_tile(temp_path, destination, args.mode, args.colors, args.brightness, args.contrast, args.threshold)
