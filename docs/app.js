@@ -33,20 +33,16 @@ const elements = {
   zip: document.getElementById("zipButton"),
 };
 
-let lastStyleSignature = "";
-const map = new maplibregl.Map({
-  container: "map",
-  style: buildEinkStyle(buildJob()),
-  center: [-98.35, 39.5],
-  zoom: 3.4,
-  attributionControl: true,
-});
-map.addControl(new maplibregl.NavigationControl({ showCompass: false }), "top-left");
+const map = L.map("map", { zoomControl: true }).setView([39.5, -98.35], 4);
+L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+  maxZoom: 19,
+  className: "preview-tiles",
+  attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+}).addTo(map);
 
-map.on("load", () => {
-  setInputsFromBounds(map.getBounds());
-  refresh();
-});
+let areaLayer = null;
+setInputsFromBounds(map.getBounds());
+refresh();
 
 map.on("moveend", () => {
   setInputsFromBounds(map.getBounds());
@@ -63,7 +59,6 @@ for (const element of Object.values(elements)) {
     element.addEventListener("input", refresh);
   }
 }
-for (const input of elements.elementInputs) input.addEventListener("input", refresh);
 
 elements.copy.addEventListener("click", async () => {
   await navigator.clipboard.writeText(elements.command.value);
@@ -186,56 +181,15 @@ function buildCommand(job) {
 
 function drawArea() {
   const bbox = buildJob().bbox;
-  const source = ensureAreaSource();
-  if (source) source.setData(areaFeature(bbox));
-}
-
-function ensureAreaSource() {
-  if (!map.isStyleLoaded()) return null;
-  if (!map.getSource("selected-area")) {
-    map.addSource("selected-area", {
-      type: "geojson",
-      data: areaFeature(buildJob().bbox),
-    });
-    map.addLayer({
-      id: "selected-area-fill",
-      type: "fill",
-      source: "selected-area",
-      paint: {
-        "fill-color": "#146c5f",
-        "fill-opacity": 0.08,
-      },
-    });
-    map.addLayer({
-      id: "selected-area-line",
-      type: "line",
-      source: "selected-area",
-      paint: {
-        "line-color": "#146c5f",
-        "line-width": 2,
-      },
-    });
+  const bounds = [
+    [bbox.south, bbox.west],
+    [bbox.north, bbox.east],
+  ];
+  if (!areaLayer) {
+    areaLayer = L.rectangle(bounds, { color: "#146c5f", weight: 2, fillOpacity: 0.08 }).addTo(map);
+  } else {
+    areaLayer.setBounds(bounds);
   }
-  return map.getSource("selected-area");
-}
-
-function areaFeature(bbox) {
-  return {
-    type: "Feature",
-    properties: {},
-    geometry: {
-      type: "Polygon",
-      coordinates: [
-        [
-          [bbox.west, bbox.south],
-          [bbox.east, bbox.south],
-          [bbox.east, bbox.north],
-          [bbox.west, bbox.north],
-          [bbox.west, bbox.south],
-        ],
-      ],
-    },
-  };
 }
 
 function normalizeZooms() {
@@ -339,11 +293,11 @@ function selectedElements() {
 
 function buildEinkStyle(job) {
   const sourceId = "openmaptiles";
-  const sourceUrl = job.vectorSource || "https://tiles.openfreemap.org/planet";
+  const sourceUrl = job.vectorSource || "mbtiles://openmaptiles";
   return {
     version: 8,
     name: job.style,
-    glyphs: "https://tiles.openfreemap.org/fonts/{fontstack}/{range}.pbf",
+    glyphs: "https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf",
     sources: {
       [sourceId]: {
         type: "vector",
@@ -420,7 +374,7 @@ function styleLayersForElements(sourceId, include) {
       type: "line",
       source: sourceId,
       "source-layer": "transportation",
-      filter: ["match", ["get", "class"], ["path", "track", "footway", "cycleway", "pedestrian"], true, false],
+      filter: ["in", ["get", "class"], ["literal", ["path", "track", "footway", "cycleway", "pedestrian"]]],
       paint: { "line-color": "#777777", "line-dasharray": [1, 1.5], "line-width": ["interpolate", ["linear"], ["zoom"], 10, 0.5, 16, 1.6] },
     });
   }
@@ -430,7 +384,7 @@ function styleLayersForElements(sourceId, include) {
       type: "line",
       source: sourceId,
       "source-layer": "transportation",
-      filter: ["match", ["get", "class"], ["minor", "service", "tertiary", "secondary"], true, false],
+      filter: ["in", ["get", "class"], ["literal", ["minor", "service", "tertiary", "secondary"]]],
       paint: { "line-color": "#222222", "line-width": ["interpolate", ["linear"], ["zoom"], 6, 0.45, 16, 2.4] },
     });
   }
@@ -440,7 +394,7 @@ function styleLayersForElements(sourceId, include) {
       type: "line",
       source: sourceId,
       "source-layer": "transportation",
-      filter: ["match", ["get", "class"], ["motorway", "trunk", "primary"], true, false],
+      filter: ["in", ["get", "class"], ["literal", ["motorway", "trunk", "primary"]]],
       paint: { "line-color": "#000000", "line-width": ["interpolate", ["linear"], ["zoom"], 5, 0.8, 16, 3.3] },
     });
   }
@@ -493,17 +447,9 @@ function updatePreview(job) {
   root.style.setProperty("--preview-brightness", job.brightness.toFixed(2));
   root.style.setProperty("--preview-contrast", job.contrast.toFixed(2));
   root.style.setProperty("--preview-threshold", String(job.threshold));
-  map.getContainer().classList.toggle("eink-preview", enabled);
-  map.getContainer().classList.toggle("mono-preview", enabled && job.mode === "mono");
-
-  const styleSignature = JSON.stringify({ elements: job.elements.include, vectorSource: job.vectorSource });
-  if (map.loaded() && styleSignature !== lastStyleSignature) {
-    lastStyleSignature = styleSignature;
-    map.setStyle(buildEinkStyle(job), { diff: false });
-    map.once("style.load", () => drawArea());
-  } else if (!lastStyleSignature) {
-    lastStyleSignature = styleSignature;
-  }
+  const container = map.getContainer();
+  container.classList.toggle("eink-preview", enabled);
+  container.classList.toggle("mono-preview", enabled && job.mode === "mono");
 }
 
 function tilePath(job, tile) {

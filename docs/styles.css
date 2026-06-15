@@ -236,13 +236,11 @@ output {
   background: #dfe7df;
 }
 
-.eink-preview .preview-tiles,
-.eink-preview .maplibregl-canvas {
+.eink-preview .preview-tiles {
   filter: grayscale(1) brightness(var(--preview-brightness, 0.95)) contrast(var(--preview-contrast, 1.4));
 }
 
-.mono-preview .preview-tiles,
-.mono-preview .maplibregl-canvas {
+.mono-preview .preview-tiles {
   filter: grayscale(1) brightness(var(--preview-brightness, 0.95)) contrast(var(--preview-contrast, 1.4));
 }
 

@@ -4,7 +4,12 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>E-ink Map Tile Builder</title>
-    <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.css" />
+    <link
+      rel="stylesheet"
+      href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      integrity="sha256-p4NxAoJBhIINfQnbp2kgxuswVwvtn3dDr+gYlnhV4Y="
+      crossorigin=""
+    />
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
@@ -164,7 +169,7 @@
           </div>
           <label>
             Vector TileJSON URL
-            <input id="vectorSourceInput" type="text" value="https://tiles.openfreemap.org/planet" />
+            <input id="vectorSourceInput" type="text" placeholder="mbtiles://openmaptiles" />
           </label>
           <label>
             Tile URL template
@@ -196,7 +201,11 @@
       </aside>
     </main>
 
-    <script src="https://unpkg.com/maplibre-gl@5.24.0/dist/maplibre-gl.js"></script>
+    <script
+      src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+      integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+      crossorigin=""
+    ></script>
     <script src="https://unpkg.com/jszip@3.10.1/dist/jszip.min.js"></script>
     <script src="./app.js"></script>
   </body>
