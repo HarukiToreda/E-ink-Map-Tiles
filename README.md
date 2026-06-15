@@ -70,6 +70,74 @@ Important limits:
 
 If you need large areas, use object storage or a real tile server instead of committing the tiles to Git.
 
+## Getting A Tile Source
+
+The **Tile URL template** field needs an XYZ raster PNG endpoint. In plain English, that means a URL where changing `{z}`, `{x}`, and `{y}` returns one 256x256 map image.
+
+Example shape:
+
+```text
+http://127.0.0.1:8080/styles/eink/{z}/{x}/{y}.png
+```
+
+Do not paste `https://tile.openstreetmap.org/{z}/{x}/{y}.png` for exports. That public service is for interactive viewing, not building offline tile bundles.
+
+### Option A: Local TileServer GL
+
+This is the most practical legal path for testing.
+
+You need:
+
+- Docker Desktop
+- A legal `.mbtiles` file, such as one downloaded/generated from OpenFreeMap, OpenMapTiles, MapTiler data, or your own OSM extract pipeline
+
+Put the `.mbtiles` file in a folder, for example:
+
+```text
+C:\maps\my-area.mbtiles
+```
+
+Run TileServer GL:
+
+```powershell
+cd C:\maps
+docker run --rm -it -v ${PWD}:/data -p 8080:8080 maptiler/tileserver-gl:latest --file my-area.mbtiles
+```
+
+Open this in your browser to confirm it is running:
+
+```text
+http://127.0.0.1:8080
+```
+
+TileServer GL shows available styles and tile endpoints. Use the PNG raster endpoint it shows as the picker's **Tile URL template**. It will usually look similar to:
+
+```text
+http://127.0.0.1:8080/styles/basic/{z}/{x}/{y}.png
+```
+
+Then return to the picker, paste that URL, check the permission box, and click **Download Runner** or **Download ZIP**.
+
+### Option B: Hosted Demo Tiles
+
+For the easiest public testing, generate a small legal tile pack once and commit it under:
+
+```text
+docs/tiles/demo/z/x/y.png
+```
+
+Then use:
+
+```text
+https://harukitoreda.github.io/E-ink-Map-Tiles/tiles/demo/{z}/{x}/{y}.png
+```
+
+This avoids every tester needing Docker, but it only works for areas and zooms already included in the hosted pack.
+
+### Option C: Provider Tile API
+
+Some providers offer raster tile APIs and may allow offline export under specific plans or terms. If a provider explicitly allows your use case, paste their XYZ PNG URL into the picker. If their terms only allow live display, do not use them for offline bundles.
+
 ## Install
 
 ```powershell
