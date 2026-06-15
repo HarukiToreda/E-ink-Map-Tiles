@@ -44,6 +44,32 @@ Example local-renderer URL:
 eink-map-tiles --bbox="-122.55,47.45,-122.15,47.75" --zooms 6-13 --mode grayscale --url-template "http://127.0.0.1:8080/styles/eink/{z}/{x}/{y}.png" --zip
 ```
 
+## Hosted Tile Packs
+
+Yes, you can make testing easier by hosting prebuilt tiles from this repo, as long as the tiles were generated from a source that allows redistribution and you keep the required attribution.
+
+Best use for this repo:
+
+- Host small demo/test packs, not continent-scale or world-scale tiles.
+- Generate them from self-hosted/open packaged data such as OpenFreeMap MBTiles, Protomaps PMTiles, OpenMapTiles tooling, or raw OSM extracts.
+- Store them under `docs/tiles/{pack-name}/z/x/y.png`.
+- Set the picker tile URL template to:
+
+```text
+https://harukitoreda.github.io/E-ink-Map-Tiles/tiles/{pack-name}/{z}/{x}/{y}.png
+```
+
+This makes browser ZIP downloads much easier because the tiles are same-origin with the GitHub Pages site.
+
+Important limits:
+
+- GitHub Pages published sites may be no larger than 1 GB.
+- GitHub Pages has a soft bandwidth limit of 100 GB per month.
+- Tile pyramids grow quickly, so keep hosted packs small and low/medium zoom.
+- Do not create hosted packs by scraping public OpenStreetMap raster tiles.
+
+If you need large areas, use object storage or a real tile server instead of committing the tiles to Git.
+
 ## Install
 
 ```powershell
