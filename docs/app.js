@@ -9,6 +9,13 @@ const elements = {
   maxZoom: document.getElementById("maxZoomInput"),
   style: document.getElementById("styleInput"),
   mode: document.getElementById("modeInput"),
+  preview: document.getElementById("previewInput"),
+  contrast: document.getElementById("contrastInput"),
+  contrastOutput: document.getElementById("contrastOutput"),
+  brightness: document.getElementById("brightnessInput"),
+  brightnessOutput: document.getElementById("brightnessOutput"),
+  threshold: document.getElementById("thresholdInput"),
+  thresholdOutput: document.getElementById("thresholdOutput"),
   layout: document.getElementById("layoutInput"),
   url: document.getElementById("urlInput"),
   permission: document.getElementById("permissionInput"),
@@ -24,6 +31,7 @@ const elements = {
 const map = L.map("map", { zoomControl: true }).setView([39.5, -98.35], 4);
 L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
   maxZoom: 19,
+  className: "preview-tiles",
   attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
 }).addTo(map);
 
@@ -90,6 +98,10 @@ function refresh() {
   const tiles = tilesForJob(job);
   elements.tileCount.value = `${tiles.length.toLocaleString()} tiles`;
   elements.command.value = buildCommand(job);
+  elements.contrastOutput.value = Number(elements.contrast.value).toFixed(2);
+  elements.brightnessOutput.value = Number(elements.brightness.value).toFixed(2);
+  elements.thresholdOutput.value = String(Math.round(Number(elements.threshold.value)));
+  updatePreview(job);
 }
 
 function setInputsFromBounds(bounds) {
@@ -110,6 +122,9 @@ function buildJob() {
     zooms: zoomRange(Number(elements.minZoom.value), Number(elements.maxZoom.value)),
     style: sanitizeStyle(elements.style.value),
     mode: elements.mode.value,
+    brightness: Number(elements.brightness.value),
+    contrast: Number(elements.contrast.value),
+    threshold: Math.round(Number(elements.threshold.value)),
     layout: elements.layout.value,
     urlTemplate: elements.url.value.trim(),
   };
@@ -128,6 +143,12 @@ function buildCommand(job) {
     quote(job.style),
     "--mode",
     quote(job.mode),
+    "--brightness",
+    quote(job.brightness.toFixed(2)),
+    "--contrast",
+    quote(job.contrast.toFixed(2)),
+    "--threshold",
+    quote(job.threshold),
     "--layout",
     quote(job.layout),
   ];
@@ -206,7 +227,7 @@ async function downloadZip(job, tiles) {
     const tile = tiles[index];
     setStatus(`Fetching ${index + 1} of ${tiles.length}`);
     const url = job.urlTemplate.replace("{z}", tile.z).replace("{x}", tile.x).replace("{y}", tile.y);
-    const blob = await fetchConvertedTile(url, job.mode);
+    const blob = await fetchConvertedTile(url, job);
     zip.file(tilePath(job, tile), blob);
   }
 
@@ -214,11 +235,11 @@ async function downloadZip(job, tiles) {
   downloadBlob(`${job.style}-inkhud-tiles.zip`, zipBlob);
 }
 
-async function fetchConvertedTile(url, mode) {
+async function fetchConvertedTile(url, job) {
   const response = await fetch(url, { mode: "cors" });
   if (!response.ok) throw new Error(`HTTP ${response.status} for ${url}`);
   const imageBlob = await response.blob();
-  if (mode === "original") return imageBlob;
+  if (job.mode === "original") return imageBlob;
 
   const bitmap = await createImageBitmap(imageBlob);
   const canvas = document.createElement("canvas");
@@ -230,8 +251,9 @@ async function fetchConvertedTile(url, mode) {
   const data = imageData.data;
 
   for (let i = 0; i < data.length; i += 4) {
-    const gray = Math.round(data[i] * 0.299 + data[i + 1] * 0.587 + data[i + 2] * 0.114);
-    const value = mode === "mono" ? (gray >= 150 ? 255 : 0) : gray;
+    const gray = data[i] * 0.299 + data[i + 1] * 0.587 + data[i + 2] * 0.114;
+    const tuned = clamp(Math.round((gray - 128) * job.contrast + 128 * job.brightness), 0, 255);
+    const value = job.mode === "mono" ? (tuned >= job.threshold ? 255 : 0) : tuned;
     data[i] = value;
     data[i + 1] = value;
     data[i + 2] = value;
@@ -240,6 +262,17 @@ async function fetchConvertedTile(url, mode) {
 
   context.putImageData(imageData, 0, 0);
   return await new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
+}
+
+function updatePreview(job) {
+  const enabled = elements.preview.checked && job.mode !== "original";
+  const root = document.documentElement;
+  root.style.setProperty("--preview-brightness", job.brightness.toFixed(2));
+  root.style.setProperty("--preview-contrast", job.contrast.toFixed(2));
+  root.style.setProperty("--preview-threshold", String(job.threshold));
+  const container = map.getContainer();
+  container.classList.toggle("eink-preview", enabled);
+  container.classList.toggle("mono-preview", enabled && job.mode === "mono");
 }
 
 function tilePath(job, tile) {

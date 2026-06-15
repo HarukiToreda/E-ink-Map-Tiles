@@ -193,7 +193,16 @@ output {
   align-items: flex-start;
 }
 
-.check-row input {
+.switch-row {
+  flex-direction: row;
+  align-items: center;
+  gap: 7px;
+  color: var(--ink);
+  font-size: 0.82rem;
+}
+
+.check-row input,
+.switch-row input {
   width: 18px;
   min-height: 18px;
   margin-top: 2px;
@@ -207,6 +216,14 @@ output {
 
 .leaflet-container {
   background: #dfe7df;
+}
+
+.eink-preview .preview-tiles {
+  filter: grayscale(1) brightness(var(--preview-brightness, 1.05)) contrast(var(--preview-contrast, 2.1));
+}
+
+.mono-preview .preview-tiles {
+  filter: grayscale(1) brightness(var(--preview-brightness, 1.05)) contrast(var(--preview-contrast, 2.1));
 }
 
 /* Critical Leaflet layout fallback. If the CDN stylesheet is blocked, tiles otherwise render as normal images. */

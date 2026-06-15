@@ -173,6 +173,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--colors", type=int, default=256, help="Palette colors for --mode palette")
     parser.add_argument("--brightness", type=float, default=1.0, help="Brightness multiplier")
     parser.add_argument("--contrast", type=float, default=1.0, help="Contrast multiplier")
+    parser.add_argument("--threshold", type=int, default=168, help="Black/white cutoff for --mode mono")
     return parser
 
 
@@ -204,6 +205,9 @@ def apply_job_file(args: argparse.Namespace) -> None:
 
     args.style = job.get("style") or args.style
     args.mode = job.get("mode") or args.mode
+    args.brightness = float(job.get("brightness", args.brightness))
+    args.contrast = float(job.get("contrast", args.contrast))
+    args.threshold = int(job.get("threshold", args.threshold))
     args.layout = job.get("layout") or args.layout
     args.url_template = job.get("urlTemplate") or job.get("url_template") or args.url_template
 
@@ -253,7 +257,15 @@ def fetch_tile(url: str, destination: Path, user_agent: str, timeout: float, ret
     raise RuntimeError(f"Failed to fetch {url}: {last_error}")
 
 
-def optimize_tile(source: Path, destination: Path, mode: str, colors: int, brightness: float, contrast: float) -> None:
+def optimize_tile(
+    source: Path,
+    destination: Path,
+    mode: str,
+    colors: int,
+    brightness: float,
+    contrast: float,
+    threshold: int,
+) -> None:
     if mode == "original" and brightness == 1.0 and contrast == 1.0:
         source.replace(destination)
         return
@@ -275,7 +287,7 @@ def optimize_tile(source: Path, destination: Path, mode: str, colors: int, brigh
         elif mode == "grayscale":
             converted = image.convert("L")
         elif mode == "mono":
-            converted = image.convert("L").convert("1")
+            converted = image.convert("L").point(lambda pixel: 255 if pixel >= threshold else 0, mode="1")
         else:
             converted = image
 
@@ -307,6 +319,9 @@ def write_manifest(output_root: Path, args: argparse.Namespace, bbox: BBox, tile
         "url_template": args.url_template,
         "mode": args.mode,
         "colors": args.colors if args.mode == "palette" else None,
+        "brightness": args.brightness,
+        "contrast": args.contrast,
+        "threshold": args.threshold if args.mode == "mono" else None,
     }
     output_root.mkdir(parents=True, exist_ok=True)
     (output_root / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
@@ -334,6 +349,8 @@ def run(args: argparse.Namespace) -> int:
         raise SystemExit("--url-template is required for downloads. Use a local/self-hosted tile renderer when creating bundles.")
     if args.colors < 2 or args.colors > 256:
         raise SystemExit("--colors must be between 2 and 256")
+    if args.threshold < 0 or args.threshold > 255:
+        raise SystemExit("--threshold must be between 0 and 255")
     if args.rate_limit < 0:
         raise SystemExit("--rate-limit cannot be negative")
 
@@ -347,7 +364,7 @@ def run(args: argparse.Namespace) -> int:
         with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as temp_file:
             temp_path = Path(temp_file.name)
         fetch_tile(tile_url(args.url_template, tile), temp_path, args.user_agent, args.timeout, args.retries)
-        optimize_tile(temp_path, destination, args.mode, args.colors, args.brightness, args.contrast)
+        optimize_tile(temp_path, destination, args.mode, args.colors, args.brightness, args.contrast, args.threshold)
         completed += 1
         print(f"[{completed}/{len(tiles)}] {destination}")
         if args.rate_limit and completed < len(tiles):

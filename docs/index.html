@@ -70,8 +70,8 @@
             <label>
               Mode
               <select id="modeInput">
-                <option value="grayscale" selected>Grayscale</option>
-                <option value="mono">1-bit mono</option>
+                <option value="grayscale">Grayscale</option>
+                <option value="mono" selected>1-bit mono</option>
                 <option value="palette">Palette</option>
                 <option value="original">Original</option>
               </select>
@@ -85,6 +85,31 @@
               <option value="single-map">map/z/x/y.png</option>
               <option value="meshtastic-sd">maps/{style}/z/x/y.png</option>
             </select>
+          </label>
+        </section>
+
+        <section class="panel">
+          <div class="panel-title">
+            <h2>E-paper</h2>
+            <label class="switch-row">
+              <input id="previewInput" type="checkbox" checked />
+              <span>Preview</span>
+            </label>
+          </div>
+          <label>
+            Contrast
+            <input id="contrastInput" type="range" min="0.6" max="3" step="0.05" value="2.1" />
+            <output id="contrastOutput">2.10</output>
+          </label>
+          <label>
+            Brightness
+            <input id="brightnessInput" type="range" min="0.6" max="1.6" step="0.05" value="1.05" />
+            <output id="brightnessOutput">1.05</output>
+          </label>
+          <label>
+            Mono threshold
+            <input id="thresholdInput" type="range" min="80" max="230" step="1" value="168" />
+            <output id="thresholdOutput">168</output>
           </label>
         </section>
 

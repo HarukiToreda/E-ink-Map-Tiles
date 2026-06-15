@@ -118,10 +118,11 @@ Other layouts are available for experiments:
 
 ## E-paper Modes
 
-- `--mode grayscale` writes 8-bit grayscale PNGs and is the default.
-- `--mode mono` writes 1-bit black/white PNGs for memory and contrast testing.
+- `--mode mono` writes 1-bit black/white PNGs for memory and contrast testing. The picker defaults here because it looks closest to many e-paper panels.
+- `--mode grayscale` writes 8-bit grayscale PNGs when you want softer map detail.
 - `--mode palette --colors 256` writes indexed-color PNGs.
 - `--brightness` and `--contrast` tune readability before conversion.
+- `--threshold` controls the black/white cutoff for mono exports.
 
 ## Provider Notes
 
