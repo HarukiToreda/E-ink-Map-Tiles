@@ -25,6 +25,8 @@ Basic flow:
 
 The default source downloads OpenFreeMap vector tiles for the selected area and renders e-paper PNG tiles locally. No TileServer GL setup or custom tile URL is needed for the default path.
 
+The interactive preview uses fast raster map tiles for display only, with attribution shown in the preview. Exported tile bundles are generated from the selected export source.
+
 Output is saved under:
 
 ```text

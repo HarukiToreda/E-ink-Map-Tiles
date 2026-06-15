@@ -22,6 +22,7 @@ from . import cli
 
 DEFAULT_OUTPUT_BASE = Path.home() / "Downloads" / "EinkMapTiles"
 DEFAULT_ELEMENTS = ["land", "water", "roads", "highways", "boundaries", "labels"]
+PREVIEW_RASTER_TEMPLATE = "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
 SOURCE_PRESETS = {
     "OpenFreeMap open vector tiles": {
         "source": "openfreemap-vector",
@@ -64,6 +65,7 @@ class DesktopApp(tk.Tk):
         self.messages: queue.Queue[str] = queue.Queue()
         self.export_thread: threading.Thread | None = None
         self.preview_thread: threading.Thread | None = None
+        self.preview_pending = False
         self.last_output: Path | None = None
         self.preview_image: tk.PhotoImage | None = None
         self.map_center_lat = 39.5
@@ -477,9 +479,10 @@ class DesktopApp(tk.Tk):
 
     def refresh_preview(self) -> None:
         if self.preview_thread and self.preview_thread.is_alive():
-            self.schedule_preview(delay_ms=500)
+            self.preview_pending = True
             return
         self.preview_after_id = None
+        self.preview_pending = False
         try:
             job = self.build_job()
             self.validate_tile_url(job["urlTemplate"])
@@ -501,7 +504,13 @@ class DesktopApp(tk.Tk):
         except Exception as exc:  # noqa: BLE001 - report worker errors in GUI.
             self.after(0, lambda: self.preview_failed(str(exc)))
         finally:
-            self.after(0, lambda: self.preview_button.configure(state="normal"))
+            self.after(0, self.finish_preview_thread)
+
+    def finish_preview_thread(self) -> None:
+        self.preview_button.configure(state="normal")
+        if self.preview_pending:
+            self.preview_pending = False
+            self.schedule_preview(delay_ms=200)
 
     def make_preview_image(self, job: dict[str, Any]):
         from PIL import Image, ImageDraw
@@ -534,7 +543,8 @@ class DesktopApp(tk.Tk):
         def render_tile(tile_job):
             tile_id, paste_x, paste_y = tile_job
             if job["source"] == "openfreemap-vector":
-                image = self.render_preview_vector_tile(tile_id)
+                url = cli.tile_url(PREVIEW_RASTER_TEMPLATE, tile_id)
+                image = self.fetch_preview_tile(url)
             else:
                 url = cli.tile_url(job["urlTemplate"], tile_id)
                 image = self.fetch_preview_tile(url)
@@ -548,7 +558,22 @@ class DesktopApp(tk.Tk):
                 canvas.paste(tile_image, (paste_x, paste_y))
 
         self.draw_preview_bbox(canvas, bbox, zoom, left_world, top_world)
+        self.draw_preview_attribution(canvas)
         return canvas
+
+    def draw_preview_attribution(self, canvas) -> None:
+        from PIL import ImageDraw, ImageFont
+
+        draw = ImageDraw.Draw(canvas)
+        text = "(c) OpenStreetMap contributors - preview only"
+        font = ImageFont.load_default()
+        box = draw.textbbox((0, 0), text, font=font)
+        width = box[2] - box[0] + 10
+        height = box[3] - box[1] + 8
+        x = canvas.width - width - 8
+        y = canvas.height - height - 8
+        draw.rectangle([x, y, x + width, y + height], fill="#ffffff", outline="#b8c4bc")
+        draw.text((x + 5, y + 4), text, fill="#17211b", font=font)
 
     def draw_preview_bbox(self, canvas, bbox: cli.BBox, zoom: int, left_world: float, top_world: float) -> None:
         from PIL import ImageDraw
@@ -597,15 +622,15 @@ class DesktopApp(tk.Tk):
         self.map_canvas.create_text(width / 2, height / 2, text=text, fill="#17211b", font=("Segoe UI", 11), justify="center")
 
     def draw_zoom_badge(self) -> None:
-        self.map_canvas.create_oval(10, 10, 44, 44, fill="#ffffff", outline="#17211b")
-        self.map_canvas.create_text(27, 27, text=str(self.map_zoom), fill="#000000", font=("Segoe UI", 12, "bold"))
+        self.map_canvas.create_oval(10, 10, 44, 44, fill="#ffffff", outline="#17211b", tags=("zoom-badge",))
+        self.map_canvas.create_text(27, 27, text=str(self.map_zoom), fill="#000000", font=("Segoe UI", 12, "bold"), tags=("zoom-badge",))
 
     def shift_current_preview(self, dx: int, dy: int) -> None:
         if self.preview_image is None:
             self.draw_preview_placeholder("Release to render map...")
             return
-        self.map_canvas.delete("drag-preview")
-        self.map_canvas.create_image(dx, dy, image=self.preview_image, anchor="nw", tags=("drag-preview",))
+        self.map_canvas.coords("map-image", dx, dy)
+        self.map_canvas.delete("zoom-badge")
         self.draw_zoom_badge()
 
     def render_preview_vector_tile(self, tile: cli.Tile):
@@ -664,7 +689,7 @@ class DesktopApp(tk.Tk):
             return
         self.preview_image = ImageTk.PhotoImage(image)
         self.map_canvas.delete("all")
-        self.map_canvas.create_image(0, 0, image=self.preview_image, anchor="nw")
+        self.map_canvas.create_image(0, 0, image=self.preview_image, anchor="nw", tags=("map-image",))
         self.draw_zoom_badge()
         self.vars["preview_status"].set("Drag to pan, wheel or +/- to zoom, Use View to set export area.")
 
