@@ -56,6 +56,12 @@ pip install -e .
 
 The static picker lives in `docs/` so this repo can publish it with GitHub Pages using the `docs` folder as the Pages source.
 
+Live test site:
+
+```text
+https://harukitoreda.github.io/E-ink-Map-Tiles/
+```
+
 Use it to:
 
 - Pan and zoom to an area.
