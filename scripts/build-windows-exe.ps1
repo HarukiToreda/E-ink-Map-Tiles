@@ -22,19 +22,27 @@ try {
 
   & $VenvPython -m pip install --upgrade pip
   & $VenvPython -m pip install -e . pyinstaller
+  $ExePath = Join-Path $RepoRoot "dist\EinkMapTiles.exe"
+  $RunningExe = Get-Process EinkMapTiles -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $ExePath }
+  if ($RunningExe) {
+    throw "Close EinkMapTiles.exe before rebuilding: $ExePath"
+  }
+
   & $VenvPython -m PyInstaller `
     --noconfirm `
     --clean `
     --onefile `
-    --console `
+    --windowed `
     --name EinkMapTiles `
     --paths src `
-    --add-data "docs;docs" `
     scripts\eink_map_tiles_app.py
+  if ($LASTEXITCODE -ne 0) {
+    throw "PyInstaller failed with exit code $LASTEXITCODE"
+  }
 
   Write-Host ""
   Write-Host "Built:"
-  Write-Host (Join-Path $RepoRoot "dist\EinkMapTiles.exe")
+  Write-Host $ExePath
 } finally {
   Pop-Location
 }

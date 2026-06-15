@@ -1,4 +1,4 @@
-from eink_map_tiles.local_app import main
+from eink_map_tiles.desktop_app import main
 
 
 if __name__ == "__main__":
