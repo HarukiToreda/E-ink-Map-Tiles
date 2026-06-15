@@ -89,6 +89,7 @@ class DesktopApp(tk.Tk):
         self.live_update_after_id: str | None = None
         self.preview_tile_cache: dict[tuple, Any] = {}
         self.export_total = 0
+        self.collapsible_sections: dict[str, dict[str, Any]] = {}
 
         self.vars = self.make_vars()
         self.configure_styles()
@@ -131,6 +132,10 @@ class DesktopApp(tk.Tk):
             "brightness_text": tk.StringVar(value=f"{DEFAULT_BRIGHTNESS:.2f}"),
             "contrast_text": tk.StringVar(value=f"{DEFAULT_CONTRAST:.2f}"),
             "threshold_text": tk.StringVar(value=f"{DEFAULT_THRESHOLD:.0f}"),
+            "collapse_map_source": tk.BooleanVar(value=False),
+            "collapse_area": tk.BooleanVar(value=False),
+            "collapse_export_settings": tk.BooleanVar(value=True),
+            "collapse_map_elements": tk.BooleanVar(value=True),
         }
         for element in cli.MAP_ELEMENTS:
             variables[f"element_{element}"] = tk.BooleanVar(value=element in DEFAULT_ELEMENTS)
@@ -164,6 +169,41 @@ class DesktopApp(tk.Tk):
         frame.columnconfigure(0, weight=1)
         ttk.Label(frame, text=title, style="Section.TLabel").grid(row=0, column=0, sticky="w", padx=14, pady=(12, 6))
         return frame
+
+    def collapsible_section(self, parent: tk.Misc, title: str, variable_name: str) -> tuple[tk.Frame, ttk.Frame]:
+        frame = tk.Frame(parent, background="#ffffff", highlightbackground="#d7e2db", highlightthickness=1, borderwidth=0)
+        frame.columnconfigure(0, weight=1)
+        header = ttk.Frame(frame, style="Card.TFrame")
+        header.grid(row=0, column=0, sticky="ew", padx=14, pady=(9, 6))
+        header.columnconfigure(1, weight=1)
+
+        expanded = bool(self.vars[variable_name].get())
+        toggle = self.flat_button(header, "v" if expanded else ">", lambda: self.toggle_section(variable_name), width=2)
+        toggle.grid(row=0, column=0, sticky="w", padx=(0, 8))
+        ttk.Label(header, text=title, style="Section.TLabel").grid(row=0, column=1, sticky="w")
+
+        content = ttk.Frame(frame, style="Card.TFrame", padding=(14, 0, 14, 14))
+        self.collapsible_sections[variable_name] = {"content": content, "toggle": toggle}
+        if expanded:
+            content.grid(row=1, column=0, sticky="ew")
+        return frame, content
+
+    def toggle_section(self, variable_name: str) -> None:
+        self.vars[variable_name].set(not bool(self.vars[variable_name].get()))
+        self.apply_section_state(variable_name)
+
+    def apply_section_state(self, variable_name: str) -> None:
+        section = self.collapsible_sections[variable_name]
+        content = section["content"]
+        toggle = section["toggle"]
+        if bool(self.vars[variable_name].get()):
+            content.grid(row=1, column=0, sticky="ew")
+            toggle.configure(text="v")
+        else:
+            content.grid_remove()
+            toggle.configure(text=">")
+        if hasattr(self, "controls_canvas"):
+            self.after_idle(lambda: self.controls_canvas.configure(scrollregion=self.controls_canvas.bbox("all")))
 
     def flat_button(self, parent: tk.Misc, text: str, command, primary: bool = False, width: int | None = None) -> tk.Button:
         bg = "#0f766e" if primary else "#f7faf7"
@@ -296,9 +336,7 @@ class DesktopApp(tk.Tk):
         return controls
 
     def build_source(self, parent: ttk.Frame) -> ttk.LabelFrame:
-        frame = self.section_frame(parent, "Map Source")
-        content = ttk.Frame(frame, style="Card.TFrame", padding=(14, 0, 14, 14))
-        content.grid(row=1, column=0, sticky="ew")
+        frame, content = self.collapsible_section(parent, "Map Source", "collapse_map_source")
         content.columnconfigure(0, weight=1)
 
         ttk.Label(content, text="Source preset").grid(row=0, column=0, sticky="w")
@@ -326,9 +364,7 @@ class DesktopApp(tk.Tk):
         return frame
 
     def build_area(self, parent: ttk.Frame) -> ttk.LabelFrame:
-        frame = self.section_frame(parent, "Area")
-        content = ttk.Frame(frame, style="Card.TFrame", padding=(14, 0, 14, 14))
-        content.grid(row=1, column=0, sticky="ew")
+        frame, content = self.collapsible_section(parent, "Area", "collapse_area")
         content.columnconfigure(1, weight=1)
         content.columnconfigure(3, weight=1)
 
@@ -358,9 +394,7 @@ class DesktopApp(tk.Tk):
         return frame
 
     def build_settings(self, parent: ttk.Frame) -> ttk.LabelFrame:
-        frame = self.section_frame(parent, "Export Settings")
-        content = ttk.Frame(frame, style="Card.TFrame", padding=(14, 0, 14, 14))
-        content.grid(row=1, column=0, sticky="ew")
+        frame, content = self.collapsible_section(parent, "Export Settings", "collapse_export_settings")
         content.columnconfigure(1, weight=1)
         content.columnconfigure(3, weight=1)
 
@@ -429,9 +463,7 @@ class DesktopApp(tk.Tk):
         return frame
 
     def build_elements(self, parent: ttk.Frame) -> tk.Frame:
-        frame = self.section_frame(parent, "Map Elements")
-        content = ttk.Frame(frame, style="Card.TFrame", padding=(14, 0, 14, 14))
-        content.grid(row=1, column=0, sticky="ew")
+        frame, content = self.collapsible_section(parent, "Map Elements", "collapse_map_elements")
         for column in range(2):
             content.columnconfigure(column, weight=1)
 
