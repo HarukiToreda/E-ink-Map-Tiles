@@ -173,7 +173,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--colors", type=int, default=256, help="Palette colors for --mode palette")
     parser.add_argument("--brightness", type=float, default=1.0, help="Brightness multiplier")
     parser.add_argument("--contrast", type=float, default=1.0, help="Contrast multiplier")
-    parser.add_argument("--threshold", type=int, default=168, help="Black/white cutoff for --mode mono")
+    parser.add_argument("--threshold", type=int, default=201, help="Black/white cutoff for --mode mono")
     return parser
 
 

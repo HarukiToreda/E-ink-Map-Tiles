@@ -219,11 +219,11 @@ output {
 }
 
 .eink-preview .preview-tiles {
-  filter: grayscale(1) brightness(var(--preview-brightness, 1.05)) contrast(var(--preview-contrast, 2.1));
+  filter: grayscale(1) brightness(var(--preview-brightness, 0.95)) contrast(var(--preview-contrast, 1.4));
 }
 
 .mono-preview .preview-tiles {
-  filter: grayscale(1) brightness(var(--preview-brightness, 1.05)) contrast(var(--preview-contrast, 2.1));
+  filter: grayscale(1) brightness(var(--preview-brightness, 0.95)) contrast(var(--preview-contrast, 1.4));
 }
 
 /* Critical Leaflet layout fallback. If the CDN stylesheet is blocked, tiles otherwise render as normal images. */
