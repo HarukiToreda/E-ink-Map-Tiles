@@ -35,6 +35,7 @@ const elements = {
   allElements: document.getElementById("allElementsButton"),
   copy: document.getElementById("copyButton"),
   job: document.getElementById("jobButton"),
+  runner: document.getElementById("runnerButton"),
   styleButton: document.getElementById("styleButton"),
   zip: document.getElementById("zipButton"),
 };
@@ -73,6 +74,11 @@ elements.copy.addEventListener("click", async () => {
 
 elements.job.addEventListener("click", () => {
   downloadText("inkhud-tile-job.json", JSON.stringify(buildJob(), null, 2) + "\n", "application/json");
+});
+
+elements.runner.addEventListener("click", () => {
+  const job = buildJob();
+  downloadText("run-inkhud-tile-job.ps1", buildRunnerScript(job), "text/plain");
 });
 
 elements.styleButton.addEventListener("click", () => {
@@ -184,6 +190,65 @@ function buildCommand(job) {
     parts.push("--dry-run");
   }
   return parts.join(" ");
+}
+
+function buildRunnerScript(job) {
+  const jobJson = JSON.stringify(job, null, 2);
+  return String.raw`$ErrorActionPreference = "Stop"
+
+$Root = Join-Path $env:USERPROFILE "Downloads\EinkMapTileRunner"
+$RepoZip = Join-Path $Root "E-ink-Map-Tiles-main.zip"
+$RepoDir = Join-Path $Root "E-ink-Map-Tiles-main"
+$JobPath = Join-Path $Root "inkhud-tile-job.json"
+$RepoUrl = "https://github.com/HarukiToreda/E-ink-Map-Tiles/archive/refs/heads/main.zip"
+
+New-Item -ItemType Directory -Force -Path $Root | Out-Null
+
+@'
+${jobJson}
+'@ | Set-Content -LiteralPath $JobPath -Encoding UTF8
+
+$Job = Get-Content -LiteralPath $JobPath -Raw | ConvertFrom-Json
+if ([string]::IsNullOrWhiteSpace($Job.urlTemplate)) {
+  Write-Host ""
+  Write-Host "Paste a legal tile URL template, for example:"
+  Write-Host "http://127.0.0.1:8080/styles/eink/{z}/{x}/{y}.png"
+  Write-Host ""
+  $Job.urlTemplate = Read-Host "Tile URL template"
+  $Job | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath $JobPath -Encoding UTF8
+}
+
+Write-Host "Downloading generator..."
+Invoke-WebRequest -Uri $RepoUrl -OutFile $RepoZip
+
+if (Test-Path -LiteralPath $RepoDir) {
+  Remove-Item -LiteralPath $RepoDir -Recurse -Force
+}
+Expand-Archive -LiteralPath $RepoZip -DestinationPath $Root -Force
+
+$PythonLauncher = Get-Command py -ErrorAction SilentlyContinue
+if ($PythonLauncher) {
+  $Python = "py"
+  $PythonArgs = @("-3")
+} else {
+  $Python = "python"
+  $PythonArgs = @()
+}
+
+Push-Location $RepoDir
+try {
+  & $Python @PythonArgs -m venv .venv
+  $VenvPython = Join-Path $RepoDir ".venv\Scripts\python.exe"
+  & $VenvPython -m pip install --upgrade pip
+  & $VenvPython -m pip install -e .
+  & $VenvPython -m eink_map_tiles.cli --job $JobPath --zip
+  Write-Host ""
+  Write-Host "Done. Output is in:"
+  Write-Host (Join-Path $RepoDir "build\inkhud-tiles")
+} finally {
+  Pop-Location
+}
+`;
 }
 
 function drawArea() {

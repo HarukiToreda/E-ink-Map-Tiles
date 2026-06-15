@@ -68,8 +68,17 @@ Use it to:
 - Estimate tile counts before downloading anything.
 - Choose which vector map elements to include in the renderer style.
 - Export a CLI command or `inkhud-tile-job.json`.
+- Export a Windows runner script that installs/runs the generator for that selected area.
 - Export an `osm-eink.json` MapLibre style for a local vector renderer.
 - Optionally create a ZIP in the browser when your tile source supports CORS and explicitly permits offline export.
+
+Easiest test path:
+
+1. Open the live site.
+2. Choose an area and click **Use View**.
+3. Add a legal tile URL template, or leave it blank and the runner will ask later.
+4. Click **Download Runner**.
+5. Run `run-inkhud-tile-job.ps1` in PowerShell.
 
 Run an exported job with:
 
@@ -181,16 +190,16 @@ Current repo status:
 - Leaflet is used by the GitHub Pages picker from a CDN. Leaflet is BSD 2-Clause licensed. The local CSS includes a small Leaflet-compatible layout fallback, so keep Leaflet's license/copyright notice in downstream distributions.
 - JSZip is used by the picker from a CDN for browser ZIP creation. JSZip is dual licensed; this project uses it under the MIT license option.
 - Pillow is the Python image-processing dependency. Pillow is MIT-CMU licensed.
-- OpenStreetMap public raster tiles are used only for the interactive preview map the user is actively viewing, with visible `© OpenStreetMap contributors` attribution. Do not use `tile.openstreetmap.org` as a download source for bundles.
+- OpenStreetMap public raster tiles are used only for the interactive preview map the user is actively viewing, with visible `(c) OpenStreetMap contributors` attribution. Do not use `tile.openstreetmap.org` as a download source for bundles.
 - Generated bundles require a tile URL you provide. Use a local renderer, your own tile server, or a provider that explicitly allows offline/bulk export.
-- OpenFreeMap, OpenMapTiles, Protomaps, and raw OSM extracts are valid directions only when you follow their attribution/license terms. Most OSM-derived outputs require `© OpenStreetMap contributors` and ODbL notice; OpenMapTiles-derived outputs also require OpenMapTiles attribution.
+- OpenFreeMap, OpenMapTiles, Protomaps, and raw OSM extracts are valid directions only when you follow their attribution/license terms. Most OSM-derived outputs require `(c) OpenStreetMap contributors` and ODbL notice; OpenMapTiles-derived outputs also require OpenMapTiles attribution.
 
 Recommended attribution to keep with generated tile bundles:
 
 ```text
-© OpenStreetMap contributors
+(c) OpenStreetMap contributors
 OpenStreetMap data is available under the Open Database License (ODbL) 1.0.
-© OpenMapTiles, if using OpenMapTiles schema/data.
+(c) OpenMapTiles, if using OpenMapTiles schema/data.
 Additional attribution may be required by the tile source or renderer.
 ```
 
@@ -202,3 +211,4 @@ The CLI and browser picker now write attribution guidance into generated job fil
 $env:PYTHONPATH='src'
 python -m unittest discover -s tests
 ```
+
