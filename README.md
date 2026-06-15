@@ -17,10 +17,10 @@ The app is a native desktop window. It does not open a browser, does not use Git
 Basic flow:
 
 1. Run `EinkMapTiles.exe`.
-2. Enter or calculate an area.
-3. Leave **Source preset** on **OpenFreeMap open vector tiles**.
-4. Choose zoom levels and e-paper settings.
-5. Click **Refresh Preview** to see a 3x3 e-paper preview.
+2. Pan/zoom the map preview.
+3. Click **Use View** to make the visible map your export area.
+4. Leave **Source preset** on **OpenFreeMap open vector tiles**.
+5. Choose zoom levels and e-paper settings.
 6. Click **Export Tiles**.
 
 The default source downloads OpenFreeMap vector tiles for the selected area and renders e-paper PNG tiles locally. No TileServer GL setup or custom tile URL is needed for the default path.

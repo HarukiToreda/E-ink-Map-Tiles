@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import io
 import json
+import math
 import os
 import queue
 import tempfile
 import threading
 import tkinter as tk
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import redirect_stdout
 from datetime import datetime
 from io import BytesIO
@@ -24,7 +26,7 @@ SOURCE_PRESETS = {
     "OpenFreeMap open vector tiles": {
         "source": "openfreemap-vector",
         "url": cli.OPENFREEMAP_VECTOR_TEMPLATE,
-        "help": "Default. Downloads OpenFreeMap vector tiles for the selected area and renders e-paper PNGs locally.",
+        "help": "Default open map source. No setup needed.",
     },
     "Local TileServer GL raster": {
         "source": "xyz",
@@ -56,20 +58,29 @@ class DesktopApp(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
         self.title("E-ink Map Tiles")
-        self.geometry("1080x900")
-        self.minsize(920, 720)
+        self.geometry("1180x700")
+        self.minsize(1040, 650)
 
         self.messages: queue.Queue[str] = queue.Queue()
         self.export_thread: threading.Thread | None = None
         self.preview_thread: threading.Thread | None = None
         self.last_output: Path | None = None
         self.preview_image: tk.PhotoImage | None = None
+        self.map_center_lat = 39.5
+        self.map_center_lon = -98.35
+        self.map_zoom = 4
+        self.map_drag_start: tuple[int, int] | None = None
+        self.map_drag_center: tuple[float, float] | None = None
+        self.preview_render_id = 0
+        self.preview_after_id: str | None = None
+        self.preview_tile_cache: dict[tuple, Any] = {}
 
         self.vars = self.make_vars()
         self.configure_styles()
         self.build_ui()
         self.apply_source_preset()
         self.estimate_tiles()
+        self.after(700, self.refresh_preview)
         self.poll_messages()
 
     def make_vars(self) -> dict[str, tk.Variable]:
@@ -80,15 +91,15 @@ class DesktopApp(tk.Tk):
             "source_help": tk.StringVar(value=SOURCE_PRESETS["OpenFreeMap open vector tiles"]["help"]),
             "url": tk.StringVar(value=SOURCE_PRESETS["OpenFreeMap open vector tiles"]["url"]),
             "permission": tk.BooleanVar(value=True),
-            "west": tk.StringVar(value="-122.55"),
-            "south": tk.StringVar(value="47.45"),
-            "east": tk.StringVar(value="-122.15"),
-            "north": tk.StringVar(value="47.75"),
-            "center_lat": tk.StringVar(value="47.6062"),
-            "center_lon": tk.StringVar(value="-122.3321"),
-            "radius_km": tk.StringVar(value="10"),
-            "min_zoom": tk.StringVar(value="6"),
-            "max_zoom": tk.StringVar(value="12"),
+            "west": tk.StringVar(value="-125.000000"),
+            "south": tk.StringVar(value="24.000000"),
+            "east": tk.StringVar(value="-66.000000"),
+            "north": tk.StringVar(value="50.000000"),
+            "center_lat": tk.StringVar(value="39.500000"),
+            "center_lon": tk.StringVar(value="-98.350000"),
+            "radius_km": tk.StringVar(value="1500"),
+            "min_zoom": tk.StringVar(value="4"),
+            "max_zoom": tk.StringVar(value="8"),
             "style": tk.StringVar(value="osm-eink"),
             "layout": tk.StringVar(value="inkhud-dev"),
             "mode": tk.StringVar(value="mono"),
@@ -97,7 +108,7 @@ class DesktopApp(tk.Tk):
             "threshold": tk.IntVar(value=201),
             "output": tk.StringVar(value=str(DEFAULT_OUTPUT_BASE / f"osm-eink-{timestamp}")),
             "tile_count": tk.StringVar(value="Estimate: not calculated"),
-            "preview_status": tk.StringVar(value="Click Refresh Preview to download a small OpenFreeMap sample."),
+            "preview_status": tk.StringVar(value="Loading OpenFreeMap overview preview..."),
             "status": tk.StringVar(value="Ready"),
         }
 
@@ -106,165 +117,179 @@ class DesktopApp(tk.Tk):
         self.rowconfigure(0, weight=1)
         style = ttk.Style(self)
         style.theme_use("clam")
-        style.configure("TFrame", background="#f4f6f1")
-        style.configure("TLabelframe", background="#f4f6f1")
-        style.configure("TLabelframe.Label", font=("Segoe UI", 10, "bold"))
-        style.configure("TLabel", background="#f4f6f1", font=("Segoe UI", 9))
-        style.configure("Title.TLabel", font=("Segoe UI", 18, "bold"))
-        style.configure("Hint.TLabel", foreground="#58645c", wraplength=880)
-        style.configure("Accent.TButton", font=("Segoe UI", 10, "bold"))
+        style.configure("TFrame", background="#eef2ec")
+        style.configure("Panel.TFrame", background="#ffffff", relief="flat")
+        style.configure("TLabelframe", background="#ffffff", bordercolor="#c7d0c8", relief="solid")
+        style.configure("TLabelframe.Label", background="#eef2ec", foreground="#17211b", font=("Segoe UI", 10, "bold"))
+        style.configure("TLabel", background="#ffffff", foreground="#17211b", font=("Segoe UI", 9))
+        style.configure("Shell.TLabel", background="#eef2ec", foreground="#17211b")
+        style.configure("Title.TLabel", background="#eef2ec", font=("Segoe UI", 20, "bold"))
+        style.configure("Hint.TLabel", background="#ffffff", foreground="#58645c", wraplength=320)
+        style.configure("MapHint.TLabel", background="#eef2ec", foreground="#58645c", wraplength=700)
+        style.configure("Accent.TButton", font=("Segoe UI", 10, "bold"), foreground="#ffffff", background="#146c5f")
+        style.map("Accent.TButton", background=[("active", "#0d4f47")])
 
     def build_ui(self) -> None:
         root = ttk.Frame(self, padding=16)
         root.grid(row=0, column=0, sticky="nsew")
         root.columnconfigure(0, weight=1)
-        root.rowconfigure(5, weight=1)
-        root.rowconfigure(6, weight=1)
+        root.rowconfigure(1, weight=1)
 
         ttk.Label(root, text="E-ink Map Tiles", style="Title.TLabel").grid(row=0, column=0, sticky="w")
         ttk.Label(
             root,
-            text="Local-only desktop exporter. Pick an area, use a source you are allowed to export from, and create an e-paper tile bundle.",
-            style="Hint.TLabel",
-        ).grid(row=1, column=0, sticky="ew", pady=(4, 12))
+            text="Select an area, preview e-paper map tiles, then export an offline bundle.",
+            style="Shell.TLabel",
+        ).grid(row=0, column=0, sticky="e", padx=(0, 4))
 
-        self.build_source(root).grid(row=2, column=0, sticky="ew", pady=6)
-        self.build_area(root).grid(row=3, column=0, sticky="ew", pady=6)
-        self.build_settings(root).grid(row=4, column=0, sticky="ew", pady=6)
-        self.build_preview(root).grid(row=5, column=0, sticky="nsew", pady=6)
-        self.build_log(root).grid(row=6, column=0, sticky="nsew", pady=6)
-        self.build_actions(root).grid(row=7, column=0, sticky="ew", pady=(8, 0))
+        body = ttk.Frame(root)
+        body.grid(row=1, column=0, sticky="nsew", pady=(14, 0))
+        body.columnconfigure(0, weight=3)
+        body.columnconfigure(1, weight=0)
+        body.rowconfigure(0, weight=1)
+
+        preview_panel = ttk.Frame(body, style="Panel.TFrame", padding=12)
+        preview_panel.grid(row=0, column=0, sticky="nsew", padx=(0, 14))
+        preview_panel.columnconfigure(0, weight=1)
+        preview_panel.rowconfigure(1, weight=1)
+        self.build_preview(preview_panel).grid(row=0, column=0, rowspan=2, sticky="nsew")
+
+        controls = ttk.Frame(body, style="Panel.TFrame", padding=12)
+        controls.grid(row=0, column=1, sticky="nsew")
+        controls.columnconfigure(0, weight=1)
+
+        self.build_actions(controls).grid(row=0, column=0, sticky="ew", pady=(0, 10))
+        self.build_source(controls).grid(row=1, column=0, sticky="ew", pady=(0, 10))
+        self.build_area(controls).grid(row=2, column=0, sticky="ew", pady=(0, 10))
+        self.build_settings(controls).grid(row=3, column=0, sticky="ew", pady=(0, 10))
+        self.log = tk.Text(controls, height=1)
+        self.log.grid_remove()
 
     def build_source(self, parent: ttk.Frame) -> ttk.LabelFrame:
-        frame = ttk.LabelFrame(parent, text="Legal Tile Source", padding=12)
-        frame.columnconfigure(1, weight=1)
-        frame.columnconfigure(3, weight=1)
+        frame = ttk.LabelFrame(parent, text="Map Source", padding=12)
+        frame.columnconfigure(0, weight=1)
 
-        ttk.Label(frame, text="Source preset").grid(row=0, column=0, sticky="w", padx=(0, 8))
+        ttk.Label(frame, text="Source preset").grid(row=0, column=0, sticky="w")
         preset = ttk.Combobox(
             frame,
             textvariable=self.vars["source_preset"],
             values=list(SOURCE_PRESETS),
             state="readonly",
         )
-        preset.grid(row=0, column=1, sticky="ew")
+        preset.grid(row=1, column=0, sticky="ew", pady=(4, 8))
         preset.bind("<<ComboboxSelected>>", lambda _event: self.apply_source_preset())
-        ttk.Button(frame, text="Source Help", command=self.show_source_help).grid(row=0, column=2, sticky="ew", padx=(8, 0))
 
-        ttk.Label(frame, text="Source URL").grid(row=1, column=0, sticky="w", padx=(0, 8), pady=(8, 0))
-        ttk.Entry(frame, textvariable=self.vars["url"]).grid(row=1, column=1, columnspan=2, sticky="ew", pady=(8, 0))
-        ttk.Label(frame, textvariable=self.vars["source_help"], style="Hint.TLabel").grid(
-            row=1,
-            column=3,
-            sticky="w",
-            padx=(10, 0),
-            pady=(8, 0),
-        )
+        ttk.Label(frame, textvariable=self.vars["source_help"], style="Hint.TLabel").grid(row=2, column=0, sticky="ew")
+
+        self.source_url_label = ttk.Label(frame, text="Source URL")
+        self.source_url_entry = ttk.Entry(frame, textvariable=self.vars["url"])
+        self.source_url_label.grid(row=3, column=0, sticky="w", pady=(10, 0))
+        self.source_url_entry.grid(row=4, column=0, sticky="ew", pady=(4, 0))
+
         ttk.Checkbutton(
             frame,
             text="I will keep required map attribution with exported tiles.",
             variable=self.vars["permission"],
-        ).grid(row=2, column=1, columnspan=3, sticky="w", pady=(8, 0))
+        ).grid(row=5, column=0, sticky="w", pady=(8, 0))
         return frame
 
     def build_area(self, parent: ttk.Frame) -> ttk.LabelFrame:
         frame = ttk.LabelFrame(parent, text="Area", padding=12)
-        for column in range(8):
-            frame.columnconfigure(column, weight=1)
+        frame.columnconfigure(1, weight=1)
+        frame.columnconfigure(3, weight=1)
 
-        labels = [
-            ("West", "west"),
-            ("South", "south"),
-            ("East", "east"),
-            ("North", "north"),
-        ]
-        for index, (label, key) in enumerate(labels):
-            ttk.Label(frame, text=label).grid(row=0, column=index * 2, sticky="w")
-            ttk.Entry(frame, textvariable=self.vars[key], width=12).grid(row=0, column=index * 2 + 1, sticky="ew", padx=(4, 10))
+        ttk.Label(frame, text="Center lat").grid(row=0, column=0, sticky="w")
+        ttk.Entry(frame, textvariable=self.vars["center_lat"], width=12).grid(row=0, column=1, sticky="ew", padx=(6, 10))
+        ttk.Label(frame, text="Center lon").grid(row=0, column=2, sticky="w")
+        ttk.Entry(frame, textvariable=self.vars["center_lon"], width=12).grid(row=0, column=3, sticky="ew", padx=(6, 0))
 
-        ttk.Label(frame, text="Center lat").grid(row=1, column=0, sticky="w", pady=(10, 0))
-        ttk.Entry(frame, textvariable=self.vars["center_lat"], width=12).grid(row=1, column=1, sticky="ew", padx=(4, 10), pady=(10, 0))
-        ttk.Label(frame, text="Center lon").grid(row=1, column=2, sticky="w", pady=(10, 0))
-        ttk.Entry(frame, textvariable=self.vars["center_lon"], width=12).grid(row=1, column=3, sticky="ew", padx=(4, 10), pady=(10, 0))
-        ttk.Label(frame, text="Radius km").grid(row=1, column=4, sticky="w", pady=(10, 0))
-        ttk.Entry(frame, textvariable=self.vars["radius_km"], width=12).grid(row=1, column=5, sticky="ew", padx=(4, 10), pady=(10, 0))
+        ttk.Label(frame, text="Radius km").grid(row=1, column=0, sticky="w", pady=(8, 0))
+        ttk.Entry(frame, textvariable=self.vars["radius_km"], width=12).grid(row=1, column=1, sticky="ew", padx=(6, 10), pady=(8, 0))
         ttk.Button(frame, text="Set BBox From Center", command=self.set_bbox_from_center).grid(
             row=1,
-            column=6,
+            column=2,
             columnspan=2,
             sticky="ew",
-            pady=(10, 0),
+            pady=(8, 0),
         )
+
+        ttk.Label(frame, text="BBox").grid(row=2, column=0, sticky="w", pady=(10, 0))
+        bbox_grid = ttk.Frame(frame)
+        bbox_grid.grid(row=3, column=0, columnspan=4, sticky="ew", pady=(4, 0))
+        for column in range(4):
+            bbox_grid.columnconfigure(column, weight=1)
+        for index, (label, key) in enumerate((("W", "west"), ("S", "south"), ("E", "east"), ("N", "north"))):
+            ttk.Label(bbox_grid, text=label).grid(row=0, column=index, sticky="w")
+            ttk.Entry(bbox_grid, textvariable=self.vars[key], width=10).grid(row=1, column=index, sticky="ew", padx=(0 if index == 0 else 4, 4))
         return frame
 
     def build_settings(self, parent: ttk.Frame) -> ttk.LabelFrame:
         frame = ttk.LabelFrame(parent, text="Export Settings", padding=12)
-        for column in range(8):
-            frame.columnconfigure(column, weight=1)
+        frame.columnconfigure(1, weight=1)
+        frame.columnconfigure(3, weight=1)
 
-        fields = [
-            ("Min zoom", "min_zoom", 0),
-            ("Max zoom", "max_zoom", 2),
-            ("Style", "style", 4),
-        ]
-        for label, key, column in fields:
-            ttk.Label(frame, text=label).grid(row=0, column=column, sticky="w")
-            ttk.Entry(frame, textvariable=self.vars[key], width=12).grid(row=0, column=column + 1, sticky="ew", padx=(4, 10))
+        ttk.Label(frame, text="Min zoom").grid(row=0, column=0, sticky="w")
+        ttk.Entry(frame, textvariable=self.vars["min_zoom"], width=8).grid(row=0, column=1, sticky="ew", padx=(6, 10))
+        ttk.Label(frame, text="Max zoom").grid(row=0, column=2, sticky="w")
+        ttk.Entry(frame, textvariable=self.vars["max_zoom"], width=8).grid(row=0, column=3, sticky="ew", padx=(6, 0))
 
-        ttk.Label(frame, text="Mode").grid(row=1, column=0, sticky="w", pady=(10, 0))
+        ttk.Label(frame, text="Mode").grid(row=1, column=0, sticky="w", pady=(8, 0))
         ttk.Combobox(
             frame,
             textvariable=self.vars["mode"],
             values=["mono", "grayscale", "palette", "original"],
             state="readonly",
             width=12,
-        ).grid(row=1, column=1, sticky="ew", padx=(4, 10), pady=(10, 0))
+        ).grid(row=1, column=1, sticky="ew", padx=(6, 10), pady=(8, 0))
 
-        ttk.Label(frame, text="Layout").grid(row=1, column=2, sticky="w", pady=(10, 0))
+        ttk.Label(frame, text="Layout").grid(row=1, column=2, sticky="w", pady=(8, 0))
         ttk.Combobox(
             frame,
             textvariable=self.vars["layout"],
             values=["inkhud-dev", "style-root", "single-map", "meshtastic-sd"],
             state="readonly",
             width=16,
-        ).grid(row=1, column=3, sticky="ew", padx=(4, 10), pady=(10, 0))
+        ).grid(row=1, column=3, sticky="ew", padx=(6, 0), pady=(8, 0))
 
-        ttk.Label(frame, text="Brightness").grid(row=2, column=0, sticky="w", pady=(12, 0))
+        ttk.Label(frame, text="Style").grid(row=2, column=0, sticky="w", pady=(8, 0))
+        ttk.Entry(frame, textvariable=self.vars["style"], width=12).grid(row=2, column=1, columnspan=3, sticky="ew", padx=(6, 0), pady=(8, 0))
+
+        ttk.Label(frame, text="Brightness").grid(row=3, column=0, sticky="w", pady=(10, 0))
         ttk.Scale(frame, from_=0.6, to=1.6, variable=self.vars["brightness"], orient="horizontal").grid(
-            row=2,
-            column=1,
-            columnspan=2,
-            sticky="ew",
-            padx=(4, 10),
-            pady=(12, 0),
-        )
-        ttk.Label(frame, textvariable=self.vars["brightness"]).grid(row=2, column=3, sticky="w", pady=(12, 0))
-
-        ttk.Label(frame, text="Contrast").grid(row=2, column=4, sticky="w", pady=(12, 0))
-        ttk.Scale(frame, from_=0.6, to=3.0, variable=self.vars["contrast"], orient="horizontal").grid(
-            row=2,
-            column=5,
-            columnspan=2,
-            sticky="ew",
-            padx=(4, 10),
-            pady=(12, 0),
-        )
-        ttk.Label(frame, textvariable=self.vars["contrast"]).grid(row=2, column=7, sticky="w", pady=(12, 0))
-
-        ttk.Label(frame, text="Mono threshold").grid(row=3, column=0, sticky="w", pady=(12, 0))
-        ttk.Scale(frame, from_=80, to=230, variable=self.vars["threshold"], orient="horizontal").grid(
             row=3,
             column=1,
             columnspan=2,
             sticky="ew",
-            padx=(4, 10),
-            pady=(12, 0),
+            padx=(6, 10),
+            pady=(10, 0),
         )
-        ttk.Label(frame, textvariable=self.vars["threshold"]).grid(row=3, column=3, sticky="w", pady=(12, 0))
+        ttk.Label(frame, textvariable=self.vars["brightness"]).grid(row=3, column=3, sticky="w", pady=(10, 0))
 
-        ttk.Label(frame, text="Output").grid(row=4, column=0, sticky="w", pady=(12, 0))
-        ttk.Entry(frame, textvariable=self.vars["output"]).grid(row=4, column=1, columnspan=5, sticky="ew", padx=(4, 10), pady=(12, 0))
-        ttk.Button(frame, text="Browse", command=self.choose_output).grid(row=4, column=6, columnspan=2, sticky="ew", pady=(12, 0))
+        ttk.Label(frame, text="Contrast").grid(row=4, column=0, sticky="w", pady=(10, 0))
+        ttk.Scale(frame, from_=0.6, to=3.0, variable=self.vars["contrast"], orient="horizontal").grid(
+            row=4,
+            column=1,
+            columnspan=2,
+            sticky="ew",
+            padx=(6, 10),
+            pady=(10, 0),
+        )
+        ttk.Label(frame, textvariable=self.vars["contrast"]).grid(row=4, column=3, sticky="w", pady=(10, 0))
+
+        ttk.Label(frame, text="Mono threshold").grid(row=5, column=0, sticky="w", pady=(10, 0))
+        ttk.Scale(frame, from_=80, to=230, variable=self.vars["threshold"], orient="horizontal").grid(
+            row=5,
+            column=1,
+            columnspan=2,
+            sticky="ew",
+            padx=(6, 10),
+            pady=(10, 0),
+        )
+        ttk.Label(frame, textvariable=self.vars["threshold"]).grid(row=5, column=3, sticky="w", pady=(10, 0))
+
+        ttk.Label(frame, text="Output").grid(row=6, column=0, sticky="w", pady=(10, 0))
+        ttk.Entry(frame, textvariable=self.vars["output"]).grid(row=7, column=0, columnspan=3, sticky="ew", pady=(4, 0))
+        ttk.Button(frame, text="Browse", command=self.choose_output).grid(row=7, column=3, sticky="ew", padx=(8, 0), pady=(4, 0))
         return frame
 
     def build_log(self, parent: ttk.Frame) -> ttk.LabelFrame:
@@ -280,7 +305,7 @@ class DesktopApp(tk.Tk):
         return frame
 
     def build_preview(self, parent: ttk.Frame) -> ttk.LabelFrame:
-        frame = ttk.LabelFrame(parent, text="Preview", padding=12)
+        frame = ttk.LabelFrame(parent, text="Map Preview", padding=12)
         frame.columnconfigure(0, weight=1)
         frame.rowconfigure(1, weight=1)
 
@@ -288,30 +313,38 @@ class DesktopApp(tk.Tk):
         top.grid(row=0, column=0, sticky="ew")
         top.columnconfigure(0, weight=1)
         ttk.Label(top, textvariable=self.vars["preview_status"], style="Hint.TLabel").grid(row=0, column=0, sticky="w")
-        self.preview_button = ttk.Button(top, text="Refresh Preview", command=self.refresh_preview)
-        self.preview_button.grid(row=0, column=1, padx=(8, 0))
+        ttk.Button(top, text="-", width=3, command=lambda: self.zoom_map(-1)).grid(row=0, column=1, padx=(8, 3))
+        ttk.Button(top, text="+", width=3, command=lambda: self.zoom_map(1)).grid(row=0, column=2, padx=3)
+        ttk.Button(top, text="Use View", command=self.use_map_view).grid(row=0, column=3, padx=3)
+        self.preview_button = ttk.Button(top, text="Refresh", command=self.refresh_preview)
+        self.preview_button.grid(row=0, column=4, padx=(3, 0))
 
-        self.preview_label = tk.Label(
+        self.map_canvas = tk.Canvas(
             frame,
-            text="Preview appears here after a legal tile source is reachable.",
-            bg="#eef2ec",
-            fg="#17211b",
-            anchor="center",
-            relief="solid",
+            background="#dde3dd",
+            highlightthickness=1,
+            highlightbackground="#17211b",
             borderwidth=1,
-            font=("Segoe UI", 10),
         )
-        self.preview_label.grid(row=1, column=0, sticky="nsew", pady=(8, 0))
+        self.map_canvas.grid(row=1, column=0, sticky="nsew", pady=(8, 0))
+        self.map_canvas.create_text(360, 260, text="Loading OpenFreeMap preview...", fill="#17211b", tags=("loading",))
+        self.map_canvas.bind("<ButtonPress-1>", self.start_map_drag)
+        self.map_canvas.bind("<B1-Motion>", self.drag_map)
+        self.map_canvas.bind("<ButtonRelease-1>", self.end_map_drag)
+        self.map_canvas.bind("<MouseWheel>", self.on_mouse_wheel)
+        self.map_canvas.bind("<Configure>", lambda _event: self.schedule_preview())
         return frame
 
     def build_actions(self, parent: ttk.Frame) -> ttk.Frame:
-        frame = ttk.Frame(parent)
-        frame.columnconfigure(0, weight=1)
-        ttk.Label(frame, textvariable=self.vars["status"], style="Hint.TLabel").grid(row=0, column=0, sticky="w")
-        ttk.Button(frame, text="Estimate Tiles", command=self.estimate_tiles).grid(row=0, column=1, padx=6)
+        frame = ttk.Frame(parent, style="Panel.TFrame")
+        for column in range(3):
+            frame.columnconfigure(column, weight=1)
+        ttk.Label(frame, textvariable=self.vars["tile_count"], style="Hint.TLabel").grid(row=0, column=0, columnspan=3, sticky="ew", pady=(0, 6))
+        ttk.Label(frame, textvariable=self.vars["status"], style="Hint.TLabel").grid(row=1, column=0, columnspan=3, sticky="ew", pady=(0, 8))
+        ttk.Button(frame, text="Estimate", command=self.estimate_tiles).grid(row=2, column=0, sticky="ew", padx=(0, 6))
         self.export_button = ttk.Button(frame, text="Export Tiles", style="Accent.TButton", command=self.export_tiles)
-        self.export_button.grid(row=0, column=2, padx=6)
-        ttk.Button(frame, text="Open Output Folder", command=self.open_output_folder).grid(row=0, column=3, padx=6)
+        self.export_button.grid(row=2, column=1, sticky="ew", padx=6)
+        ttk.Button(frame, text="Open Folder", command=self.open_output_folder).grid(row=2, column=2, sticky="ew", padx=(6, 0))
         return frame
 
     def apply_source_preset(self) -> None:
@@ -322,24 +355,11 @@ class DesktopApp(tk.Tk):
             self.vars["url"].set(preset["url"])
         if preset["source"] == "openfreemap-vector":
             self.vars["permission"].set(True)
-
-    def show_source_help(self) -> None:
-        messagebox.showinfo(
-            "Tile source help",
-            "\n".join(
-                [
-                    "This app is local-only, but it still needs map data from a legal source.",
-                    "",
-                    "The default source downloads OpenFreeMap vector tiles and renders them locally into e-paper PNGs.",
-                    "",
-                    "No tile URL is needed for the default OpenFreeMap source.",
-                    "",
-                    "Advanced users can switch to a local TileServer GL raster URL or a custom XYZ PNG URL.",
-                    "",
-                    "Do not use tile.openstreetmap.org for offline exports.",
-                ]
-            ),
-        )
+            self.source_url_label.grid_remove()
+            self.source_url_entry.grid_remove()
+        else:
+            self.source_url_label.grid()
+            self.source_url_entry.grid()
 
     def set_bbox_from_center(self) -> None:
         try:
@@ -356,6 +376,57 @@ class DesktopApp(tk.Tk):
         self.vars["east"].set(f"{bbox.east:.6f}")
         self.vars["north"].set(f"{bbox.north:.6f}")
         self.estimate_tiles()
+        self.map_center_lat = (bbox.south + bbox.north) / 2
+        self.map_center_lon = self.center_lon(bbox)
+        self.schedule_preview()
+
+    def use_map_view(self) -> None:
+        bbox = self.current_map_bbox()
+        self.vars["west"].set(f"{bbox.west:.6f}")
+        self.vars["south"].set(f"{bbox.south:.6f}")
+        self.vars["east"].set(f"{bbox.east:.6f}")
+        self.vars["north"].set(f"{bbox.north:.6f}")
+        self.vars["center_lat"].set(f"{self.map_center_lat:.6f}")
+        self.vars["center_lon"].set(f"{self.map_center_lon:.6f}")
+        self.estimate_tiles()
+        self.schedule_preview()
+
+    def zoom_map(self, delta: int) -> None:
+        self.map_zoom = cli.clamp(self.map_zoom + delta, 2, 14)
+        self.draw_preview_placeholder(f"Zoom {self.map_zoom}. Loading map...")
+        self.schedule_preview(delay_ms=450)
+
+    def start_map_drag(self, event) -> None:
+        self.map_drag_start = (event.x, event.y)
+        self.map_drag_center = (self.map_center_lon, self.map_center_lat)
+
+    def drag_map(self, event) -> None:
+        if not self.map_drag_start or not self.map_drag_center:
+            return
+        start_x, start_y = self.map_drag_start
+        center_lon, center_lat = self.map_drag_center
+        center_px, center_py = self.lon_lat_to_world_pixel(center_lon, center_lat, self.map_zoom)
+        new_lon, new_lat = self.world_pixel_to_lon_lat(center_px - (event.x - start_x), center_py - (event.y - start_y), self.map_zoom)
+        self.map_center_lon = cli.normalize_lon(new_lon)
+        self.map_center_lat = max(min(new_lat, cli.MAX_MERCATOR_LAT), -cli.MAX_MERCATOR_LAT)
+        self.shift_current_preview(event.x - start_x, event.y - start_y)
+
+    def end_map_drag(self, _event) -> None:
+        self.map_drag_start = None
+        self.map_drag_center = None
+        self.schedule_preview(delay_ms=250)
+
+    def on_mouse_wheel(self, event) -> None:
+        self.zoom_map(1 if event.delta > 0 else -1)
+
+    def schedule_preview(self, delay_ms: int = 350) -> None:
+        self.preview_render_id += 1
+        if self.preview_after_id is not None:
+            try:
+                self.after_cancel(self.preview_after_id)
+            except tk.TclError:
+                pass
+        self.preview_after_id = self.after(delay_ms, self.refresh_preview)
 
     def choose_output(self) -> None:
         selected = filedialog.askdirectory(initialdir=str(DEFAULT_OUTPUT_BASE))
@@ -406,7 +477,9 @@ class DesktopApp(tk.Tk):
 
     def refresh_preview(self) -> None:
         if self.preview_thread and self.preview_thread.is_alive():
+            self.schedule_preview(delay_ms=500)
             return
+        self.preview_after_id = None
         try:
             job = self.build_job()
             self.validate_tile_url(job["urlTemplate"])
@@ -415,66 +488,158 @@ class DesktopApp(tk.Tk):
             return
 
         self.preview_button.configure(state="disabled")
-        self.vars["preview_status"].set("Loading preview tiles...")
-        self.preview_thread = threading.Thread(target=self.load_preview, args=(job,), daemon=True)
+        self.preview_render_id += 1
+        render_id = self.preview_render_id
+        self.vars["preview_status"].set(f"Loading map view at zoom {self.map_zoom}...")
+        self.preview_thread = threading.Thread(target=self.load_preview, args=(job, render_id), daemon=True)
         self.preview_thread.start()
 
-    def load_preview(self, job: dict[str, Any]) -> None:
+    def load_preview(self, job: dict[str, Any], render_id: int) -> None:
         try:
             image = self.make_preview_image(job)
-            self.after(0, lambda: self.show_preview_image(image))
+            self.after(0, lambda: self.show_preview_image(image, render_id))
         except Exception as exc:  # noqa: BLE001 - report worker errors in GUI.
             self.after(0, lambda: self.preview_failed(str(exc)))
         finally:
             self.after(0, lambda: self.preview_button.configure(state="normal"))
 
     def make_preview_image(self, job: dict[str, Any]):
-        from PIL import Image
+        from PIL import Image, ImageDraw
 
         bbox = cli.BBox(**job["bbox"])
-        zoom = max(job["zooms"])
-        center_lon = self.center_lon(bbox)
-        center_lat = (bbox.south + bbox.north) / 2
-        center_x, center_y = cli.lonlat_to_tile(center_lon, center_lat, zoom)
-        grid_size = 3
+        zoom = self.map_zoom
         tile_size = 256
+        width = max(self.map_canvas.winfo_width(), 640)
+        height = max(self.map_canvas.winfo_height(), 520)
+        center_world_x, center_world_y = self.lon_lat_to_world_pixel(self.map_center_lon, self.map_center_lat, zoom)
+        left_world = center_world_x - width / 2
+        top_world = center_world_y - height / 2
+        first_x = math.floor(left_world / tile_size)
+        first_y = math.floor(top_world / tile_size)
+        last_x = math.floor((left_world + width) / tile_size)
+        last_y = math.floor((top_world + height) / tile_size)
         n = 2**zoom
-        canvas = Image.new("RGB", (tile_size * grid_size, tile_size * grid_size), "#f7f8f4")
+        canvas = Image.new("RGB", (width, height), "#dfe5df")
 
-        for dx in range(-1, 2):
-            for dy in range(-1, 2):
-                x = cli.clamp(center_x + dx, 0, n - 1)
-                y = cli.clamp(center_y + dy, 0, n - 1)
-                tile_id = cli.Tile(z=zoom, x=x, y=y)
-                if job["source"] == "openfreemap-vector":
-                    tile = self.render_preview_vector_tile(tile_id)
-                else:
-                    url = cli.tile_url(job["urlTemplate"], tile_id)
-                    tile = self.fetch_preview_tile(url)
-                tile = self.convert_preview_tile(tile, job)
-                canvas.paste(tile.convert("RGB"), ((dx + 1) * tile_size, (dy + 1) * tile_size))
+        tile_jobs = []
+        for x in range(first_x, last_x + 1):
+            for y in range(first_y, last_y + 1):
+                if y < 0 or y >= n:
+                    continue
+                tile_id = cli.Tile(z=zoom, x=x % n, y=y)
+                paste_x = round(x * tile_size - left_world)
+                paste_y = round(y * tile_size - top_world)
+                tile_jobs.append((tile_id, paste_x, paste_y))
 
-        canvas.thumbnail((620, 320))
+        def render_tile(tile_job):
+            tile_id, paste_x, paste_y = tile_job
+            if job["source"] == "openfreemap-vector":
+                image = self.render_preview_vector_tile(tile_id)
+            else:
+                url = cli.tile_url(job["urlTemplate"], tile_id)
+                image = self.fetch_preview_tile(url)
+            image = self.convert_preview_tile(image, job)
+            return paste_x, paste_y, image.convert("RGB")
+
+        with ThreadPoolExecutor(max_workers=6) as executor:
+            futures = [executor.submit(render_tile, tile_job) for tile_job in tile_jobs]
+            for future in as_completed(futures):
+                paste_x, paste_y, tile_image = future.result()
+                canvas.paste(tile_image, (paste_x, paste_y))
+
+        self.draw_preview_bbox(canvas, bbox, zoom, left_world, top_world)
         return canvas
+
+    def draw_preview_bbox(self, canvas, bbox: cli.BBox, zoom: int, left_world: float, top_world: float) -> None:
+        from PIL import ImageDraw
+
+        bbox_left_world, bbox_top_world = self.lon_lat_to_world_pixel(bbox.west, bbox.north, zoom)
+        bbox_right_world, bbox_bottom_world = self.lon_lat_to_world_pixel(bbox.east, bbox.south, zoom)
+        left = bbox_left_world - left_world
+        right = bbox_right_world - left_world
+        top = bbox_top_world - top_world
+        bottom = bbox_bottom_world - top_world
+        draw = ImageDraw.Draw(canvas)
+        draw.rectangle(
+            [max(0, left), max(0, top), min(canvas.width - 1, right), min(canvas.height - 1, bottom)],
+            outline="#000000",
+            width=4,
+        )
+
+    def lon_lat_to_world_pixel(self, lon: float, lat: float, z: int) -> tuple[float, float]:
+        lat = max(min(lat, cli.MAX_MERCATOR_LAT), -cli.MAX_MERCATOR_LAT)
+        scale = 256 * (2**z)
+        x = (lon + 180.0) / 360.0 * scale
+        lat_rad = math.radians(lat)
+        y = (1.0 - math.asinh(math.tan(lat_rad)) / math.pi) / 2.0 * scale
+        return x, y
+
+    def world_pixel_to_lon_lat(self, x: float, y: float, z: int) -> tuple[float, float]:
+        scale = 256 * (2**z)
+        lon = (x / scale) * 360.0 - 180.0
+        mercator = math.pi * (1 - 2 * y / scale)
+        lat = math.degrees(math.atan(math.sinh(mercator)))
+        return cli.normalize_lon(lon), lat
+
+    def current_map_bbox(self) -> cli.BBox:
+        width = max(self.map_canvas.winfo_width(), 640)
+        height = max(self.map_canvas.winfo_height(), 520)
+        center_x, center_y = self.lon_lat_to_world_pixel(self.map_center_lon, self.map_center_lat, self.map_zoom)
+        west, north = self.world_pixel_to_lon_lat(center_x - width / 2, center_y - height / 2, self.map_zoom)
+        east, south = self.world_pixel_to_lon_lat(center_x + width / 2, center_y + height / 2, self.map_zoom)
+        return cli.BBox(west=west, south=south, east=east, north=north)
+
+    def draw_preview_placeholder(self, text: str) -> None:
+        self.map_canvas.delete("all")
+        width = max(self.map_canvas.winfo_width(), 640)
+        height = max(self.map_canvas.winfo_height(), 520)
+        self.map_canvas.create_rectangle(0, 0, width, height, fill="#eef2ec", outline="#17211b")
+        self.map_canvas.create_text(width / 2, height / 2, text=text, fill="#17211b", font=("Segoe UI", 11), justify="center")
+
+    def draw_zoom_badge(self) -> None:
+        self.map_canvas.create_oval(10, 10, 44, 44, fill="#ffffff", outline="#17211b")
+        self.map_canvas.create_text(27, 27, text=str(self.map_zoom), fill="#000000", font=("Segoe UI", 12, "bold"))
+
+    def shift_current_preview(self, dx: int, dy: int) -> None:
+        if self.preview_image is None:
+            self.draw_preview_placeholder("Release to render map...")
+            return
+        self.map_canvas.delete("drag-preview")
+        self.map_canvas.create_image(dx, dy, image=self.preview_image, anchor="nw", tags=("drag-preview",))
+        self.draw_zoom_badge()
 
     def render_preview_vector_tile(self, tile: cli.Tile):
         from PIL import Image
+
+        cache_key = ("openfreemap-vector", tile.z, tile.x, tile.y)
+        cached = self.preview_tile_cache.get(cache_key)
+        if cached is not None:
+            return cached.copy()
 
         with tempfile.TemporaryDirectory(prefix="eink-map-preview-") as temp_dir:
             tile_path = Path(temp_dir) / "tile.png"
             cli.render_openfreemap_tile(tile, tile_path, cli.DEFAULT_USER_AGENT, timeout=12, retries=2)
             with Image.open(tile_path) as image:
-                return image.convert("RGBA")
+                rendered = image.convert("RGBA")
+        self.preview_tile_cache[cache_key] = rendered.copy()
+        return rendered
 
     def fetch_preview_tile(self, url: str):
         from PIL import Image
+
+        cache_key = ("xyz", url)
+        cached = self.preview_tile_cache.get(cache_key)
+        if cached is not None:
+            return cached.copy()
 
         request = urllib.request.Request(url, headers={"User-Agent": cli.DEFAULT_USER_AGENT})
         with urllib.request.urlopen(request, timeout=12) as response:
             if response.status != 200:
                 raise RuntimeError(f"HTTP {response.status} for {url}")
             data = response.read()
-        return Image.open(BytesIO(data)).convert("RGBA")
+        image = Image.open(BytesIO(data)).convert("RGBA")
+        self.preview_tile_cache[cache_key] = image.copy()
+        return image
 
     def convert_preview_tile(self, image, job: dict[str, Any]):
         from PIL import Image, ImageEnhance
@@ -492,18 +657,19 @@ class DesktopApp(tk.Tk):
             return image.quantize(colors=256)
         return image
 
-    def show_preview_image(self, image) -> None:
+    def show_preview_image(self, image, render_id: int) -> None:
         from PIL import ImageTk
 
+        if render_id != self.preview_render_id:
+            return
         self.preview_image = ImageTk.PhotoImage(image)
-        self.preview_label.configure(image=self.preview_image, text="")
-        self.vars["preview_status"].set("Preview updated with current e-paper settings.")
+        self.map_canvas.delete("all")
+        self.map_canvas.create_image(0, 0, image=self.preview_image, anchor="nw")
+        self.draw_zoom_badge()
+        self.vars["preview_status"].set("Drag to pan, wheel or +/- to zoom, Use View to set export area.")
 
     def preview_failed(self, error: str) -> None:
-        self.preview_label.configure(
-            image="",
-            text="Preview unavailable.\n\nStart the selected local tile source, then click Refresh Preview.",
-        )
+        self.draw_preview_placeholder("Preview unavailable.\n\nCheck your internet connection, then click Refresh.")
         self.preview_image = None
         self.vars["preview_status"].set(f"Preview failed: {error}")
 
