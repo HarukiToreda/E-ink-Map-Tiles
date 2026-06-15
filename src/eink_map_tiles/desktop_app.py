@@ -7,8 +7,10 @@ import queue
 import tempfile
 import threading
 import tkinter as tk
+import urllib.request
 from contextlib import redirect_stdout
 from datetime import datetime
+from io import BytesIO
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 from typing import Any
@@ -18,6 +20,20 @@ from . import cli
 
 DEFAULT_OUTPUT_BASE = Path.home() / "Downloads" / "EinkMapTiles"
 DEFAULT_ELEMENTS = ["land", "water", "roads", "highways", "boundaries", "labels"]
+SOURCE_PRESETS = {
+    "Local TileServer GL - basic": {
+        "url": "http://127.0.0.1:8080/styles/basic/{z}/{x}/{y}.png",
+        "help": "Default local renderer URL. Start TileServer GL with a legal .mbtiles file, then preview/export from here.",
+    },
+    "Local TileServer GL - osm-bright": {
+        "url": "http://127.0.0.1:8080/styles/osm-bright/{z}/{x}/{y}.png",
+        "help": "Common TileServer GL style name when the source provides osm-bright.",
+    },
+    "Custom XYZ PNG URL": {
+        "url": "",
+        "help": "Use only a local/self-hosted source or provider URL that explicitly allows offline export.",
+    },
+}
 
 
 class QueueWriter(io.TextIOBase):
@@ -37,22 +53,28 @@ class DesktopApp(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
         self.title("E-ink Map Tiles")
-        self.geometry("980x760")
-        self.minsize(860, 640)
+        self.geometry("1080x900")
+        self.minsize(920, 720)
 
         self.messages: queue.Queue[str] = queue.Queue()
         self.export_thread: threading.Thread | None = None
+        self.preview_thread: threading.Thread | None = None
         self.last_output: Path | None = None
+        self.preview_image: tk.PhotoImage | None = None
 
         self.vars = self.make_vars()
         self.configure_styles()
         self.build_ui()
+        self.apply_source_preset()
+        self.estimate_tiles()
         self.poll_messages()
 
     def make_vars(self) -> dict[str, tk.Variable]:
         timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         return {
-            "url": tk.StringVar(),
+            "source_preset": tk.StringVar(value="Local TileServer GL - basic"),
+            "source_help": tk.StringVar(value=SOURCE_PRESETS["Local TileServer GL - basic"]["help"]),
+            "url": tk.StringVar(value=SOURCE_PRESETS["Local TileServer GL - basic"]["url"]),
             "permission": tk.BooleanVar(value=False),
             "west": tk.StringVar(value="-122.55"),
             "south": tk.StringVar(value="47.45"),
@@ -71,6 +93,7 @@ class DesktopApp(tk.Tk):
             "threshold": tk.IntVar(value=201),
             "output": tk.StringVar(value=str(DEFAULT_OUTPUT_BASE / f"osm-eink-{timestamp}")),
             "tile_count": tk.StringVar(value="Estimate: not calculated"),
+            "preview_status": tk.StringVar(value="Start your local tile source, then click Refresh Preview."),
             "status": tk.StringVar(value="Ready"),
         }
 
@@ -92,6 +115,7 @@ class DesktopApp(tk.Tk):
         root.grid(row=0, column=0, sticky="nsew")
         root.columnconfigure(0, weight=1)
         root.rowconfigure(5, weight=1)
+        root.rowconfigure(6, weight=1)
 
         ttk.Label(root, text="E-ink Map Tiles", style="Title.TLabel").grid(row=0, column=0, sticky="w")
         ttk.Label(
@@ -103,26 +127,40 @@ class DesktopApp(tk.Tk):
         self.build_source(root).grid(row=2, column=0, sticky="ew", pady=6)
         self.build_area(root).grid(row=3, column=0, sticky="ew", pady=6)
         self.build_settings(root).grid(row=4, column=0, sticky="ew", pady=6)
-        self.build_log(root).grid(row=5, column=0, sticky="nsew", pady=6)
-        self.build_actions(root).grid(row=6, column=0, sticky="ew", pady=(8, 0))
+        self.build_preview(root).grid(row=5, column=0, sticky="nsew", pady=6)
+        self.build_log(root).grid(row=6, column=0, sticky="nsew", pady=6)
+        self.build_actions(root).grid(row=7, column=0, sticky="ew", pady=(8, 0))
 
     def build_source(self, parent: ttk.Frame) -> ttk.LabelFrame:
         frame = ttk.LabelFrame(parent, text="Legal Tile Source", padding=12)
         frame.columnconfigure(1, weight=1)
+        frame.columnconfigure(3, weight=1)
 
-        ttk.Label(frame, text="XYZ PNG URL").grid(row=0, column=0, sticky="w", padx=(0, 8))
-        ttk.Entry(frame, textvariable=self.vars["url"]).grid(row=0, column=1, sticky="ew")
-        ttk.Label(frame, text="Example: http://127.0.0.1:8080/styles/basic/{z}/{x}/{y}.png", style="Hint.TLabel").grid(
+        ttk.Label(frame, text="Source preset").grid(row=0, column=0, sticky="w", padx=(0, 8))
+        preset = ttk.Combobox(
+            frame,
+            textvariable=self.vars["source_preset"],
+            values=list(SOURCE_PRESETS),
+            state="readonly",
+        )
+        preset.grid(row=0, column=1, sticky="ew")
+        preset.bind("<<ComboboxSelected>>", lambda _event: self.apply_source_preset())
+        ttk.Button(frame, text="Source Help", command=self.show_source_help).grid(row=0, column=2, sticky="ew", padx=(8, 0))
+
+        ttk.Label(frame, text="XYZ PNG URL").grid(row=1, column=0, sticky="w", padx=(0, 8), pady=(8, 0))
+        ttk.Entry(frame, textvariable=self.vars["url"]).grid(row=1, column=1, columnspan=2, sticky="ew", pady=(8, 0))
+        ttk.Label(frame, textvariable=self.vars["source_help"], style="Hint.TLabel").grid(
             row=1,
-            column=1,
+            column=3,
             sticky="w",
-            pady=(4, 0),
+            padx=(10, 0),
+            pady=(8, 0),
         )
         ttk.Checkbutton(
             frame,
             text="I have permission to export offline tiles from this source.",
             variable=self.vars["permission"],
-        ).grid(row=2, column=1, sticky="w", pady=(8, 0))
+        ).grid(row=2, column=1, columnspan=3, sticky="w", pady=(8, 0))
         return frame
 
     def build_area(self, parent: ttk.Frame) -> ttk.LabelFrame:
@@ -237,6 +275,31 @@ class DesktopApp(tk.Tk):
         self.log.configure(yscrollcommand=scroll.set)
         return frame
 
+    def build_preview(self, parent: ttk.Frame) -> ttk.LabelFrame:
+        frame = ttk.LabelFrame(parent, text="Preview", padding=12)
+        frame.columnconfigure(0, weight=1)
+        frame.rowconfigure(1, weight=1)
+
+        top = ttk.Frame(frame)
+        top.grid(row=0, column=0, sticky="ew")
+        top.columnconfigure(0, weight=1)
+        ttk.Label(top, textvariable=self.vars["preview_status"], style="Hint.TLabel").grid(row=0, column=0, sticky="w")
+        self.preview_button = ttk.Button(top, text="Refresh Preview", command=self.refresh_preview)
+        self.preview_button.grid(row=0, column=1, padx=(8, 0))
+
+        self.preview_label = tk.Label(
+            frame,
+            text="Preview appears here after a legal tile source is reachable.",
+            bg="#eef2ec",
+            fg="#17211b",
+            anchor="center",
+            relief="solid",
+            borderwidth=1,
+            font=("Segoe UI", 10),
+        )
+        self.preview_label.grid(row=1, column=0, sticky="nsew", pady=(8, 0))
+        return frame
+
     def build_actions(self, parent: ttk.Frame) -> ttk.Frame:
         frame = ttk.Frame(parent)
         frame.columnconfigure(0, weight=1)
@@ -246,6 +309,31 @@ class DesktopApp(tk.Tk):
         self.export_button.grid(row=0, column=2, padx=6)
         ttk.Button(frame, text="Open Output Folder", command=self.open_output_folder).grid(row=0, column=3, padx=6)
         return frame
+
+    def apply_source_preset(self) -> None:
+        preset = SOURCE_PRESETS.get(str(self.vars["source_preset"].get()), SOURCE_PRESETS["Custom XYZ PNG URL"])
+        self.vars["source_help"].set(preset["help"])
+        if preset["url"]:
+            self.vars["url"].set(preset["url"])
+
+    def show_source_help(self) -> None:
+        messagebox.showinfo(
+            "Tile source help",
+            "\n".join(
+                [
+                    "This app is local-only, but it still needs map data from a legal source.",
+                    "",
+                    "The default expects TileServer GL running locally at port 8080 with a legal .mbtiles file.",
+                    "",
+                    "A normal source URL looks like:",
+                    "http://127.0.0.1:8080/styles/basic/{z}/{x}/{y}.png",
+                    "",
+                    "Do not use tile.openstreetmap.org for offline exports. Use a local renderer, your own server, or a provider that explicitly allows offline tile bundles.",
+                    "",
+                    "Next planned improvement: choose a local .pmtiles/.mbtiles file directly.",
+                ]
+            ),
+        )
 
     def set_bbox_from_center(self) -> None:
         try:
@@ -309,6 +397,107 @@ class DesktopApp(tk.Tk):
         self.vars["tile_count"].set(f"Estimate: {len(tiles):,} tiles across zooms {job['zooms'][0]}-{job['zooms'][-1]}")
         self.vars["status"].set("Estimate updated")
 
+    def refresh_preview(self) -> None:
+        if self.preview_thread and self.preview_thread.is_alive():
+            return
+        try:
+            job = self.build_job()
+            self.validate_tile_url(job["urlTemplate"])
+        except Exception as exc:  # noqa: BLE001 - show validation errors in GUI.
+            messagebox.showerror("Cannot preview", str(exc))
+            return
+
+        self.preview_button.configure(state="disabled")
+        self.vars["preview_status"].set("Loading preview tiles...")
+        self.preview_thread = threading.Thread(target=self.load_preview, args=(job,), daemon=True)
+        self.preview_thread.start()
+
+    def load_preview(self, job: dict[str, Any]) -> None:
+        try:
+            image = self.make_preview_image(job)
+            self.after(0, lambda: self.show_preview_image(image))
+        except Exception as exc:  # noqa: BLE001 - report worker errors in GUI.
+            self.after(0, lambda: self.preview_failed(str(exc)))
+        finally:
+            self.after(0, lambda: self.preview_button.configure(state="normal"))
+
+    def make_preview_image(self, job: dict[str, Any]):
+        from PIL import Image
+
+        bbox = cli.BBox(**job["bbox"])
+        zoom = max(job["zooms"])
+        center_lon = self.center_lon(bbox)
+        center_lat = (bbox.south + bbox.north) / 2
+        center_x, center_y = cli.lonlat_to_tile(center_lon, center_lat, zoom)
+        grid_size = 3
+        tile_size = 256
+        n = 2**zoom
+        canvas = Image.new("RGB", (tile_size * grid_size, tile_size * grid_size), "#f7f8f4")
+
+        for dx in range(-1, 2):
+            for dy in range(-1, 2):
+                x = cli.clamp(center_x + dx, 0, n - 1)
+                y = cli.clamp(center_y + dy, 0, n - 1)
+                url = cli.tile_url(job["urlTemplate"], cli.Tile(z=zoom, x=x, y=y))
+                tile = self.fetch_preview_tile(url)
+                tile = self.convert_preview_tile(tile, job)
+                canvas.paste(tile.convert("RGB"), ((dx + 1) * tile_size, (dy + 1) * tile_size))
+
+        canvas.thumbnail((620, 320))
+        return canvas
+
+    def fetch_preview_tile(self, url: str):
+        from PIL import Image
+
+        request = urllib.request.Request(url, headers={"User-Agent": cli.DEFAULT_USER_AGENT})
+        with urllib.request.urlopen(request, timeout=12) as response:
+            if response.status != 200:
+                raise RuntimeError(f"HTTP {response.status} for {url}")
+            data = response.read()
+        return Image.open(BytesIO(data)).convert("RGBA")
+
+    def convert_preview_tile(self, image, job: dict[str, Any]):
+        from PIL import Image, ImageEnhance
+
+        background = Image.new("RGBA", image.size, (255, 255, 255, 255))
+        image = Image.alpha_composite(background, image).convert("RGB")
+        image = ImageEnhance.Brightness(image).enhance(float(job["brightness"]))
+        image = ImageEnhance.Contrast(image).enhance(float(job["contrast"]))
+        mode = job["mode"]
+        if mode == "mono":
+            return image.convert("L").point(lambda pixel: 255 if pixel >= int(job["threshold"]) else 0, mode="1")
+        if mode == "grayscale":
+            return image.convert("L")
+        if mode == "palette":
+            return image.quantize(colors=256)
+        return image
+
+    def show_preview_image(self, image) -> None:
+        from PIL import ImageTk
+
+        self.preview_image = ImageTk.PhotoImage(image)
+        self.preview_label.configure(image=self.preview_image, text="")
+        self.vars["preview_status"].set("Preview updated with current e-paper settings.")
+
+    def preview_failed(self, error: str) -> None:
+        self.preview_label.configure(
+            image="",
+            text="Preview unavailable.\n\nStart the selected local tile source, then click Refresh Preview.",
+        )
+        self.preview_image = None
+        self.vars["preview_status"].set(f"Preview failed: {error}")
+
+    def validate_tile_url(self, url_template: str) -> None:
+        if not url_template:
+            raise ValueError("Choose a source preset or enter an XYZ PNG tile URL.")
+        if "{z}" not in url_template or "{x}" not in url_template or "{y}" not in url_template:
+            raise ValueError("Tile URL must include {z}, {x}, and {y}.")
+
+    def center_lon(self, bbox: cli.BBox) -> float:
+        if bbox.west <= bbox.east:
+            return (bbox.west + bbox.east) / 2
+        return cli.normalize_lon((bbox.west + bbox.east + 360) / 2)
+
     def export_tiles(self) -> None:
         if self.export_thread and self.export_thread.is_alive():
             return
@@ -328,11 +517,7 @@ class DesktopApp(tk.Tk):
         self.export_thread.start()
 
     def validate_export(self, job: dict[str, Any]) -> None:
-        url_template = job["urlTemplate"]
-        if not url_template:
-            raise ValueError("Add a legal XYZ PNG tile URL before exporting.")
-        if "{z}" not in url_template or "{x}" not in url_template or "{y}" not in url_template:
-            raise ValueError("Tile URL must include {z}, {x}, and {y}.")
+        self.validate_tile_url(job["urlTemplate"])
         if not bool(self.vars["permission"].get()):
             raise ValueError("Confirm that you have permission to export offline tiles from this source.")
 

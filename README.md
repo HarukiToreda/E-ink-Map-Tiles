@@ -16,11 +16,21 @@ The app is a native desktop window. It does not open a browser, does not use Git
 
 Basic flow:
 
-1. Enter or calculate an area.
-2. Choose zoom levels and e-paper settings.
-3. Enter an XYZ PNG tile source you are allowed to export from.
-4. Check the permission box.
-5. Click **Export Tiles**.
+1. Start your legal/local tile source.
+2. Run `EinkMapTiles.exe`.
+3. Enter or calculate an area.
+4. Choose zoom levels and e-paper settings.
+5. Click **Refresh Preview** to see a 3x3 e-paper preview from the selected source.
+6. Check the permission box.
+7. Click **Export Tiles**.
+
+The default source field is prefilled for a common local TileServer GL setup:
+
+```text
+http://127.0.0.1:8080/styles/basic/{z}/{x}/{y}.png
+```
+
+That URL only works after you start a local renderer with map data you are allowed to use. The app includes source presets and a **Source Help** button so users do not have to guess the URL format.
 
 Output is saved under:
 
