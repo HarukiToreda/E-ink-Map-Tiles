@@ -15,8 +15,10 @@ from pathlib import Path
 
 
 DEFAULT_URL_TEMPLATE = None
+OPENFREEMAP_VECTOR_TEMPLATE = "https://tiles.openfreemap.org/planet/latest/{z}/{x}/{y}.pbf"
 DEFAULT_USER_AGENT = "eink-map-tiles/0.1 (+https://github.com/HarukiToreda/E-ink-Map-Tiles)"
 MAX_MERCATOR_LAT = 85.05112878
+VECTOR_EXTENT = 4096
 MAP_ELEMENTS = ("land", "water", "roads", "highways", "paths", "buildings", "boundaries", "labels", "pois", "transit")
 DEFAULT_ATTRIBUTION = {
     "map_data": "\u00a9 OpenStreetMap contributors",
@@ -165,9 +167,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--zooms", type=parse_zooms, help="Zooms like 6-10 or 6,8,12")
     parser.add_argument("--style", default="osm", help="Style folder name")
     parser.add_argument(
+        "--source",
+        choices=["xyz", "openfreemap-vector"],
+        default="xyz",
+        help="Tile source type. openfreemap-vector downloads open vector tiles and renders them locally.",
+    )
+    parser.add_argument(
         "--url-template",
         default=DEFAULT_URL_TEMPLATE,
-        help="XYZ URL with {z}, {x}, {y}. Prefer a local/self-hosted renderer for bulk downloads.",
+        help="XYZ URL with {z}, {x}, {y}. Required only for --source xyz.",
     )
     parser.add_argument("--output", type=Path, default=Path("build/inkhud-tiles"), help="Output root folder")
     parser.add_argument(
@@ -230,6 +238,7 @@ def apply_job_file(args: argparse.Namespace) -> None:
         raise SystemExit("Job file must include zooms")
 
     args.style = job.get("style") or args.style
+    args.source = job.get("source") or args.source
     args.mode = job.get("mode") or args.mode
     args.brightness = float(job.get("brightness", args.brightness))
     args.contrast = float(job.get("contrast", args.contrast))
@@ -284,6 +293,159 @@ def fetch_tile(url: str, destination: Path, user_agent: str, timeout: float, ret
             if attempt < retries:
                 time.sleep(min(2**attempt, 10))
     raise RuntimeError(f"Failed to fetch {url}: {last_error}")
+
+
+def fetch_bytes(url: str, user_agent: str, timeout: float, retries: int) -> bytes:
+    last_error: Exception | None = None
+    for attempt in range(1, retries + 1):
+        try:
+            request = urllib.request.Request(url, headers={"User-Agent": user_agent})
+            with urllib.request.urlopen(request, timeout=timeout) as response:
+                if response.status != 200:
+                    raise RuntimeError(f"HTTP {response.status}")
+                return response.read()
+        except (OSError, urllib.error.URLError, RuntimeError) as exc:
+            last_error = exc
+            if attempt < retries:
+                time.sleep(min(2**attempt, 10))
+    raise RuntimeError(f"Failed to fetch {url}: {last_error}")
+
+
+def render_openfreemap_tile(tile: Tile, destination: Path, user_agent: str, timeout: float, retries: int) -> None:
+    from mapbox_vector_tile import decode
+    from PIL import Image, ImageDraw, ImageFont
+
+    raw = fetch_bytes(tile_url(OPENFREEMAP_VECTOR_TEMPLATE, tile), user_agent, timeout, retries)
+    data = decode(raw, default_options={"y_coord_down": True})
+    image = Image.new("RGB", (256, 256), "#f7f8f4")
+    draw = ImageDraw.Draw(image)
+
+    draw_polygon_layer(draw, data, "landcover", "#eceee9", "#d5ddd2")
+    draw_polygon_layer(draw, data, "landuse", "#e9ebe5", "#d5ddd2")
+    draw_polygon_layer(draw, data, "park", "#e1e6de", "#cbd6cc")
+    draw_polygon_layer(draw, data, "water", "#ffffff", "#9aa5a0")
+    draw_line_layer(draw, data, "waterway", "#707b76", width=1)
+    draw_polygon_layer(draw, data, "building", "#d2d7d1", "#8d9891")
+    draw_line_layer(draw, data, "boundary", "#929c96", width=1)
+    draw_transportation(draw, data, tile.z)
+    draw_labels(draw, data, tile.z, ImageFont.load_default())
+
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    image.save(destination, format="PNG", optimize=True)
+
+
+def draw_polygon_layer(draw, data: dict, layer_name: str, fill: str, outline: str) -> None:
+    for feature in data.get(layer_name, {}).get("features", []):
+        geometry = feature.get("geometry", {})
+        geometry_type = geometry.get("type")
+        coordinates = geometry.get("coordinates", [])
+        if geometry_type == "Polygon":
+            draw_polygon(draw, coordinates, fill, outline)
+        elif geometry_type == "MultiPolygon":
+            for polygon in coordinates:
+                draw_polygon(draw, polygon, fill, outline)
+
+
+def draw_polygon(draw, rings: list, fill: str, outline: str) -> None:
+    if not rings:
+        return
+    outer = [scale_point(point) for point in rings[0]]
+    if len(outer) >= 3:
+        draw.polygon(outer, fill=fill, outline=outline)
+
+
+def draw_line_layer(draw, data: dict, layer_name: str, color: str, width: int = 1) -> None:
+    for feature in data.get(layer_name, {}).get("features", []):
+        draw_geometry_lines(draw, feature.get("geometry", {}), color, width)
+
+
+def draw_transportation(draw, data: dict, z: int) -> None:
+    class_styles = {
+        "motorway": ("#111111", 3 if z >= 10 else 2),
+        "trunk": ("#151515", 3 if z >= 10 else 2),
+        "primary": ("#202020", 2),
+        "secondary": ("#303030", 2),
+        "tertiary": ("#404040", 1),
+        "minor": ("#555555", 1),
+        "service": ("#6a6a6a", 1),
+        "track": ("#777777", 1),
+        "path": ("#777777", 1),
+        "rail": ("#333333", 1),
+    }
+    for feature in data.get("transportation", {}).get("features", []):
+        properties = feature.get("properties", {})
+        road_class = properties.get("class", "")
+        color, width = class_styles.get(road_class, ("#555555", 1))
+        draw_geometry_lines(draw, feature.get("geometry", {}), color, width)
+
+
+def draw_geometry_lines(draw, geometry: dict, color: str, width: int) -> None:
+    geometry_type = geometry.get("type")
+    coordinates = geometry.get("coordinates", [])
+    if geometry_type == "LineString":
+        draw_line(draw, coordinates, color, width)
+    elif geometry_type == "MultiLineString":
+        for line in coordinates:
+            draw_line(draw, line, color, width)
+    elif geometry_type == "Polygon":
+        for ring in coordinates:
+            draw_line(draw, ring, color, width)
+    elif geometry_type == "MultiPolygon":
+        for polygon in coordinates:
+            for ring in polygon:
+                draw_line(draw, ring, color, width)
+
+
+def draw_line(draw, points: list, color: str, width: int) -> None:
+    scaled = [scale_point(point) for point in points]
+    if len(scaled) >= 2:
+        draw.line(scaled, fill=color, width=width, joint="curve")
+
+
+def draw_labels(draw, data: dict, z: int, font) -> None:
+    if z < 6:
+        return
+    max_labels = 12 if z < 10 else 24
+    labels_drawn = 0
+    for layer_name in ("place", "water_name"):
+        for feature in data.get(layer_name, {}).get("features", []):
+            if labels_drawn >= max_labels:
+                return
+            geometry = feature.get("geometry", {})
+            point = representative_point(geometry)
+            if not point:
+                continue
+            name = label_text(feature.get("properties", {}))
+            if not name:
+                continue
+            x, y = scale_point(point)
+            draw.text((x + 1, y + 1), name, fill="#ffffff", font=font)
+            draw.text((x, y), name, fill="#111111", font=font)
+            labels_drawn += 1
+
+
+def representative_point(geometry: dict) -> list[float] | None:
+    geometry_type = geometry.get("type")
+    coordinates = geometry.get("coordinates", [])
+    if geometry_type == "Point":
+        return coordinates
+    if geometry_type == "LineString" and coordinates:
+        return coordinates[len(coordinates) // 2]
+    if geometry_type == "MultiLineString" and coordinates and coordinates[0]:
+        line = coordinates[0]
+        return line[len(line) // 2]
+    return None
+
+
+def label_text(properties: dict) -> str:
+    text = properties.get("name:en") or properties.get("name_int") or properties.get("name")
+    return str(text)[:28] if text else ""
+
+
+def scale_point(point: list[float] | tuple[float, float]) -> tuple[int, int]:
+    x = int(round(float(point[0]) / VECTOR_EXTENT * 256))
+    y = int(round(float(point[1]) / VECTOR_EXTENT * 256))
+    return x, y
 
 
 def optimize_tile(
@@ -345,6 +507,7 @@ def write_manifest(output_root: Path, args: argparse.Namespace, bbox: BBox, tile
         },
         "zooms": args.zooms,
         "tile_count": len(tiles),
+        "source": args.source,
         "url_template": args.url_template,
         "mode": args.mode,
         "colors": args.colors if args.mode == "palette" else None,
@@ -379,8 +542,8 @@ def run(args: argparse.Namespace) -> int:
     if args.dry_run:
         return 0
 
-    if not args.url_template:
-        raise SystemExit("--url-template is required for downloads. Use a local/self-hosted tile renderer when creating bundles.")
+    if args.source == "xyz" and not args.url_template:
+        raise SystemExit("--url-template is required for --source xyz.")
     if args.colors < 2 or args.colors > 256:
         raise SystemExit("--colors must be between 2 and 256")
     if args.threshold < 0 or args.threshold > 255:
@@ -397,7 +560,10 @@ def run(args: argparse.Namespace) -> int:
 
         with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as temp_file:
             temp_path = Path(temp_file.name)
-        fetch_tile(tile_url(args.url_template, tile), temp_path, args.user_agent, args.timeout, args.retries)
+        if args.source == "openfreemap-vector":
+            render_openfreemap_tile(tile, temp_path, args.user_agent, args.timeout, args.retries)
+        else:
+            fetch_tile(tile_url(args.url_template, tile), temp_path, args.user_agent, args.timeout, args.retries)
         optimize_tile(temp_path, destination, args.mode, args.colors, args.brightness, args.contrast, args.threshold)
         completed += 1
         print(f"[{completed}/{len(tiles)}] {destination}")

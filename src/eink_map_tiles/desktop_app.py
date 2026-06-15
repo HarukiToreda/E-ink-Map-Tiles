@@ -21,15 +21,18 @@ from . import cli
 DEFAULT_OUTPUT_BASE = Path.home() / "Downloads" / "EinkMapTiles"
 DEFAULT_ELEMENTS = ["land", "water", "roads", "highways", "boundaries", "labels"]
 SOURCE_PRESETS = {
-    "Local TileServer GL - basic": {
-        "url": "http://127.0.0.1:8080/styles/basic/{z}/{x}/{y}.png",
-        "help": "Default local renderer URL. Start TileServer GL with a legal .mbtiles file, then preview/export from here.",
+    "OpenFreeMap open vector tiles": {
+        "source": "openfreemap-vector",
+        "url": cli.OPENFREEMAP_VECTOR_TEMPLATE,
+        "help": "Default. Downloads OpenFreeMap vector tiles for the selected area and renders e-paper PNGs locally.",
     },
-    "Local TileServer GL - osm-bright": {
-        "url": "http://127.0.0.1:8080/styles/osm-bright/{z}/{x}/{y}.png",
-        "help": "Common TileServer GL style name when the source provides osm-bright.",
+    "Local TileServer GL raster": {
+        "source": "xyz",
+        "url": "http://127.0.0.1:8080/styles/basic/{z}/{x}/{y}.png",
+        "help": "Advanced. Use when you are running TileServer GL locally with a legal .mbtiles file.",
     },
     "Custom XYZ PNG URL": {
+        "source": "xyz",
         "url": "",
         "help": "Use only a local/self-hosted source or provider URL that explicitly allows offline export.",
     },
@@ -72,10 +75,11 @@ class DesktopApp(tk.Tk):
     def make_vars(self) -> dict[str, tk.Variable]:
         timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         return {
-            "source_preset": tk.StringVar(value="Local TileServer GL - basic"),
-            "source_help": tk.StringVar(value=SOURCE_PRESETS["Local TileServer GL - basic"]["help"]),
-            "url": tk.StringVar(value=SOURCE_PRESETS["Local TileServer GL - basic"]["url"]),
-            "permission": tk.BooleanVar(value=False),
+            "source_preset": tk.StringVar(value="OpenFreeMap open vector tiles"),
+            "source": tk.StringVar(value="openfreemap-vector"),
+            "source_help": tk.StringVar(value=SOURCE_PRESETS["OpenFreeMap open vector tiles"]["help"]),
+            "url": tk.StringVar(value=SOURCE_PRESETS["OpenFreeMap open vector tiles"]["url"]),
+            "permission": tk.BooleanVar(value=True),
             "west": tk.StringVar(value="-122.55"),
             "south": tk.StringVar(value="47.45"),
             "east": tk.StringVar(value="-122.15"),
@@ -93,7 +97,7 @@ class DesktopApp(tk.Tk):
             "threshold": tk.IntVar(value=201),
             "output": tk.StringVar(value=str(DEFAULT_OUTPUT_BASE / f"osm-eink-{timestamp}")),
             "tile_count": tk.StringVar(value="Estimate: not calculated"),
-            "preview_status": tk.StringVar(value="Start your local tile source, then click Refresh Preview."),
+            "preview_status": tk.StringVar(value="Click Refresh Preview to download a small OpenFreeMap sample."),
             "status": tk.StringVar(value="Ready"),
         }
 
@@ -147,7 +151,7 @@ class DesktopApp(tk.Tk):
         preset.bind("<<ComboboxSelected>>", lambda _event: self.apply_source_preset())
         ttk.Button(frame, text="Source Help", command=self.show_source_help).grid(row=0, column=2, sticky="ew", padx=(8, 0))
 
-        ttk.Label(frame, text="XYZ PNG URL").grid(row=1, column=0, sticky="w", padx=(0, 8), pady=(8, 0))
+        ttk.Label(frame, text="Source URL").grid(row=1, column=0, sticky="w", padx=(0, 8), pady=(8, 0))
         ttk.Entry(frame, textvariable=self.vars["url"]).grid(row=1, column=1, columnspan=2, sticky="ew", pady=(8, 0))
         ttk.Label(frame, textvariable=self.vars["source_help"], style="Hint.TLabel").grid(
             row=1,
@@ -158,7 +162,7 @@ class DesktopApp(tk.Tk):
         )
         ttk.Checkbutton(
             frame,
-            text="I have permission to export offline tiles from this source.",
+            text="I will keep required map attribution with exported tiles.",
             variable=self.vars["permission"],
         ).grid(row=2, column=1, columnspan=3, sticky="w", pady=(8, 0))
         return frame
@@ -312,9 +316,12 @@ class DesktopApp(tk.Tk):
 
     def apply_source_preset(self) -> None:
         preset = SOURCE_PRESETS.get(str(self.vars["source_preset"].get()), SOURCE_PRESETS["Custom XYZ PNG URL"])
+        self.vars["source"].set(preset["source"])
         self.vars["source_help"].set(preset["help"])
         if preset["url"]:
             self.vars["url"].set(preset["url"])
+        if preset["source"] == "openfreemap-vector":
+            self.vars["permission"].set(True)
 
     def show_source_help(self) -> None:
         messagebox.showinfo(
@@ -323,14 +330,13 @@ class DesktopApp(tk.Tk):
                 [
                     "This app is local-only, but it still needs map data from a legal source.",
                     "",
-                    "The default expects TileServer GL running locally at port 8080 with a legal .mbtiles file.",
+                    "The default source downloads OpenFreeMap vector tiles and renders them locally into e-paper PNGs.",
                     "",
-                    "A normal source URL looks like:",
-                    "http://127.0.0.1:8080/styles/basic/{z}/{x}/{y}.png",
+                    "No tile URL is needed for the default OpenFreeMap source.",
                     "",
-                    "Do not use tile.openstreetmap.org for offline exports. Use a local renderer, your own server, or a provider that explicitly allows offline tile bundles.",
+                    "Advanced users can switch to a local TileServer GL raster URL or a custom XYZ PNG URL.",
                     "",
-                    "Next planned improvement: choose a local .pmtiles/.mbtiles file directly.",
+                    "Do not use tile.openstreetmap.org for offline exports.",
                 ]
             ),
         )
@@ -373,6 +379,7 @@ class DesktopApp(tk.Tk):
             "bbox": {"west": bbox.west, "south": bbox.south, "east": bbox.east, "north": bbox.north},
             "zooms": zooms,
             "style": self.vars["style"].get().strip() or "osm-eink",
+            "source": self.vars["source"].get(),
             "mode": self.vars["mode"].get(),
             "brightness": float(self.vars["brightness"].get()),
             "contrast": float(self.vars["contrast"].get()),
@@ -438,13 +445,26 @@ class DesktopApp(tk.Tk):
             for dy in range(-1, 2):
                 x = cli.clamp(center_x + dx, 0, n - 1)
                 y = cli.clamp(center_y + dy, 0, n - 1)
-                url = cli.tile_url(job["urlTemplate"], cli.Tile(z=zoom, x=x, y=y))
-                tile = self.fetch_preview_tile(url)
+                tile_id = cli.Tile(z=zoom, x=x, y=y)
+                if job["source"] == "openfreemap-vector":
+                    tile = self.render_preview_vector_tile(tile_id)
+                else:
+                    url = cli.tile_url(job["urlTemplate"], tile_id)
+                    tile = self.fetch_preview_tile(url)
                 tile = self.convert_preview_tile(tile, job)
                 canvas.paste(tile.convert("RGB"), ((dx + 1) * tile_size, (dy + 1) * tile_size))
 
         canvas.thumbnail((620, 320))
         return canvas
+
+    def render_preview_vector_tile(self, tile: cli.Tile):
+        from PIL import Image
+
+        with tempfile.TemporaryDirectory(prefix="eink-map-preview-") as temp_dir:
+            tile_path = Path(temp_dir) / "tile.png"
+            cli.render_openfreemap_tile(tile, tile_path, cli.DEFAULT_USER_AGENT, timeout=12, retries=2)
+            with Image.open(tile_path) as image:
+                return image.convert("RGBA")
 
     def fetch_preview_tile(self, url: str):
         from PIL import Image
@@ -488,6 +508,8 @@ class DesktopApp(tk.Tk):
         self.vars["preview_status"].set(f"Preview failed: {error}")
 
     def validate_tile_url(self, url_template: str) -> None:
+        if self.vars["source"].get() == "openfreemap-vector":
+            return
         if not url_template:
             raise ValueError("Choose a source preset or enter an XYZ PNG tile URL.")
         if "{z}" not in url_template or "{x}" not in url_template or "{y}" not in url_template:
@@ -519,7 +541,7 @@ class DesktopApp(tk.Tk):
     def validate_export(self, job: dict[str, Any]) -> None:
         self.validate_tile_url(job["urlTemplate"])
         if not bool(self.vars["permission"].get()):
-            raise ValueError("Confirm that you have permission to export offline tiles from this source.")
+            raise ValueError("Confirm that exported tiles will keep required attribution.")
 
     def run_export(self, job: dict[str, Any], output: Path) -> None:
         try:
