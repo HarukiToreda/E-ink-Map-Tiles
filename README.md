@@ -16,6 +16,7 @@ This project is focused on the tile asset pipeline, not firmware integration. It
 - Exports a folder and zip bundle with `manifest.json` and `ATTRIBUTION.txt`.
 - Supports map element toggles, including land, water, roads, highways, paths, buildings, boundaries, labels, POI, and transit.
 - Supports grayscale, mono, palette, and original output modes.
+- Includes an alternate topo style with high-zoom hillshade, contour lines, and clearer trail/path rendering.
 - Shows export estimates, progress, tile counts, and an export log.
 
 There is no hosted website, GitHub Pages app, browser workflow, or separate tile server requirement.
@@ -43,7 +44,7 @@ The default source downloads OpenFreeMap vector tiles and renders the final PNG 
 
 ## Map Preview
 
-The preview uses the same local OpenFreeMap vector renderer and e-paper conversion path as OpenFreeMap exports. What you see in the export preview is intended to match the downloaded tiles.
+The preview uses the same local renderer and e-paper conversion path as exports. What you see in the export preview is intended to match the downloaded tiles.
 
 Map controls:
 
@@ -113,6 +114,11 @@ Output modes:
 - `mono`: true 1-bit black/white PNGs for devices or tests that require binary output.
 - `palette`: indexed-color PNGs.
 - `original`: rendered/source PNGs with no e-paper conversion.
+
+Map styles:
+
+- `osm-eink`: default clean e-paper map.
+- `osm-eink-topo`: alternate e-paper topo map. At high zooms, it overlays subtle hillshade and contour lines from Mapzen Terrain Tiles on AWS Open Data. Trails/paths are drawn more visibly in this style.
 
 Output layouts:
 
@@ -188,6 +194,7 @@ Recommended baseline attribution for OSM-derived sources:
 (c) OpenStreetMap contributors
 OpenStreetMap data is available under the Open Database License (ODbL) 1.0.
 (c) OpenMapTiles, if using OpenMapTiles schema/data.
+Terrain Tiles were accessed from https://registry.opendata.aws/terrain-tiles/, if using topo style.
 Additional attribution may be required by the tile source or renderer.
 ```
 
@@ -221,6 +228,12 @@ Useful CLI options:
 --output PATH
 --zip
 --dry-run
+```
+
+Topo export example:
+
+```powershell
+eink-map-tiles --source openfreemap-vector --style osm-eink-topo --bbox="-74.30,40.80,-73.80,41.10" --zooms 13-14 --mode grayscale --contrast 1.15 --brightness 0.99 --zip
 ```
 
 ## Rebuild The Exe

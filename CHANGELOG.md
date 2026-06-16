@@ -13,3 +13,8 @@ First stable local-only Windows release.
 - Tuned default e-paper settings: grayscale mode, brightness `0.99`, contrast `1.15`, mono threshold `120`.
 - Hid the mono threshold control unless mono output mode is selected.
 - Includes README, license, notices, manifest, and attribution files for release and exported bundles.
+
+## Unreleased
+
+- Added an alternate `osm-eink-topo` map style with high-zoom hillshade and contour overlays from Mapzen Terrain Tiles on AWS Open Data.
+- Made trail/path lines more visible in the topo style.

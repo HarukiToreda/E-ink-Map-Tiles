@@ -9,6 +9,7 @@ import tempfile
 import time
 import urllib.error
 import urllib.request
+from io import BytesIO
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -16,6 +17,7 @@ from pathlib import Path
 
 DEFAULT_URL_TEMPLATE = None
 OPENFREEMAP_VECTOR_TEMPLATE = "https://tiles.openfreemap.org/planet/latest/{z}/{x}/{y}.pbf"
+TERRAIN_TERRARIUM_TEMPLATE = "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png"
 DEFAULT_USER_AGENT = "eink-map-tiles/1.0.0 (+https://github.com/HarukiToreda/E-ink-Map-Tiles)"
 MAX_MERCATOR_LAT = 85.05112878
 VECTOR_EXTENT = 4096
@@ -24,6 +26,7 @@ DEFAULT_ATTRIBUTION = {
     "map_data": "\u00a9 OpenStreetMap contributors",
     "map_data_license": "Open Database License (ODbL) 1.0",
     "openmaptiles": "\u00a9 OpenMapTiles, if using OpenMapTiles schema/data",
+    "terrain": "\u00a9 Mapzen terrain tiles, if using topo style",
     "notes": "Verify and preserve attribution required by your tile source/provider.",
 }
 
@@ -318,6 +321,7 @@ def render_openfreemap_tile(
     timeout: float,
     retries: int,
     elements: list[str] | tuple[str, ...] | None = None,
+    style: str = "osm-eink",
 ) -> None:
     from mapbox_vector_tile import decode
     from PIL import Image, ImageDraw, ImageFont
@@ -332,6 +336,8 @@ def render_openfreemap_tile(
         draw_polygon_layer(draw, data, "landcover", "#c4cbc4", "#a7b1aa")
         draw_polygon_layer(draw, data, "landuse", "#e5e6e1", "#c5ccc4")
         draw_polygon_layer(draw, data, "park", "#b8c2b9", "#9ba89e")
+    if is_topo_style(style):
+        draw_topography(image, tile, user_agent, timeout, retries)
     if "water" in selected:
         draw_polygon_layer(draw, data, "water", "#aeb9b4", "#7f8d87")
         draw_line_layer(draw, data, "waterway", "#6f7d77", width=1)
@@ -340,7 +346,7 @@ def render_openfreemap_tile(
     if "boundaries" in selected:
         draw_line_layer(draw, data, "boundary", "#7d8781" if tile.z <= 6 else "#929c96", width=1)
     if {"roads", "highways", "paths", "transit"} & selected:
-        draw_transportation(draw, data, tile.z, selected)
+        draw_transportation(draw, data, tile.z, selected, topo=is_topo_style(style))
     if "labels" in selected:
         draw_labels(draw, data, tile.z, load_label_font(tile.z))
     if "pois" in selected:
@@ -348,6 +354,126 @@ def render_openfreemap_tile(
 
     destination.parent.mkdir(parents=True, exist_ok=True)
     image.save(destination, format="PNG", optimize=True)
+
+
+def is_topo_style(style: str | None) -> bool:
+    return "topo" in (style or "").lower()
+
+
+def draw_topography(image, tile: Tile, user_agent: str, timeout: float, retries: int) -> None:
+    from PIL import ImageDraw
+
+    if tile.z < 13:
+        return
+
+    try:
+        terrain = fetch_terrain_image(tile, user_agent, timeout, retries)
+    except RuntimeError:
+        return
+
+    elevations = decode_terrarium(terrain)
+    apply_hillshade(image, elevations)
+    draw_contours(ImageDraw.Draw(image), elevations, tile.z)
+
+
+def fetch_terrain_image(tile: Tile, user_agent: str, timeout: float, retries: int):
+    from PIL import Image
+
+    terrain_z = min(tile.z, 15)
+    scale = 2 ** max(tile.z - terrain_z, 0)
+    terrain_tile = Tile(z=terrain_z, x=tile.x // scale, y=tile.y // scale)
+    data = fetch_bytes(tile_url(TERRAIN_TERRARIUM_TEMPLATE, terrain_tile), user_agent, timeout, retries)
+    with Image.open(BytesIO(data)) as image:
+        return image.convert("RGB")
+
+
+def decode_terrarium(image) -> list[list[float]]:
+    pixels = image.load()
+    elevations: list[list[float]] = []
+    for y in range(256):
+        row = []
+        for x in range(256):
+            red, green, blue = pixels[x, y]
+            row.append((red * 256 + green + blue / 256) - 32768)
+        elevations.append(row)
+    return elevations
+
+
+def apply_hillshade(image, elevations: list[list[float]]) -> None:
+    from PIL import Image
+
+    shade = Image.new("L", (256, 256), 225)
+    shade_pixels = shade.load()
+    for y in range(1, 255):
+        prev_row = elevations[y - 1]
+        row = elevations[y]
+        next_row = elevations[y + 1]
+        for x in range(1, 255):
+            east_west = row[x + 1] - row[x - 1]
+            north_south = next_row[x] - prev_row[x]
+            relief = max(-42, min(42, (east_west + north_south) * 0.42))
+            slope = min(26, (abs(east_west) + abs(north_south)) * 0.09)
+            shade_pixels[x, y] = int(max(168, min(244, 222 + relief - slope)))
+    shaded = Image.blend(image.convert("RGB"), shade.convert("RGB"), 0.28)
+    image.paste(shaded)
+
+
+def draw_contours(draw, elevations: list[list[float]], z: int) -> None:
+    step = 2
+    interval = 40 if z >= 14 else 80
+    index_interval = interval * 5
+    for y in range(0, 255, step):
+        for x in range(0, 255, step):
+            e00 = elevations[y][x]
+            e10 = elevations[y][min(x + step, 255)]
+            e11 = elevations[min(y + step, 255)][min(x + step, 255)]
+            e01 = elevations[min(y + step, 255)][x]
+            minimum = min(e00, e10, e11, e01)
+            maximum = max(e00, e10, e11, e01)
+            if maximum - minimum < 1:
+                continue
+            start = math.floor(minimum / interval) + 1
+            end = math.floor(maximum / interval)
+            for level_index in range(start, end + 1):
+                level = level_index * interval
+                points = contour_intersections(x, y, step, e00, e10, e11, e01, level)
+                if len(points) >= 2:
+                    color = "#87918b" if level % index_interval == 0 else "#a9b2ac"
+                    draw.line(points[:2], fill=color, width=1)
+                if len(points) == 4:
+                    color = "#87918b" if level % index_interval == 0 else "#a9b2ac"
+                    draw.line(points[2:4], fill=color, width=1)
+
+
+def contour_intersections(
+    x: int,
+    y: int,
+    step: int,
+    e00: float,
+    e10: float,
+    e11: float,
+    e01: float,
+    level: float,
+) -> list[tuple[float, float]]:
+    points: list[tuple[float, float]] = []
+    add_contour_point(points, e00, e10, level, (x, y), (x + step, y))
+    add_contour_point(points, e10, e11, level, (x + step, y), (x + step, y + step))
+    add_contour_point(points, e11, e01, level, (x + step, y + step), (x, y + step))
+    add_contour_point(points, e01, e00, level, (x, y + step), (x, y))
+    return points
+
+
+def add_contour_point(
+    points: list[tuple[float, float]],
+    a: float,
+    b: float,
+    level: float,
+    start: tuple[int, int],
+    end: tuple[int, int],
+) -> None:
+    if (a < level <= b) or (b < level <= a):
+        fraction = 0.5 if a == b else (level - a) / (b - a)
+        points.append((start[0] + (end[0] - start[0]) * fraction, start[1] + (end[1] - start[1]) * fraction))
 
 
 def draw_polygon_layer(draw, data: dict, layer_name: str, fill: str, outline: str | None) -> None:
@@ -375,10 +501,11 @@ def draw_line_layer(draw, data: dict, layer_name: str, color: str, width: int = 
         draw_geometry_lines(draw, feature.get("geometry", {}), color, width)
 
 
-def draw_transportation(draw, data: dict, z: int, elements: set[str]) -> None:
+def draw_transportation(draw, data: dict, z: int, elements: set[str], topo: bool = False) -> None:
     if z <= 5:
         return
 
+    path_style = ("#424a45", None, 1, 0) if topo else ("#707a74", None, 1, 0)
     class_styles = {
         "motorway": ("#9ea7a1", None, 1, 0) if z < 12 else ("#5c655f", "#fbfbf8", 5, 3),
         "trunk": ("#a9b1ab", None, 1, 0) if z < 12 else ("#68716b", "#fbfbf8", 5, 3),
@@ -387,11 +514,16 @@ def draw_transportation(draw, data: dict, z: int, elements: set[str]) -> None:
         "tertiary": ("#9aa29c", "#ffffff", 3, 1),
         "minor": ("#aeb6b0", "#ffffff", 2, 1),
         "service": ("#bcc4be", "#ffffff", 2, 1),
-        "track": ("#707a74", None, 1, 0),
-        "path": ("#707a74", None, 1, 0),
+        "track": path_style,
+        "path": path_style,
+        "footway": path_style,
+        "cycleway": path_style,
+        "bridleway": path_style,
+        "steps": path_style,
         "rail": ("#4f5752", "#f6f6f3", 2, 1),
     }
     line_jobs = []
+    path_classes = {"track", "path", "footway", "cycleway", "bridleway", "steps"}
     for feature in data.get("transportation", {}).get("features", []):
         properties = feature.get("properties", {})
         road_class = properties.get("class", "")
@@ -401,43 +533,53 @@ def draw_transportation(draw, data: dict, z: int, elements: set[str]) -> None:
             continue
         if road_class in {"secondary", "tertiary", "minor", "service"} and "roads" not in elements:
             continue
-        if road_class in {"track", "path"} and "paths" not in elements:
+        if road_class in path_classes and "paths" not in elements:
             continue
         if road_class == "rail" and "transit" not in elements:
             continue
         casing, fill, casing_width, fill_width = class_styles.get(road_class, ("#aeb6b0", "#ffffff", 2, 1))
-        dashed = road_class in {"track", "path"}
-        line_jobs.append((feature.get("geometry", {}), casing, fill, casing_width, fill_width, dashed))
+        dashed = road_class in path_classes
+        dash = 2 if topo and dashed else 1
+        gap = 4 if topo and dashed else 5
+        line_jobs.append((feature.get("geometry", {}), casing, fill, casing_width, fill_width, dashed, dash, gap))
 
-    for geometry, casing, _fill, casing_width, _fill_width, dashed in line_jobs:
-        draw_geometry_lines(draw, geometry, casing, casing_width, dashed=dashed)
-    for geometry, _casing, fill, _casing_width, fill_width, dashed in line_jobs:
+    for geometry, casing, _fill, casing_width, _fill_width, dashed, dash, gap in line_jobs:
+        draw_geometry_lines(draw, geometry, casing, casing_width, dashed=dashed, dash=dash, gap=gap)
+    for geometry, _casing, fill, _casing_width, fill_width, dashed, dash, gap in line_jobs:
         if fill and fill_width > 0:
-            draw_geometry_lines(draw, geometry, fill, fill_width, dashed=dashed)
+            draw_geometry_lines(draw, geometry, fill, fill_width, dashed=dashed, dash=dash, gap=gap)
 
 
-def draw_geometry_lines(draw, geometry: dict, color: str, width: int, dashed: bool = False) -> None:
+def draw_geometry_lines(
+    draw,
+    geometry: dict,
+    color: str,
+    width: int,
+    dashed: bool = False,
+    dash: int = 1,
+    gap: int = 5,
+) -> None:
     geometry_type = geometry.get("type")
     coordinates = geometry.get("coordinates", [])
     if geometry_type == "LineString":
-        draw_line(draw, coordinates, color, width, dashed=dashed)
+        draw_line(draw, coordinates, color, width, dashed=dashed, dash=dash, gap=gap)
     elif geometry_type == "MultiLineString":
         for line in coordinates:
-            draw_line(draw, line, color, width, dashed=dashed)
+            draw_line(draw, line, color, width, dashed=dashed, dash=dash, gap=gap)
     elif geometry_type == "Polygon":
         for ring in coordinates:
-            draw_line(draw, ring, color, width, dashed=dashed)
+            draw_line(draw, ring, color, width, dashed=dashed, dash=dash, gap=gap)
     elif geometry_type == "MultiPolygon":
         for polygon in coordinates:
             for ring in polygon:
-                draw_line(draw, ring, color, width, dashed=dashed)
+                draw_line(draw, ring, color, width, dashed=dashed, dash=dash, gap=gap)
 
 
-def draw_line(draw, points: list, color: str, width: int, dashed: bool = False) -> None:
+def draw_line(draw, points: list, color: str, width: int, dashed: bool = False, dash: int = 1, gap: int = 5) -> None:
     scaled = [scale_point(point) for point in points]
     if len(scaled) >= 2:
         if dashed:
-            draw_dashed_line(draw, scaled, color, width)
+            draw_dashed_line(draw, scaled, color, width, dash=dash, gap=gap)
         else:
             draw.line(scaled, fill=color, width=width, joint="curve")
 
@@ -665,6 +807,7 @@ def write_manifest(output_root: Path, args: argparse.Namespace, bbox: BBox, tile
         "brightness": args.brightness,
         "contrast": args.contrast,
         "threshold": args.threshold if args.mode == "mono" else None,
+        "topography": is_topo_style(args.style),
         "elements": {
             "include": args.include_elements,
             "exclude": [element for element in MAP_ELEMENTS if element not in args.include_elements],
@@ -688,6 +831,7 @@ Map data:
 OpenMapTiles schema/data:
   (c) OpenMapTiles, if using OpenMapTiles-derived schema or data.
   https://openmaptiles.org/
+{terrain_attribution(args)}
 
 Export source:
   source: {args.source}
@@ -697,6 +841,17 @@ Keep this file and manifest.json with the exported tiles. Additional attribution
 your tile source, local renderer, or downstream use case.
 """
     (output_root / "ATTRIBUTION.txt").write_text(text, encoding="utf-8")
+
+
+def terrain_attribution(args: argparse.Namespace) -> str:
+    if not is_topo_style(args.style):
+        return ""
+    return """
+Terrain data:
+  (c) Mapzen terrain tiles, if using topo style.
+  Terrain Tiles were accessed from https://registry.opendata.aws/terrain-tiles/.
+  See source data attribution: https://github.com/tilezen/joerd/blob/master/docs/attribution.md
+"""
 
 
 def make_zip(output_root: Path) -> Path:
@@ -736,7 +891,15 @@ def run(args: argparse.Namespace) -> int:
         with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as temp_file:
             temp_path = Path(temp_file.name)
         if args.source == "openfreemap-vector":
-            render_openfreemap_tile(tile, temp_path, args.user_agent, args.timeout, args.retries, args.include_elements)
+            render_openfreemap_tile(
+                tile,
+                temp_path,
+                args.user_agent,
+                args.timeout,
+                args.retries,
+                args.include_elements,
+                style=args.style,
+            )
         else:
             fetch_tile(tile_url(args.url_template, tile), temp_path, args.user_agent, args.timeout, args.retries)
         optimize_tile(temp_path, destination, args.mode, args.colors, args.brightness, args.contrast, args.threshold)

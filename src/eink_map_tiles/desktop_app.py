@@ -374,7 +374,7 @@ class DesktopApp(tk.Tk):
         self.build_elements(controls).grid(row=4, column=0, sticky="ew", pady=(0, 6))
 
     def bind_live_controls(self) -> None:
-        preview_keys = ("mode", "brightness", "contrast", "threshold", "source", "url")
+        preview_keys = ("mode", "brightness", "contrast", "threshold", "source", "url", "style")
         for key in preview_keys:
             self.vars[key].trace_add("write", lambda *_args: self.queue_live_update(preview=True, estimate=False))
         self.vars["brightness"].trace_add("write", lambda *_args: self.update_slider_labels())
@@ -382,7 +382,7 @@ class DesktopApp(tk.Tk):
         self.vars["threshold"].trace_add("write", lambda *_args: self.update_slider_labels())
         self.vars["mode"].trace_add("write", lambda *_args: self.update_mode_sensitive_controls())
 
-        export_keys = ("min_zoom", "max_zoom", "style", "layout")
+        export_keys = ("min_zoom", "max_zoom", "layout")
         for key in export_keys:
             self.vars[key].trace_add("write", lambda *_args: self.queue_live_update(preview=False, estimate=True))
 
@@ -543,7 +543,13 @@ class DesktopApp(tk.Tk):
         ).grid(row=1, column=3, sticky="ew", padx=(6, 0), pady=(4, 0))
 
         ttk.Label(content, text="Style").grid(row=2, column=0, sticky="w", pady=(4, 0))
-        ttk.Entry(content, textvariable=self.vars["style"], width=12).grid(row=2, column=1, columnspan=3, sticky="ew", padx=(6, 0), pady=(4, 0))
+        ttk.Combobox(
+            content,
+            textvariable=self.vars["style"],
+            values=["osm-eink", "osm-eink-topo"],
+            state="readonly",
+            width=16,
+        ).grid(row=2, column=1, columnspan=3, sticky="ew", padx=(6, 0), pady=(4, 0))
 
         ttk.Label(content, text="Brightness").grid(row=3, column=0, sticky="w", pady=(6, 0))
         ttk.Scale(content, from_=0.6, to=1.6, variable=self.vars["brightness"], orient="horizontal").grid(
@@ -1057,14 +1063,22 @@ class DesktopApp(tk.Tk):
         from PIL import Image
 
         elements = tuple(job["elements"]["include"])
-        cache_key = ("openfreemap-vector", tile.z, tile.x, tile.y, elements)
+        cache_key = ("openfreemap-vector", tile.z, tile.x, tile.y, job.get("style", "osm-eink"), elements)
         cached = self.preview_tile_cache.get(cache_key)
         if cached is not None:
             return cached.copy()
 
         with tempfile.TemporaryDirectory(prefix="eink-map-preview-") as temp_dir:
             tile_path = Path(temp_dir) / "tile.png"
-            cli.render_openfreemap_tile(tile, tile_path, cli.DEFAULT_USER_AGENT, timeout=12, retries=2, elements=list(elements))
+            cli.render_openfreemap_tile(
+                tile,
+                tile_path,
+                cli.DEFAULT_USER_AGENT,
+                timeout=12,
+                retries=2,
+                elements=list(elements),
+                style=str(job.get("style", "osm-eink")),
+            )
             with Image.open(tile_path) as image:
                 rendered = image.convert("RGBA")
         self.preview_tile_cache[cache_key] = rendered.copy()

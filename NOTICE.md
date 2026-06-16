@@ -19,6 +19,11 @@ OpenMapTiles-derived schema or data may require visible OpenMapTiles attribution
 
 The desktop preview uses the same local OpenFreeMap vector renderer as exported OpenFreeMap tiles. Do not use OpenStreetMap public raster tiles for offline export, bulk downloads, or tile archives.
 
+Topo style exports additionally use Mapzen Terrain Tiles from AWS Open Data for high-zoom hillshade and contour overlays:
+
+- Terrain Tiles registry: https://registry.opendata.aws/terrain-tiles/
+- Source attribution notes: https://github.com/tilezen/joerd/blob/master/docs/attribution.md
+
 Each exported bundle includes `manifest.json` and `ATTRIBUTION.txt`. Keep those files with exported tiles.
 
 ## Bundled Python Dependencies
