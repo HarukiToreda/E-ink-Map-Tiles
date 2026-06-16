@@ -188,12 +188,14 @@ class DesktopApp(tk.Tk):
         self.threshold_widgets: list[tk.Widget] = []
         self.threshold_grid_options: dict[tk.Widget, dict[str, Any]] = {}
         self.applying_style_preset = False
+        self.syncing_view_bounds = False
 
         self.vars = self.make_vars()
         self.configure_styles()
         self.build_ui()
         self.update_mode_sensitive_controls()
         self.bind_live_controls()
+        self.sync_view_area(update_estimate=False)
         self.estimate_tiles()
         self.after(700, self.refresh_preview)
         self.poll_messages()
@@ -397,6 +399,8 @@ class DesktopApp(tk.Tk):
         self.queue_live_update(preview=True, estimate=True)
 
     def queue_live_update(self, preview: bool, estimate: bool) -> None:
+        if self.syncing_view_bounds:
+            return
         if self.live_update_after_id is not None:
             try:
                 self.after_cancel(self.live_update_after_id)
@@ -489,7 +493,7 @@ class DesktopApp(tk.Tk):
 
         ttk.Label(content, text="Radius km").grid(row=1, column=0, sticky="w", pady=(4, 0))
         ttk.Entry(content, textvariable=self.vars["radius_km"], width=12).grid(row=1, column=1, sticky="ew", padx=(6, 10), pady=(4, 0))
-        self.flat_button(content, "Set BBox From Center", self.set_bbox_from_center).grid(
+        self.flat_button(content, "Fit Center Area", self.set_bbox_from_center).grid(
             row=1,
             column=2,
             columnspan=2,
@@ -497,14 +501,19 @@ class DesktopApp(tk.Tk):
             pady=(4, 0),
         )
 
-        ttk.Label(content, text="BBox").grid(row=2, column=0, sticky="w", pady=(6, 0))
+        ttk.Label(content, text="Visible BBox").grid(row=2, column=0, sticky="w", pady=(6, 0))
         bbox_grid = ttk.Frame(content, style="Card.TFrame")
         bbox_grid.grid(row=3, column=0, columnspan=4, sticky="ew", pady=(2, 0))
         for column in range(4):
             bbox_grid.columnconfigure(column, weight=1)
         for index, (label, key) in enumerate((("W", "west"), ("S", "south"), ("E", "east"), ("N", "north"))):
             ttk.Label(bbox_grid, text=label).grid(row=0, column=index, sticky="w")
-            ttk.Entry(bbox_grid, textvariable=self.vars[key], width=10).grid(row=1, column=index, sticky="ew", padx=(0 if index == 0 else 4, 4))
+            ttk.Entry(bbox_grid, textvariable=self.vars[key], width=10, state="readonly").grid(
+                row=1,
+                column=index,
+                sticky="ew",
+                padx=(0 if index == 0 else 4, 4),
+            )
         return frame
 
     def build_settings(self, parent: ttk.Frame) -> ttk.LabelFrame:
@@ -653,9 +662,8 @@ class DesktopApp(tk.Tk):
         self.preview_status_canvas.bind("<Configure>", self.resize_preview_status)
         self.flat_button(top, "-", lambda: self.zoom_map(-1), width=3).grid(row=0, column=1, padx=(8, 3))
         self.flat_button(top, "+", lambda: self.zoom_map(1), width=3).grid(row=0, column=2, padx=3)
-        self.flat_button(top, "Use View", self.use_map_view, primary=True).grid(row=0, column=3, padx=3)
         self.preview_button = self.flat_button(top, "Refresh", self.refresh_preview)
-        self.preview_button.grid(row=0, column=4, padx=(3, 0))
+        self.preview_button.grid(row=0, column=3, padx=(3, 0))
 
         self.map_canvas = tk.Canvas(
             frame,
@@ -748,25 +756,41 @@ class DesktopApp(tk.Tk):
         except Exception as exc:  # noqa: BLE001 - show validation errors in GUI.
             messagebox.showerror("Invalid center area", str(exc))
             return
-        self.vars["west"].set(f"{bbox.west:.6f}")
-        self.vars["south"].set(f"{bbox.south:.6f}")
-        self.vars["east"].set(f"{bbox.east:.6f}")
-        self.vars["north"].set(f"{bbox.north:.6f}")
-        self.estimate_tiles()
         self.map_center_lat = (bbox.south + bbox.north) / 2
         self.map_center_lon = self.center_lon(bbox)
+        self.map_zoom = self.zoom_to_fit_bbox(bbox)
+        self.sync_view_area()
         self.schedule_preview()
 
-    def use_map_view(self) -> None:
+    def sync_view_area(self, update_estimate: bool = True) -> None:
+        if not hasattr(self, "map_canvas"):
+            return
         bbox = self.current_map_bbox()
-        self.vars["west"].set(f"{bbox.west:.6f}")
-        self.vars["south"].set(f"{bbox.south:.6f}")
-        self.vars["east"].set(f"{bbox.east:.6f}")
-        self.vars["north"].set(f"{bbox.north:.6f}")
-        self.vars["center_lat"].set(f"{self.map_center_lat:.6f}")
-        self.vars["center_lon"].set(f"{self.map_center_lon:.6f}")
-        self.estimate_tiles()
-        self.schedule_preview()
+        self.syncing_view_bounds = True
+        try:
+            self.vars["west"].set(f"{bbox.west:.6f}")
+            self.vars["south"].set(f"{bbox.south:.6f}")
+            self.vars["east"].set(f"{bbox.east:.6f}")
+            self.vars["north"].set(f"{bbox.north:.6f}")
+            self.vars["center_lat"].set(f"{self.map_center_lat:.6f}")
+            self.vars["center_lon"].set(f"{self.map_center_lon:.6f}")
+        finally:
+            self.syncing_view_bounds = False
+        if update_estimate:
+            self.estimate_tiles(show_errors=False)
+
+    def zoom_to_fit_bbox(self, bbox: cli.BBox) -> int:
+        width = max(self.map_canvas.winfo_width(), 320)
+        height = max(self.map_canvas.winfo_height(), 260)
+        max_zoom = self.max_preview_zoom_for_style()
+        for zoom in range(max_zoom, MIN_PREVIEW_ZOOM - 1, -1):
+            left, top = self.lon_lat_to_world_pixel(bbox.west, bbox.north, zoom)
+            right, bottom = self.lon_lat_to_world_pixel(bbox.east, bbox.south, zoom)
+            if bbox.east < bbox.west:
+                right += 256 * (2**zoom)
+            if abs(right - left) <= width * 0.86 and abs(bottom - top) <= height * 0.86:
+                return zoom
+        return MIN_PREVIEW_ZOOM
 
     def zoom_map(self, delta: int, anchor: tuple[int, int] | None = None) -> None:
         old_zoom = self.map_zoom
@@ -791,12 +815,14 @@ class DesktopApp(tk.Tk):
             self.map_center_lat = max(min(new_lat, cli.MAX_MERCATOR_LAT), -cli.MAX_MERCATOR_LAT)
 
         self.map_zoom = new_zoom
+        self.sync_view_area()
         self.set_preview_status(f"Rendering export preview z{self.map_zoom}...")
         if self.preview_image is None:
             self.draw_preview_placeholder(f"Rendering export preview z{self.map_zoom}...")
         else:
-            self.map_canvas.delete("zoom-badge")
+            self.map_canvas.delete("zoom-badge", "center-marker")
             self.draw_zoom_badge()
+            self.draw_center_marker()
         self.schedule_preview(delay_ms=250)
 
     def start_map_drag(self, event) -> None:
@@ -817,12 +843,14 @@ class DesktopApp(tk.Tk):
     def end_map_drag(self, _event) -> None:
         self.map_drag_start = None
         self.map_drag_center = None
+        self.sync_view_area()
         self.schedule_preview(delay_ms=250)
 
     def on_mouse_wheel(self, event) -> None:
         self.zoom_map(1 if event.delta > 0 else -1, anchor=(event.x, event.y))
 
     def schedule_preview(self, delay_ms: int = 350) -> None:
+        self.sync_view_area(update_estimate=False)
         self.preview_render_id += 1
         if self.preview_after_id is not None:
             try:
@@ -837,16 +865,7 @@ class DesktopApp(tk.Tk):
             self.vars["output"].set(selected)
 
     def build_job(self) -> dict[str, Any]:
-        bbox = cli.parse_bbox(
-            ",".join(
-                [
-                    self.vars["west"].get(),
-                    self.vars["south"].get(),
-                    self.vars["east"].get(),
-                    self.vars["north"].get(),
-                ]
-            )
-        )
+        bbox = self.current_map_bbox()
         zooms = cli.parse_zooms(f"{self.vars['min_zoom'].get()}-{self.vars['max_zoom'].get()}")
         url_template = self.vars["url"].get().strip()
         return {
@@ -1023,13 +1042,25 @@ class DesktopApp(tk.Tk):
         self.map_canvas.create_oval(12, 12, 48, 48, fill="#ffffff", outline="#d7e2db", width=1, tags=("zoom-badge",))
         self.map_canvas.create_text(30, 30, text=str(self.map_zoom), fill="#102019", font=("Segoe UI", 12, "bold"), tags=("zoom-badge",))
 
+    def draw_center_marker(self) -> None:
+        width = max(self.map_canvas.winfo_width(), 320)
+        height = max(self.map_canvas.winfo_height(), 260)
+        x = width / 2
+        y = height / 2
+        self.map_canvas.create_oval(x - 6, y - 6, x + 6, y + 6, outline="#0f766e", width=2, tags=("center-marker",))
+        self.map_canvas.create_line(x - 14, y, x - 8, y, fill="#0f766e", width=2, tags=("center-marker",))
+        self.map_canvas.create_line(x + 8, y, x + 14, y, fill="#0f766e", width=2, tags=("center-marker",))
+        self.map_canvas.create_line(x, y - 14, x, y - 8, fill="#0f766e", width=2, tags=("center-marker",))
+        self.map_canvas.create_line(x, y + 8, x, y + 14, fill="#0f766e", width=2, tags=("center-marker",))
+
     def shift_current_preview(self, dx: int, dy: int) -> None:
         if self.preview_image is None:
             self.draw_preview_placeholder("Release to render map...")
             return
         self.map_canvas.coords("map-image", dx, dy)
-        self.map_canvas.delete("zoom-badge")
+        self.map_canvas.delete("zoom-badge", "center-marker")
         self.draw_zoom_badge()
+        self.draw_center_marker()
 
     def render_preview_vector_tile(self, tile: cli.Tile, job: dict[str, Any]):
         elements = tuple(job["elements"]["include"])
@@ -1078,6 +1109,7 @@ class DesktopApp(tk.Tk):
         self.map_canvas.delete("all")
         self.map_canvas.create_image(0, 0, image=self.preview_image, anchor="nw", tags=("map-image",))
         self.draw_zoom_badge()
+        self.draw_center_marker()
         self.set_preview_status(f"Export preview z{self.map_zoom}: matches downloaded tile rendering.")
 
     def preview_failed(self, error: str) -> None:

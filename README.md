@@ -33,12 +33,11 @@ Basic flow:
 
 1. Run `EinkMapTiles.exe`.
 2. Pan and zoom the map preview.
-3. Click **Use View** to make the visible map your export area.
-4. Leave **Map Source** on **OpenFreeMap open vector tiles**.
-5. Choose zoom levels and e-paper settings.
-6. Click **Estimate** to check tile count.
-7. Click **Export Tiles**.
-8. Click **Open Folder** when export finishes.
+3. Leave **Map Source** on **OpenFreeMap open vector tiles**.
+4. Choose zoom levels and e-paper settings.
+5. Click **Estimate** to check tile count.
+6. Click **Export Tiles**.
+7. Click **Open Folder** when export finishes.
 
 The default source downloads OpenFreeMap vector tiles and renders the final PNG tiles locally. No map URL entry or extra setup is needed for normal use.
 
@@ -51,10 +50,10 @@ Map controls:
 - Drag to pan.
 - Mouse wheel zooms in or out around the current cursor location.
 - `+` and `-` zoom around the map center.
-- **Use View** copies the visible map bounds into the export area.
+- The center marker shows the current center latitude/longitude.
 - **Refresh** redraws the export preview.
 
-The preview keeps the current map visible while a new export preview is rendering, then swaps in the updated render when it is ready.
+The visible map is the export area. The preview keeps the current map visible while a new export preview is rendering, then swaps in the updated render when it is ready.
 
 The standard `osm-eink` map uses OpenFreeMap vector detail through zoom 14, then can preview/export deeper through zoom 16 by redrawing zoom-14 OpenFreeMap vectors into deeper child tiles. Labels, water, land shapes, roads, and trails stay crisp without raster blur. The `osm-eink-topo` style also adds deeper terrain data.
 
@@ -77,9 +76,9 @@ The **Area** section controls the export bounding box.
 
 You can either:
 
-- Pan/zoom the map and click **Use View**.
-- Enter center latitude, center longitude, and radius in kilometers, then click **Set BBox From Center**.
-- Manually edit west, south, east, and north bounds.
+- Pan/zoom the map directly.
+- Enter center latitude, center longitude, and radius in kilometers, then click **Fit Center Area**.
+- Read the west, south, east, and north bounds from **Visible BBox**.
 
 ## Map Source
 

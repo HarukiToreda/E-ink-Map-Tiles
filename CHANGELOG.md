@@ -7,6 +7,7 @@
 - Made topo mode use its own cleaner default layer set: land, water, labels, and trails/paths.
 - Allowed regular and topo preview/export through zoom 16.
 - Added crisp vector overzooming for zooms 15-16 so zoom-14 OpenFreeMap labels, land/water shapes, roads, and trails can remain visible without raster blur.
+- Made the visible map view the export area automatically and added a center marker to the preview.
 - Aligned CLI defaults with the desktop app defaults and removed stale desktop preview/source code.
 - Raised desktop preview zoom to 16 for closer topo inspection.
 
