@@ -16,7 +16,7 @@ from pathlib import Path
 
 DEFAULT_URL_TEMPLATE = None
 OPENFREEMAP_VECTOR_TEMPLATE = "https://tiles.openfreemap.org/planet/latest/{z}/{x}/{y}.pbf"
-DEFAULT_USER_AGENT = "eink-map-tiles/0.1 (+https://github.com/HarukiToreda/E-ink-Map-Tiles)"
+DEFAULT_USER_AGENT = "eink-map-tiles/1.0.0 (+https://github.com/HarukiToreda/E-ink-Map-Tiles)"
 MAX_MERCATOR_LAT = 85.05112878
 VECTOR_EXTENT = 4096
 MAP_ELEMENTS = ("land", "water", "roads", "highways", "paths", "buildings", "boundaries", "labels", "pois", "transit")

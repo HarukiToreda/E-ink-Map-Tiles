@@ -17,7 +17,7 @@ OpenMapTiles-derived schema or data may require visible OpenMapTiles attribution
 - `(c) OpenMapTiles`
 - https://openmaptiles.org/
 
-The desktop preview uses `https://tile.openstreetmap.org/{z}/{x}/{y}.png` only for interactive viewing and caches preview tiles locally for at least 7 days. Do not use OpenStreetMap public raster tiles for offline export, bulk downloads, or tile archives.
+The desktop preview uses the same local OpenFreeMap vector renderer as exported OpenFreeMap tiles. Do not use OpenStreetMap public raster tiles for offline export, bulk downloads, or tile archives.
 
 Each exported bundle includes `manifest.json` and `ATTRIBUTION.txt`. Keep those files with exported tiles.
 
