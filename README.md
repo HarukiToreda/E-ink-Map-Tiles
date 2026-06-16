@@ -27,9 +27,9 @@ The default source downloads OpenFreeMap vector tiles for the selected area and 
 
 During export, the app shows a progress bar, current tile count, and a log of completed tile paths.
 
-The interactive preview uses fast raster map tiles for display only, with attribution shown in the preview. It is softened into stepped grayscale so the area picker stays readable on a normal monitor while approximating an e-paper look. Exported tile bundles are generated from the selected export source.
+The interactive preview is two-stage: it shows high-detail raster map tiles while the view is moving, then settles into an export preview rendered from the same OpenFreeMap vector source and e-paper conversion used by downloaded tiles.
 
-Preview tiles are cached locally for at least 7 days under the user's local app data folder to respect OpenStreetMap public tile usage expectations.
+Fast preview tiles are cached locally for at least 7 days under the user's local app data folder to respect OpenStreetMap public tile usage expectations.
 
 Output is saved under:
 
@@ -93,7 +93,7 @@ Avoid:
 The desktop app wraps the CLI. You can also run the CLI directly with the built-in OpenFreeMap source:
 
 ```powershell
-eink-map-tiles --source openfreemap-vector --bbox="-122.55,47.45,-122.15,47.75" --zooms 6-12 --mode mono --contrast 1.4 --brightness 0.95 --threshold 201 --zip
+eink-map-tiles --source openfreemap-vector --bbox="-122.55,47.45,-122.15,47.75" --zooms 6-12 --mode grayscale --contrast 1.15 --brightness 0.99 --threshold 120 --zip
 ```
 
 Preview tile count without downloading:
@@ -118,19 +118,22 @@ Other layouts:
 
 ## E-paper Modes
 
-- `mono`: 1-bit black/white PNGs for high-contrast e-paper testing.
-- `grayscale`: 8-bit grayscale PNGs for softer detail.
+- `grayscale`: 8-bit grayscale PNGs for the high-detail e-paper preview/export path.
+- `mono`: stark 1-bit black/white PNGs for devices or tests that require true black/white output.
 - `palette`: indexed-color PNGs.
 - `original`: source PNGs with no e-paper conversion.
 
 Default desktop settings are tuned toward e-paper readability:
 
 ```text
-mode: mono
-contrast: 0.93
-brightness: 0.97
-threshold: 177
+mode: grayscale
+brightness: 0.99
+contrast: 1.15
+threshold: 120
+enabled elements: land, water, roads, highways, paths, boundaries, labels, transit
 ```
+
+`Mono threshold` only affects `mono` mode. The desktop app hides that control for grayscale, palette, and original exports.
 
 ## Attribution
 

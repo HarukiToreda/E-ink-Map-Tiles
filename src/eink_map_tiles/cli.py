@@ -329,28 +329,28 @@ def render_openfreemap_tile(
     draw = ImageDraw.Draw(image)
 
     if "land" in selected:
-        draw_polygon_layer(draw, data, "landcover", "#eceee9", "#d5ddd2")
-        draw_polygon_layer(draw, data, "landuse", "#e9ebe5", "#d5ddd2")
-        draw_polygon_layer(draw, data, "park", "#e1e6de", "#cbd6cc")
+        draw_polygon_layer(draw, data, "landcover", "#c4cbc4", "#a7b1aa")
+        draw_polygon_layer(draw, data, "landuse", "#e5e6e1", "#c5ccc4")
+        draw_polygon_layer(draw, data, "park", "#b8c2b9", "#9ba89e")
     if "water" in selected:
-        draw_polygon_layer(draw, data, "water", "#ffffff", "#9aa5a0")
-        draw_line_layer(draw, data, "waterway", "#707b76", width=1)
+        draw_polygon_layer(draw, data, "water", "#aeb9b4", "#7f8d87")
+        draw_line_layer(draw, data, "waterway", "#6f7d77", width=1)
     if "buildings" in selected:
-        draw_polygon_layer(draw, data, "building", "#d2d7d1", "#8d9891")
+        draw_polygon_layer(draw, data, "building", "#d0d5cf", None)
     if "boundaries" in selected:
-        draw_line_layer(draw, data, "boundary", "#929c96", width=1)
+        draw_line_layer(draw, data, "boundary", "#7d8781" if tile.z <= 6 else "#929c96", width=1)
     if {"roads", "highways", "paths", "transit"} & selected:
         draw_transportation(draw, data, tile.z, selected)
     if "labels" in selected:
-        draw_labels(draw, data, tile.z, ImageFont.load_default())
+        draw_labels(draw, data, tile.z, load_label_font(tile.z))
     if "pois" in selected:
-        draw_pois(draw, data, tile.z, ImageFont.load_default())
+        draw_pois(draw, data, tile.z, load_label_font(tile.z, small=True))
 
     destination.parent.mkdir(parents=True, exist_ok=True)
     image.save(destination, format="PNG", optimize=True)
 
 
-def draw_polygon_layer(draw, data: dict, layer_name: str, fill: str, outline: str) -> None:
+def draw_polygon_layer(draw, data: dict, layer_name: str, fill: str, outline: str | None) -> None:
     for feature in data.get(layer_name, {}).get("features", []):
         geometry = feature.get("geometry", {})
         geometry_type = geometry.get("type")
@@ -362,7 +362,7 @@ def draw_polygon_layer(draw, data: dict, layer_name: str, fill: str, outline: st
                 draw_polygon(draw, polygon, fill, outline)
 
 
-def draw_polygon(draw, rings: list, fill: str, outline: str) -> None:
+def draw_polygon(draw, rings: list, fill: str, outline: str | None) -> None:
     if not rings:
         return
     outer = [scale_point(point) for point in rings[0]]
@@ -376,21 +376,27 @@ def draw_line_layer(draw, data: dict, layer_name: str, color: str, width: int = 
 
 
 def draw_transportation(draw, data: dict, z: int, elements: set[str]) -> None:
+    if z <= 5:
+        return
+
     class_styles = {
-        "motorway": ("#111111", 3 if z >= 10 else 2),
-        "trunk": ("#151515", 3 if z >= 10 else 2),
-        "primary": ("#202020", 2),
-        "secondary": ("#303030", 2),
-        "tertiary": ("#404040", 1),
-        "minor": ("#555555", 1),
-        "service": ("#6a6a6a", 1),
-        "track": ("#777777", 1),
-        "path": ("#777777", 1),
-        "rail": ("#333333", 1),
+        "motorway": ("#9ea7a1", None, 1, 0) if z < 12 else ("#5c655f", "#fbfbf8", 5, 3),
+        "trunk": ("#a9b1ab", None, 1, 0) if z < 12 else ("#68716b", "#fbfbf8", 5, 3),
+        "primary": ("#b6beb8", None, 1, 0) if z < 12 else ("#747e77", "#fbfbf8", 4, 2),
+        "secondary": ("#8b948e", "#ffffff", 3, 1),
+        "tertiary": ("#9aa29c", "#ffffff", 3, 1),
+        "minor": ("#aeb6b0", "#ffffff", 2, 1),
+        "service": ("#bcc4be", "#ffffff", 2, 1),
+        "track": ("#707a74", None, 1, 0),
+        "path": ("#707a74", None, 1, 0),
+        "rail": ("#4f5752", "#f6f6f3", 2, 1),
     }
+    line_jobs = []
     for feature in data.get("transportation", {}).get("features", []):
         properties = feature.get("properties", {})
         road_class = properties.get("class", "")
+        if z < 12 and road_class not in {"motorway", "trunk", "primary"}:
+            continue
         if road_class in {"motorway", "trunk", "primary"} and "highways" not in elements:
             continue
         if road_class in {"secondary", "tertiary", "minor", "service"} and "roads" not in elements:
@@ -399,53 +405,126 @@ def draw_transportation(draw, data: dict, z: int, elements: set[str]) -> None:
             continue
         if road_class == "rail" and "transit" not in elements:
             continue
-        color, width = class_styles.get(road_class, ("#555555", 1))
-        draw_geometry_lines(draw, feature.get("geometry", {}), color, width)
+        casing, fill, casing_width, fill_width = class_styles.get(road_class, ("#aeb6b0", "#ffffff", 2, 1))
+        dashed = road_class in {"track", "path"}
+        line_jobs.append((feature.get("geometry", {}), casing, fill, casing_width, fill_width, dashed))
+
+    for geometry, casing, _fill, casing_width, _fill_width, dashed in line_jobs:
+        draw_geometry_lines(draw, geometry, casing, casing_width, dashed=dashed)
+    for geometry, _casing, fill, _casing_width, fill_width, dashed in line_jobs:
+        if fill and fill_width > 0:
+            draw_geometry_lines(draw, geometry, fill, fill_width, dashed=dashed)
 
 
-def draw_geometry_lines(draw, geometry: dict, color: str, width: int) -> None:
+def draw_geometry_lines(draw, geometry: dict, color: str, width: int, dashed: bool = False) -> None:
     geometry_type = geometry.get("type")
     coordinates = geometry.get("coordinates", [])
     if geometry_type == "LineString":
-        draw_line(draw, coordinates, color, width)
+        draw_line(draw, coordinates, color, width, dashed=dashed)
     elif geometry_type == "MultiLineString":
         for line in coordinates:
-            draw_line(draw, line, color, width)
+            draw_line(draw, line, color, width, dashed=dashed)
     elif geometry_type == "Polygon":
         for ring in coordinates:
-            draw_line(draw, ring, color, width)
+            draw_line(draw, ring, color, width, dashed=dashed)
     elif geometry_type == "MultiPolygon":
         for polygon in coordinates:
             for ring in polygon:
-                draw_line(draw, ring, color, width)
+                draw_line(draw, ring, color, width, dashed=dashed)
 
 
-def draw_line(draw, points: list, color: str, width: int) -> None:
+def draw_line(draw, points: list, color: str, width: int, dashed: bool = False) -> None:
     scaled = [scale_point(point) for point in points]
     if len(scaled) >= 2:
-        draw.line(scaled, fill=color, width=width, joint="curve")
+        if dashed:
+            draw_dashed_line(draw, scaled, color, width)
+        else:
+            draw.line(scaled, fill=color, width=width, joint="curve")
+
+
+def draw_dashed_line(draw, points: list[tuple[int, int]], color: str, width: int, dash: int = 1, gap: int = 5) -> None:
+    for start, end in zip(points, points[1:]):
+        x1, y1 = start
+        x2, y2 = end
+        dx = x2 - x1
+        dy = y2 - y1
+        length = math.hypot(dx, dy)
+        if length <= 0:
+            continue
+        distance = 0.0
+        while distance < length:
+            segment_end = min(distance + dash, length)
+            sx = x1 + dx * (distance / length)
+            sy = y1 + dy * (distance / length)
+            ex = x1 + dx * (segment_end / length)
+            ey = y1 + dy * (segment_end / length)
+            draw.line([(sx, sy), (ex, ey)], fill=color, width=width)
+            distance += dash + gap
 
 
 def draw_labels(draw, data: dict, z: int, font) -> None:
-    if z < 6:
+    if z < 4:
         return
-    max_labels = 12 if z < 10 else 24
+    max_labels = 18 if z < 6 else 14 if z < 10 else 24
     labels_drawn = 0
-    for layer_name in ("place", "water_name"):
-        for feature in data.get(layer_name, {}).get("features", []):
-            if labels_drawn >= max_labels:
-                return
-            geometry = feature.get("geometry", {})
-            point = representative_point(geometry)
-            if not point:
-                continue
-            name = label_text(feature.get("properties", {}))
-            if not name:
-                continue
-            x, y = scale_point(point)
-            draw.text((x + 1, y + 1), name, fill="#ffffff", font=font)
-            draw.text((x, y), name, fill="#111111", font=font)
-            labels_drawn += 1
+    candidates = []
+    seen = set()
+    for feature in data.get("place", {}).get("features", []):
+        properties = feature.get("properties", {})
+        geometry = feature.get("geometry", {})
+        point = representative_point(geometry)
+        name = label_text(properties)
+        label_class = properties.get("class", "")
+        if not point or not name:
+            continue
+        key = (label_class, name)
+        if key in seen:
+            continue
+        seen.add(key)
+        candidates.append((label_priority(properties, z), properties.get("rank", 99), name, point, label_class))
+
+    for _priority, _rank, name, point, label_class in sorted(candidates):
+        if labels_drawn >= max_labels:
+            return
+        x, y = scale_point(point)
+        if x < -80 or x > 256 or y < -20 or y > 256:
+            continue
+        draw_readable_text(draw, (x, y), name, font, fill="#111111", stroke_width=2)
+        labels_drawn += 1
+
+    for feature in data.get("water_name", {}).get("features", []):
+        if labels_drawn >= max_labels:
+            return
+        geometry = feature.get("geometry", {})
+        point = representative_point(geometry)
+        name = label_text(feature.get("properties", {}))
+        if not point or not name:
+            continue
+        x, y = scale_point(point)
+        if x < -80 or x > 256 or y < -20 or y > 256:
+            continue
+        draw_readable_text(draw, (x, y), name, font, fill="#111111", stroke_width=2)
+        labels_drawn += 1
+
+
+def label_priority(properties: dict, z: int) -> int:
+    label_class = properties.get("class", "")
+    if z <= 6:
+        return {
+            "country": 0,
+            "state": 1,
+            "aboriginal_lands": 2,
+            "city": 3,
+            "town": 4,
+            "village": 5,
+        }.get(label_class, 6)
+    return {
+        "city": 0,
+        "town": 1,
+        "state": 2,
+        "village": 3,
+        "country": 4,
+    }.get(label_class, 5)
 
 
 def draw_pois(draw, data: dict, z: int, font) -> None:
@@ -463,9 +542,37 @@ def draw_pois(draw, data: dict, z: int, font) -> None:
         if not name:
             continue
         x, y = scale_point(point)
-        draw.ellipse([x - 2, y - 2, x + 2, y + 2], fill="#111111")
-        draw.text((x + 4, y - 4), name, fill="#111111", font=font)
+        draw.ellipse([x - 2, y - 2, x + 2, y + 2], fill="#111111", outline="#ffffff")
+        draw_readable_text(draw, (x + 4, y - 5), name, font, fill="#111111", stroke_width=2)
         labels_drawn += 1
+
+
+def load_label_font(z: int, small: bool = False):
+    from PIL import ImageFont
+
+    size = 10 if small else 11
+    if z >= 12:
+        size += 1
+    if z >= 14:
+        size += 1
+    for font_name in ("arial.ttf", "segoeui.ttf", "DejaVuSans.ttf"):
+        try:
+            return ImageFont.truetype(font_name, size=size)
+        except OSError:
+            continue
+    return ImageFont.load_default()
+
+
+def draw_readable_text(draw, xy: tuple[int, int], text: str, font, fill: str, stroke_width: int) -> None:
+    try:
+        draw.text(xy, text, fill=fill, font=font, stroke_width=stroke_width, stroke_fill="#ffffff")
+    except TypeError:
+        x, y = xy
+        for dx in range(-stroke_width, stroke_width + 1):
+            for dy in range(-stroke_width, stroke_width + 1):
+                if dx or dy:
+                    draw.text((x + dx, y + dy), text, fill="#ffffff", font=font)
+        draw.text(xy, text, fill=fill, font=font)
 
 
 def representative_point(geometry: dict) -> list[float] | None:

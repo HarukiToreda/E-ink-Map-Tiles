@@ -23,14 +23,14 @@ from . import cli
 
 
 DEFAULT_OUTPUT_BASE = Path.home() / "Downloads" / "EinkMapTiles"
-DEFAULT_BRIGHTNESS = 0.9722627737226277
-DEFAULT_CONTRAST = 0.9328467153284672
-DEFAULT_THRESHOLD = 177.44525547445255
+DEFAULT_BRIGHTNESS = 0.99
+DEFAULT_CONTRAST = 1.15
+DEFAULT_THRESHOLD = 120
 DESKTOP_RATE_LIMIT_SECONDS = 0.05
 PREVIEW_CACHE_DAYS = 7
 PREVIEW_CACHE_SECONDS = PREVIEW_CACHE_DAYS * 24 * 60 * 60
 PREVIEW_CACHE_DIR = Path(os.environ.get("LOCALAPPDATA", str(Path.home() / ".cache"))) / "EinkMapTiles" / "preview-tiles"
-DEFAULT_ELEMENTS = list(cli.MAP_ELEMENTS)
+DEFAULT_ELEMENTS = [element for element in cli.MAP_ELEMENTS if element not in {"buildings", "pois"}]
 ELEMENT_LABELS = {
     "land": "Land",
     "water": "Water",
@@ -186,6 +186,7 @@ class DesktopApp(tk.Tk):
         self.export_thread: threading.Thread | None = None
         self.preview_thread: threading.Thread | None = None
         self.preview_pending = False
+        self.preview_pending_exact = False
         self.last_output: Path | None = None
         self.preview_image: tk.PhotoImage | None = None
         self.map_center_lat = 39.5
@@ -195,14 +196,18 @@ class DesktopApp(tk.Tk):
         self.map_drag_center: tuple[float, float] | None = None
         self.preview_render_id = 0
         self.preview_after_id: str | None = None
+        self.preview_exact_after_id: str | None = None
         self.live_update_after_id: str | None = None
         self.preview_tile_cache: dict[tuple, Any] = {}
         self.export_total = 0
         self.collapsible_sections: dict[str, dict[str, Any]] = {}
+        self.threshold_widgets: list[tk.Widget] = []
+        self.threshold_grid_options: dict[tk.Widget, dict[str, Any]] = {}
 
         self.vars = self.make_vars()
         self.configure_styles()
         self.build_ui()
+        self.update_mode_sensitive_controls()
         self.bind_live_controls()
         self.apply_source_preset()
         self.estimate_tiles()
@@ -228,7 +233,7 @@ class DesktopApp(tk.Tk):
             "max_zoom": tk.StringVar(value="8"),
             "style": tk.StringVar(value="osm-eink"),
             "layout": tk.StringVar(value="inkhud-dev"),
-            "mode": tk.StringVar(value="mono"),
+            "mode": tk.StringVar(value="grayscale"),
             "brightness": tk.DoubleVar(value=DEFAULT_BRIGHTNESS),
             "contrast": tk.DoubleVar(value=DEFAULT_CONTRAST),
             "threshold": tk.DoubleVar(value=DEFAULT_THRESHOLD),
@@ -378,6 +383,7 @@ class DesktopApp(tk.Tk):
         self.vars["brightness"].trace_add("write", lambda *_args: self.update_slider_labels())
         self.vars["contrast"].trace_add("write", lambda *_args: self.update_slider_labels())
         self.vars["threshold"].trace_add("write", lambda *_args: self.update_slider_labels())
+        self.vars["mode"].trace_add("write", lambda *_args: self.update_mode_sensitive_controls())
 
         export_keys = ("min_zoom", "max_zoom", "style", "layout")
         for key in export_keys:
@@ -409,7 +415,19 @@ class DesktopApp(tk.Tk):
     def update_slider_labels(self) -> None:
         self.vars["brightness_text"].set(f"{float(self.vars['brightness'].get()):.2f}")
         self.vars["contrast_text"].set(f"{float(self.vars['contrast'].get()):.2f}")
-        self.vars["threshold_text"].set(f"{float(self.vars['threshold'].get()):.0f}")
+        if self.vars["mode"].get() == "mono":
+            self.vars["threshold_text"].set(f"{float(self.vars['threshold'].get()):.0f}")
+        else:
+            self.vars["threshold_text"].set("")
+
+    def update_mode_sensitive_controls(self) -> None:
+        visible = self.vars["mode"].get() == "mono"
+        for widget in self.threshold_widgets:
+            if visible:
+                widget.grid(**self.threshold_grid_options[widget])
+            else:
+                widget.grid_remove()
+        self.update_slider_labels()
 
     def build_scrollable_controls(self, parent: ttk.Frame) -> ttk.Frame:
         shell = ttk.Frame(parent, style="Panel.TFrame")
@@ -552,8 +570,10 @@ class DesktopApp(tk.Tk):
         )
         ttk.Label(content, textvariable=self.vars["contrast_text"]).grid(row=4, column=3, sticky="w", pady=(6, 0))
 
-        ttk.Label(content, text="Mono threshold").grid(row=5, column=0, sticky="w", pady=(6, 0))
-        ttk.Scale(content, from_=80, to=230, variable=self.vars["threshold"], orient="horizontal").grid(
+        threshold_label = ttk.Label(content, text="Mono threshold")
+        threshold_label.grid(row=5, column=0, sticky="w", pady=(6, 0))
+        threshold_scale = ttk.Scale(content, from_=80, to=230, variable=self.vars["threshold"], orient="horizontal")
+        threshold_scale.grid(
             row=5,
             column=1,
             columnspan=2,
@@ -561,7 +581,21 @@ class DesktopApp(tk.Tk):
             padx=(6, 10),
             pady=(6, 0),
         )
-        ttk.Label(content, textvariable=self.vars["threshold_text"]).grid(row=5, column=3, sticky="w", pady=(6, 0))
+        threshold_value = ttk.Label(content, textvariable=self.vars["threshold_text"])
+        threshold_value.grid(row=5, column=3, sticky="w", pady=(6, 0))
+        self.threshold_widgets = [threshold_label, threshold_scale, threshold_value]
+        self.threshold_grid_options = {
+            threshold_label: {"row": 5, "column": 0, "sticky": "w", "pady": (6, 0)},
+            threshold_scale: {
+                "row": 5,
+                "column": 1,
+                "columnspan": 2,
+                "sticky": "ew",
+                "padx": (6, 10),
+                "pady": (6, 0),
+            },
+            threshold_value: {"row": 5, "column": 3, "sticky": "w", "pady": (6, 0)},
+        }
 
         ttk.Label(content, text="Output").grid(row=6, column=0, sticky="w", pady=(6, 0))
         ttk.Entry(content, textvariable=self.vars["output"]).grid(row=6, column=1, columnspan=2, sticky="ew", padx=(6, 8), pady=(6, 0))
@@ -787,7 +821,21 @@ class DesktopApp(tk.Tk):
                 self.after_cancel(self.preview_after_id)
             except tk.TclError:
                 pass
+        if self.preview_exact_after_id is not None:
+            try:
+                self.after_cancel(self.preview_exact_after_id)
+            except tk.TclError:
+                pass
+            self.preview_exact_after_id = None
         self.preview_after_id = self.after(delay_ms, self.refresh_preview)
+
+    def schedule_exact_preview(self, delay_ms: int = 800) -> None:
+        if self.preview_exact_after_id is not None:
+            try:
+                self.after_cancel(self.preview_exact_after_id)
+            except tk.TclError:
+                pass
+        self.preview_exact_after_id = self.after(delay_ms, lambda: self.refresh_preview(exact=True))
 
     def choose_output(self) -> None:
         selected = filedialog.askdirectory(initialdir=str(DEFAULT_OUTPUT_BASE))
@@ -816,6 +864,7 @@ class DesktopApp(tk.Tk):
             "brightness": float(self.vars["brightness"].get()),
             "contrast": float(self.vars["contrast"].get()),
             "threshold": int(float(self.vars["threshold"].get())),
+            "colors": 256,
             "elements": {
                 "include": self.selected_elements(),
                 "exclude": [element for element in cli.MAP_ELEMENTS if element not in self.selected_elements()],
@@ -837,12 +886,22 @@ class DesktopApp(tk.Tk):
         self.vars["tile_count"].set(f"Estimate: {len(tiles):,} tiles across zooms {job['zooms'][0]}-{job['zooms'][-1]}")
         self.vars["status"].set("Estimate updated")
 
-    def refresh_preview(self) -> None:
+    def refresh_preview(self, exact: bool = False) -> None:
+        if not exact and self.preview_exact_after_id is not None:
+            try:
+                self.after_cancel(self.preview_exact_after_id)
+            except tk.TclError:
+                pass
+            self.preview_exact_after_id = None
         if self.preview_thread and self.preview_thread.is_alive():
             self.preview_pending = True
+            self.preview_pending_exact = self.preview_pending_exact or exact
             return
         self.preview_after_id = None
+        if exact:
+            self.preview_exact_after_id = None
         self.preview_pending = False
+        self.preview_pending_exact = False
         try:
             job = self.build_job()
             self.validate_tile_url(job["urlTemplate"])
@@ -853,26 +912,37 @@ class DesktopApp(tk.Tk):
         self.preview_button.configure(state="disabled")
         self.preview_render_id += 1
         render_id = self.preview_render_id
-        self.set_preview_status(f"Loading zoom {self.map_zoom}...")
-        self.preview_thread = threading.Thread(target=self.load_preview, args=(job, render_id), daemon=True)
+        if exact and job["source"] == "openfreemap-vector":
+            self.set_preview_status(f"Rendering export preview z{self.map_zoom}...")
+        else:
+            self.set_preview_status(f"Loading fast preview z{self.map_zoom}...")
+        self.preview_thread = threading.Thread(target=self.load_preview, args=(job, render_id, exact), daemon=True)
         self.preview_thread.start()
 
-    def load_preview(self, job: dict[str, Any], render_id: int) -> None:
+    def load_preview(self, job: dict[str, Any], render_id: int, exact: bool) -> None:
         try:
-            image = self.make_preview_image(job)
-            self.after(0, lambda: self.show_preview_image(image, render_id))
+            image = self.make_preview_image(job, exact=exact)
+            self.after(0, lambda: self.show_preview_image(image, render_id, exact))
         except Exception as exc:  # noqa: BLE001 - report worker errors in GUI.
-            self.after(0, lambda: self.preview_failed(str(exc)))
+            if exact:
+                self.after(0, lambda: self.exact_preview_failed(str(exc)))
+            else:
+                self.after(0, lambda: self.preview_failed(str(exc)))
         finally:
             self.after(0, self.finish_preview_thread)
 
     def finish_preview_thread(self) -> None:
         self.preview_button.configure(state="normal")
         if self.preview_pending:
+            exact = self.preview_pending_exact
             self.preview_pending = False
-            self.schedule_preview(delay_ms=200)
+            self.preview_pending_exact = False
+            if exact:
+                self.schedule_exact_preview(delay_ms=200)
+            else:
+                self.schedule_preview(delay_ms=200)
 
-    def make_preview_image(self, job: dict[str, Any]):
+    def make_preview_image(self, job: dict[str, Any], exact: bool = False):
         from PIL import Image, ImageDraw
 
         bbox = cli.BBox(**job["bbox"])
@@ -902,30 +972,35 @@ class DesktopApp(tk.Tk):
 
         def render_tile(tile_job):
             tile_id, paste_x, paste_y = tile_job
-            if job["source"] == "openfreemap-vector":
+            if exact and job["source"] == "openfreemap-vector":
+                image = self.render_preview_vector_tile(tile_id, job)
+                image = self.convert_preview_tile(image, job, exact=True)
+            elif job["source"] == "openfreemap-vector":
                 url = cli.tile_url(PREVIEW_RASTER_TEMPLATE, tile_id)
                 image = self.fetch_preview_tile(url)
+                image = self.convert_preview_tile(image, job, exact=False)
             else:
                 url = cli.tile_url(job["urlTemplate"], tile_id)
                 image = self.fetch_preview_tile(url)
-            image = self.convert_preview_tile(image, job)
+                image = self.convert_preview_tile(image, job, exact=True)
             return paste_x, paste_y, image.convert("RGB")
 
-        with ThreadPoolExecutor(max_workers=6) as executor:
+        max_workers = 3 if exact and job["source"] == "openfreemap-vector" else 6
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = [executor.submit(render_tile, tile_job) for tile_job in tile_jobs]
             for future in as_completed(futures):
                 paste_x, paste_y, tile_image = future.result()
                 canvas.paste(tile_image, (paste_x, paste_y))
 
         self.draw_preview_bbox(canvas, bbox, zoom, left_world, top_world)
-        self.draw_preview_attribution(canvas)
+        self.draw_preview_attribution(canvas, exact=exact and job["source"] == "openfreemap-vector")
         return canvas
 
-    def draw_preview_attribution(self, canvas) -> None:
+    def draw_preview_attribution(self, canvas, exact: bool = False) -> None:
         from PIL import ImageDraw, ImageFont
 
         draw = ImageDraw.Draw(canvas)
-        text = "(c) OpenStreetMap contributors - preview only"
+        text = "(c) OpenStreetMap contributors - export preview" if exact else "(c) OpenStreetMap contributors - fast preview"
         font = ImageFont.load_default()
         box = draw.textbbox((0, 0), text, font=font)
         width = box[2] - box[0] + 10
@@ -993,17 +1068,18 @@ class DesktopApp(tk.Tk):
         self.map_canvas.delete("zoom-badge")
         self.draw_zoom_badge()
 
-    def render_preview_vector_tile(self, tile: cli.Tile):
+    def render_preview_vector_tile(self, tile: cli.Tile, job: dict[str, Any]):
         from PIL import Image
 
-        cache_key = ("openfreemap-vector", tile.z, tile.x, tile.y)
+        elements = tuple(job["elements"]["include"])
+        cache_key = ("openfreemap-vector", tile.z, tile.x, tile.y, elements)
         cached = self.preview_tile_cache.get(cache_key)
         if cached is not None:
             return cached.copy()
 
         with tempfile.TemporaryDirectory(prefix="eink-map-preview-") as temp_dir:
             tile_path = Path(temp_dir) / "tile.png"
-            cli.render_openfreemap_tile(tile, tile_path, cli.DEFAULT_USER_AGENT, timeout=12, retries=2, elements=DEFAULT_ELEMENTS)
+            cli.render_openfreemap_tile(tile, tile_path, cli.DEFAULT_USER_AGENT, timeout=12, retries=2, elements=list(elements))
             with Image.open(tile_path) as image:
                 rendered = image.convert("RGBA")
         self.preview_tile_cache[cache_key] = rendered.copy()
@@ -1055,9 +1131,10 @@ class DesktopApp(tk.Tk):
         except OSError:
             return
 
-    def convert_preview_tile(self, image, job: dict[str, Any]):
+    def convert_preview_tile(self, image, job: dict[str, Any], exact: bool = False):
         from PIL import Image, ImageEnhance
 
+        image = image.convert("RGBA")
         background = Image.new("RGBA", image.size, (255, 255, 255, 255))
         image = Image.alpha_composite(background, image).convert("RGB")
         image = ImageEnhance.Brightness(image).enhance(float(job["brightness"]))
@@ -1065,8 +1142,9 @@ class DesktopApp(tk.Tk):
         mode = job["mode"]
         gray = image.convert("L")
         if mode == "mono":
-            # Keep the interactive picker legible. Export still uses the true 1-bit mono conversion.
             threshold = int(job["threshold"])
+            if exact:
+                return gray.point(lambda pixel: 255 if pixel >= threshold else 0, mode="1")
             return gray.point(
                 lambda pixel: 246
                 if pixel >= threshold + 42
@@ -1083,10 +1161,11 @@ class DesktopApp(tk.Tk):
         if mode == "grayscale":
             return gray
         if mode == "palette":
-            return gray.quantize(colors=16)
+            colors = max(2, min(int(job.get("colors", 256)), 256))
+            return image.quantize(colors=colors)
         return image
 
-    def show_preview_image(self, image, render_id: int) -> None:
+    def show_preview_image(self, image, render_id: int, exact: bool = False) -> None:
         from PIL import ImageTk
 
         if render_id != self.preview_render_id:
@@ -1095,12 +1174,20 @@ class DesktopApp(tk.Tk):
         self.map_canvas.delete("all")
         self.map_canvas.create_image(0, 0, image=self.preview_image, anchor="nw", tags=("map-image",))
         self.draw_zoom_badge()
-        self.set_preview_status("Drag to pan, wheel or +/- to zoom. Use View to set export area.")
+        if exact:
+            self.set_preview_status(f"Export preview z{self.map_zoom}: matches downloaded tile rendering.")
+        else:
+            self.set_preview_status("High-detail preview. Settling into export preview...")
+            if self.vars["source"].get() == "openfreemap-vector":
+                self.schedule_exact_preview()
 
     def preview_failed(self, error: str) -> None:
         self.draw_preview_placeholder("Preview unavailable.\n\nCheck your internet connection, then click Refresh.")
         self.preview_image = None
         self.set_preview_status(f"Preview failed: {error}")
+
+    def exact_preview_failed(self, error: str) -> None:
+        self.set_preview_status(f"Export preview failed; showing fast preview. {error}")
 
     def validate_tile_url(self, url_template: str) -> None:
         if self.vars["source"].get() == "openfreemap-vector":
