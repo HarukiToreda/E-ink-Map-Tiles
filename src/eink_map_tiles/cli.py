@@ -17,6 +17,8 @@ from pathlib import Path
 
 DEFAULT_URL_TEMPLATE = None
 OPENFREEMAP_VECTOR_TEMPLATE = "https://tiles.openfreemap.org/planet/latest/{z}/{x}/{y}.pbf"
+OPENFREEMAP_MAX_DETAIL_ZOOM = 14
+TOPO_MAX_DETAIL_ZOOM = 16
 TERRAIN_TERRARIUM_TEMPLATE = "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png"
 DEFAULT_USER_AGENT = "eink-map-tiles/1.0.0 (+https://github.com/HarukiToreda/E-ink-Map-Tiles)"
 MAX_MERCATOR_LAT = 85.05112878
@@ -27,6 +29,7 @@ DEFAULT_BRIGHTNESS = 0.99
 DEFAULT_CONTRAST = 1.15
 DEFAULT_THRESHOLD = 120
 DEFAULT_INCLUDE_ELEMENTS = [element for element in MAP_ELEMENTS if element not in {"buildings", "pois"}]
+DEFAULT_TOPO_ELEMENTS = ["land", "water", "paths", "labels"]
 DEFAULT_ATTRIBUTION = {
     "map_data": "\u00a9 OpenStreetMap contributors",
     "map_data_license": "Open Database License (ODbL) 1.0",
@@ -144,22 +147,47 @@ def clamp(value: int, low: int, high: int) -> int:
 
 def tiles_for_bbox(bbox: BBox, zooms: list[int]) -> list[Tile]:
     tiles: list[Tile] = []
-    lon_spans = [(bbox.west, bbox.east)]
-    if bbox.west > bbox.east:
-        lon_spans = [(bbox.west, 180.0), (-180.0, bbox.east)]
-
     for z in zooms:
         seen: set[tuple[int, int, int]] = set()
-        for west, east in lon_spans:
-            x_min, y_min = lonlat_to_tile(west, bbox.north, z)
-            x_max, y_max = lonlat_to_tile(east, bbox.south, z)
-            for x in range(min(x_min, x_max), max(x_min, x_max) + 1):
-                for y in range(min(y_min, y_max), max(y_min, y_max) + 1):
+        for x_min, x_max, y_min, y_max in tile_ranges_for_bbox(bbox, z):
+            for x in range(x_min, x_max + 1):
+                for y in range(y_min, y_max + 1):
                     key = (z, x, y)
                     if key not in seen:
                         seen.add(key)
                         tiles.append(Tile(z=z, x=x, y=y))
     return tiles
+
+
+def tile_ranges_for_bbox(bbox: BBox, z: int) -> list[tuple[int, int, int, int]]:
+    lon_spans = [(bbox.west, bbox.east)]
+    if bbox.west > bbox.east:
+        lon_spans = [(bbox.west, 180.0), (-180.0, bbox.east)]
+
+    ranges = []
+    for west, east in lon_spans:
+        x_min, y_min = lonlat_to_tile(west, bbox.north, z)
+        x_max, y_max = lonlat_to_tile(east, bbox.south, z)
+        ranges.append((min(x_min, x_max), max(x_min, x_max), min(y_min, y_max), max(y_min, y_max)))
+    return ranges
+
+
+def count_tiles_for_bbox(bbox: BBox, zooms: list[int]) -> int:
+    total = 0
+    for z in zooms:
+        for x_min, x_max, y_min, y_max in tile_ranges_for_bbox(bbox, z):
+            total += (x_max - x_min + 1) * (y_max - y_min + 1)
+    return total
+
+
+def first_tile_for_bbox(bbox: BBox, zooms: list[int]) -> Tile | None:
+    if not zooms:
+        return None
+    ranges = tile_ranges_for_bbox(bbox, zooms[0])
+    if not ranges:
+        return None
+    x_min, _x_max, y_min, _y_max = ranges[0]
+    return Tile(z=zooms[0], x=x_min, y=y_min)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -213,7 +241,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--include-elements",
         type=parse_elements,
-        default=list(DEFAULT_INCLUDE_ELEMENTS),
+        default=None,
         help="Comma-separated vector-style element categories to include in the manifest.",
     )
     return parser
@@ -345,8 +373,12 @@ def render_openfreemap_image(
     from PIL import Image, ImageDraw
 
     selected = set(elements if elements is not None else MAP_ELEMENTS)
-    raw = fetch_bytes(tile_url(OPENFREEMAP_VECTOR_TEMPLATE, tile), user_agent, timeout, retries)
-    data = decode(raw, default_options={"y_coord_down": True})
+    topo = is_topo_style(style)
+    if topo and tile.z > OPENFREEMAP_MAX_DETAIL_ZOOM:
+        data = fetch_overzoomed_openfreemap_data(tile, user_agent, timeout, retries)
+    else:
+        raw = fetch_bytes(tile_url(OPENFREEMAP_VECTOR_TEMPLATE, tile), user_agent, timeout, retries)
+        data = decode(raw, default_options={"y_coord_down": True}) if raw else {}
     image = Image.new("RGB", (256, 256), "#f7f8f4")
     draw = ImageDraw.Draw(image)
 
@@ -354,17 +386,17 @@ def render_openfreemap_image(
         draw_polygon_layer(draw, data, "landcover", "#c4cbc4", "#a7b1aa")
         draw_polygon_layer(draw, data, "landuse", "#e5e6e1", "#c5ccc4")
         draw_polygon_layer(draw, data, "park", "#b8c2b9", "#9ba89e")
-    if is_topo_style(style):
+    if topo:
         draw_topography(image, tile, user_agent, timeout, retries)
     if "water" in selected:
         draw_polygon_layer(draw, data, "water", "#aeb9b4", "#7f8d87")
         draw_line_layer(draw, data, "waterway", "#6f7d77", width=1)
-    if "buildings" in selected:
+    if "buildings" in selected and not topo:
         draw_polygon_layer(draw, data, "building", "#d0d5cf", None)
     if "boundaries" in selected:
         draw_line_layer(draw, data, "boundary", "#7d8781" if tile.z <= 6 else "#929c96", width=1)
     if {"roads", "highways", "paths", "transit"} & selected:
-        draw_transportation(draw, data, tile.z, selected, topo=is_topo_style(style))
+        draw_transportation(draw, data, tile.z, selected, topo=topo)
     if "labels" in selected:
         draw_labels(draw, data, tile.z, load_label_font(tile.z))
     if "pois" in selected:
@@ -376,10 +408,60 @@ def is_topo_style(style: str | None) -> bool:
     return "topo" in (style or "").lower()
 
 
+def fetch_overzoomed_openfreemap_data(tile: Tile, user_agent: str, timeout: float, retries: int) -> dict:
+    from mapbox_vector_tile import decode
+
+    zoom_delta = tile.z - OPENFREEMAP_MAX_DETAIL_ZOOM
+    scale = 2**zoom_delta
+    parent_tile = Tile(z=OPENFREEMAP_MAX_DETAIL_ZOOM, x=tile.x // scale, y=tile.y // scale)
+    raw = fetch_bytes(tile_url(OPENFREEMAP_VECTOR_TEMPLATE, parent_tile), user_agent, timeout, retries)
+    if not raw:
+        return {}
+    data = decode(raw, default_options={"y_coord_down": True})
+    return overzoom_vector_data(data, tile, scale)
+
+
+def overzoom_vector_data(data: dict, tile: Tile, scale: int) -> dict:
+    offset_x = (tile.x % scale) * VECTOR_EXTENT / scale
+    offset_y = (tile.y % scale) * VECTOR_EXTENT / scale
+
+    transformed: dict[str, dict] = {}
+    for layer_name, layer in data.items():
+        features = []
+        for feature in layer.get("features", []):
+            geometry = feature.get("geometry", {})
+            features.append(
+                {
+                    **feature,
+                    "geometry": {
+                        **geometry,
+                        "coordinates": overzoom_coordinates(geometry.get("coordinates", []), offset_x, offset_y, scale),
+                    },
+                }
+            )
+        transformed[layer_name] = {**layer, "features": features}
+    return transformed
+
+
+def overzoom_coordinates(value, offset_x: float, offset_y: float, scale: int):
+    if (
+        isinstance(value, (list, tuple))
+        and len(value) >= 2
+        and isinstance(value[0], (int, float))
+        and isinstance(value[1], (int, float))
+    ):
+        return [(value[0] - offset_x) * scale, (value[1] - offset_y) * scale]
+    if isinstance(value, list):
+        return [overzoom_coordinates(item, offset_x, offset_y, scale) for item in value]
+    if isinstance(value, tuple):
+        return tuple(overzoom_coordinates(item, offset_x, offset_y, scale) for item in value)
+    return value
+
+
 def draw_topography(image, tile: Tile, user_agent: str, timeout: float, retries: int) -> None:
     from PIL import ImageDraw
 
-    if tile.z < 13:
+    if tile.z < 4:
         return
 
     try:
@@ -441,8 +523,15 @@ def apply_hillshade(image, elevations: list[list[float]]) -> None:
 
 
 def draw_contours(draw, elevations: list[list[float]], z: int) -> None:
-    step = 2
-    interval = 40 if z >= 14 else 80
+    step = 4 if z < 10 else 2
+    if z < 7:
+        interval = 500
+    elif z < 10:
+        interval = 250
+    elif z < 13:
+        interval = 100
+    else:
+        interval = 40
     index_interval = interval * 5
     for y in range(0, 255, step):
         for x in range(0, 255, step):
@@ -524,7 +613,7 @@ def draw_line_layer(draw, data: dict, layer_name: str, color: str, width: int = 
 
 
 def draw_transportation(draw, data: dict, z: int, elements: set[str], topo: bool = False) -> None:
-    if z <= 5:
+    if z <= 5 and not topo:
         return
 
     path_style = ("#424a45", None, 1, 0) if topo else ("#707a74", None, 1, 0)
@@ -532,10 +621,10 @@ def draw_transportation(draw, data: dict, z: int, elements: set[str], topo: bool
         "motorway": ("#9ea7a1", None, 1, 0) if z < 12 else ("#5c655f", "#fbfbf8", 5, 3),
         "trunk": ("#a9b1ab", None, 1, 0) if z < 12 else ("#68716b", "#fbfbf8", 5, 3),
         "primary": ("#b6beb8", None, 1, 0) if z < 12 else ("#747e77", "#fbfbf8", 4, 2),
-        "secondary": ("#8b948e", "#ffffff", 3, 1),
-        "tertiary": ("#9aa29c", "#ffffff", 3, 1),
-        "minor": ("#aeb6b0", "#ffffff", 2, 1),
-        "service": ("#bcc4be", "#ffffff", 2, 1),
+        "secondary": ("#9aa49e", "#ffffff", 2, 1) if topo else ("#8b948e", "#ffffff", 3, 1),
+        "tertiary": ("#adb6b0", "#ffffff", 2, 1) if topo else ("#9aa29c", "#ffffff", 3, 1),
+        "minor": ("#c8d0ca", None, 1, 0) if topo else ("#aeb6b0", "#ffffff", 2, 1),
+        "service": ("#d3dad5", None, 1, 0) if topo else ("#bcc4be", "#ffffff", 2, 1),
         "track": path_style,
         "path": path_style,
         "footway": path_style,
@@ -549,7 +638,7 @@ def draw_transportation(draw, data: dict, z: int, elements: set[str], topo: bool
     for feature in data.get("transportation", {}).get("features", []):
         properties = feature.get("properties", {})
         road_class = properties.get("class", "")
-        if z < 12 and road_class not in {"motorway", "trunk", "primary"}:
+        if z < 12 and road_class not in {"motorway", "trunk", "primary"} and not (topo and road_class in path_classes):
             continue
         if road_class in {"motorway", "trunk", "primary"} and "highways" not in elements:
             continue
@@ -887,11 +976,23 @@ def make_zip(output_root: Path) -> Path:
 
 def run(args: argparse.Namespace) -> int:
     bbox = args_to_bbox(args)
-    tiles = tiles_for_bbox(bbox, args.zooms)
+    if args.include_elements is None:
+        args.include_elements = list(DEFAULT_TOPO_ELEMENTS if is_topo_style(args.style) else DEFAULT_INCLUDE_ELEMENTS)
+    if args.source == "openfreemap-vector":
+        max_zoom = max(args.zooms)
+        if not is_topo_style(args.style) and max_zoom > OPENFREEMAP_MAX_DETAIL_ZOOM:
+            raise SystemExit(
+                f"OpenFreeMap map detail currently stops at zoom {OPENFREEMAP_MAX_DETAIL_ZOOM}. "
+                "Use --style osm-eink-topo for deeper terrain-focused exports."
+            )
+        if is_topo_style(args.style) and max_zoom > TOPO_MAX_DETAIL_ZOOM:
+            raise SystemExit(f"Topo exports are supported up to zoom {TOPO_MAX_DETAIL_ZOOM}.")
+    tile_count = count_tiles_for_bbox(bbox, args.zooms)
     print(f"Area: west={bbox.west:.6f}, south={bbox.south:.6f}, east={bbox.east:.6f}, north={bbox.north:.6f}")
-    print(f"Tiles: {len(tiles)} across zooms {','.join(map(str, args.zooms))}")
-    if tiles:
-        sample = tile_output_path(args.output, args.style, args.layout, tiles[0])
+    print(f"Tiles: {tile_count} across zooms {','.join(map(str, args.zooms))}")
+    sample_tile = first_tile_for_bbox(bbox, args.zooms)
+    if sample_tile:
+        sample = tile_output_path(args.output, args.style, args.layout, sample_tile)
         print(f"First output path: {sample}")
 
     if args.dry_run:
@@ -906,6 +1007,7 @@ def run(args: argparse.Namespace) -> int:
     if args.rate_limit < 0:
         raise SystemExit("--rate-limit cannot be negative")
 
+    tiles = tiles_for_bbox(bbox, args.zooms)
     completed = 0
     for tile in tiles:
         destination = tile_output_path(args.output, args.style, args.layout, tile)

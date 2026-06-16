@@ -2,9 +2,12 @@
 
 ## Unreleased
 
-- Added an alternate `osm-eink-topo` map style with high-zoom hillshade and contour overlays from Mapzen Terrain Tiles on AWS Open Data.
-- Made trail/path lines more visible in the topo style.
+- Added an alternate `osm-eink-topo` map style with hillshade and contour overlays from Mapzen Terrain Tiles on AWS Open Data.
+- Made topo mode use its own cleaner default layer set: land, water, labels, and trails/paths.
+- Capped normal map preview/export detail at zoom 14 while allowing topo preview/export through zoom 16.
+- Added crisp vector overzooming for topo zooms 15-16 so zoom-14 OpenFreeMap labels, land/water shapes, and trails can remain visible without raster blur.
 - Aligned CLI defaults with the desktop app defaults and removed stale desktop preview/source code.
+- Raised desktop preview zoom to 16 for closer topo inspection.
 
 ## 1.0.0 - 2026-06-16
 

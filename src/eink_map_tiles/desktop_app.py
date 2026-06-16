@@ -5,6 +5,7 @@ import json
 import math
 import queue
 import re
+import tempfile
 import threading
 import tkinter as tk
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -19,6 +20,9 @@ from . import cli
 
 DEFAULT_OUTPUT_BASE = Path.home() / "Downloads" / "EinkMapTiles"
 DESKTOP_RATE_LIMIT_SECONDS = 0.05
+MIN_PREVIEW_ZOOM = 2
+MAX_PREVIEW_ZOOM = cli.TOPO_MAX_DETAIL_ZOOM
+NORMAL_PREVIEW_MAX_ZOOM = cli.OPENFREEMAP_MAX_DETAIL_ZOOM
 ELEMENT_LABELS = {
     "land": "Land",
     "water": "Water",
@@ -183,6 +187,7 @@ class DesktopApp(tk.Tk):
         self.collapsible_sections: dict[str, dict[str, Any]] = {}
         self.threshold_widgets: list[tk.Widget] = []
         self.threshold_grid_options: dict[tk.Widget, dict[str, Any]] = {}
+        self.applying_style_preset = False
 
         self.vars = self.make_vars()
         self.configure_styles()
@@ -362,6 +367,7 @@ class DesktopApp(tk.Tk):
         self.vars["contrast"].trace_add("write", lambda *_args: self.update_slider_labels())
         self.vars["threshold"].trace_add("write", lambda *_args: self.update_slider_labels())
         self.vars["mode"].trace_add("write", lambda *_args: self.update_mode_sensitive_controls())
+        self.vars["style"].trace_add("write", lambda *_args: self.apply_style_preset())
 
         export_keys = ("min_zoom", "max_zoom", "layout")
         for key in export_keys:
@@ -372,7 +378,23 @@ class DesktopApp(tk.Tk):
             self.vars[key].trace_add("write", lambda *_args: self.queue_live_update(preview=True, estimate=True))
 
         for element in cli.MAP_ELEMENTS:
-            self.vars[f"element_{element}"].trace_add("write", lambda *_args: self.queue_live_update(preview=True, estimate=False))
+            self.vars[f"element_{element}"].trace_add("write", lambda *_args: self.element_changed())
+
+    def element_changed(self) -> None:
+        if not self.applying_style_preset:
+            self.queue_live_update(preview=True, estimate=False)
+
+    def apply_style_preset(self) -> None:
+        style = self.vars["style"].get()
+        selected = cli.DEFAULT_TOPO_ELEMENTS if cli.is_topo_style(style) else cli.DEFAULT_INCLUDE_ELEMENTS
+        self.map_zoom = min(self.map_zoom, self.max_preview_zoom_for_style(style))
+        self.applying_style_preset = True
+        try:
+            for element in cli.MAP_ELEMENTS:
+                self.vars[f"element_{element}"].set(element in selected)
+        finally:
+            self.applying_style_preset = False
+        self.queue_live_update(preview=True, estimate=True)
 
     def queue_live_update(self, preview: bool, estimate: bool) -> None:
         if self.live_update_after_id is not None:
@@ -389,6 +411,10 @@ class DesktopApp(tk.Tk):
                 self.schedule_preview(delay_ms=180)
 
         self.live_update_after_id = self.after(250, run_update)
+
+    def max_preview_zoom_for_style(self, style: str | None = None) -> int:
+        style = self.vars["style"].get() if style is None else style
+        return MAX_PREVIEW_ZOOM if cli.is_topo_style(style) else NORMAL_PREVIEW_MAX_ZOOM
 
     def update_slider_labels(self) -> None:
         self.vars["brightness_text"].set(f"{float(self.vars['brightness'].get()):.2f}")
@@ -744,7 +770,7 @@ class DesktopApp(tk.Tk):
 
     def zoom_map(self, delta: int, anchor: tuple[int, int] | None = None) -> None:
         old_zoom = self.map_zoom
-        new_zoom = cli.clamp(old_zoom + delta, 2, 14)
+        new_zoom = cli.clamp(old_zoom + delta, MIN_PREVIEW_ZOOM, self.max_preview_zoom_for_style())
         if new_zoom == old_zoom:
             return
 
@@ -846,12 +872,12 @@ class DesktopApp(tk.Tk):
         try:
             job = self.build_job()
             bbox = cli.BBox(**job["bbox"])
-            tiles = cli.tiles_for_bbox(bbox, job["zooms"])
+            tile_count = cli.count_tiles_for_bbox(bbox, job["zooms"])
         except Exception as exc:  # noqa: BLE001 - show validation errors in GUI.
             if show_errors:
                 messagebox.showerror("Invalid export settings", str(exc))
             return
-        self.vars["tile_count"].set(f"Estimate: {len(tiles):,} tiles across zooms {job['zooms'][0]}-{job['zooms'][-1]}")
+        self.vars["tile_count"].set(f"Estimate: {tile_count:,} tiles across zooms {job['zooms'][0]}-{job['zooms'][-1]}")
         self.vars["status"].set("Estimate updated")
 
     def refresh_preview(self) -> None:
@@ -1086,7 +1112,7 @@ class DesktopApp(tk.Tk):
 
     def reset_export_progress(self, job: dict[str, Any]) -> None:
         bbox = cli.BBox(**job["bbox"])
-        self.export_total = len(cli.tiles_for_bbox(bbox, job["zooms"]))
+        self.export_total = cli.count_tiles_for_bbox(bbox, job["zooms"])
         self.vars["progress_value"].set(0)
         self.progress_bar.configure(maximum=max(self.export_total, 1), mode="determinate")
         self.vars["progress_text"].set(f"Exporting 0 / {self.export_total:,} tiles...")
@@ -1094,6 +1120,14 @@ class DesktopApp(tk.Tk):
     def validate_export(self, job: dict[str, Any]) -> None:
         if not bool(self.vars["permission"].get()):
             raise ValueError("Confirm that exported tiles will keep required attribution.")
+        max_zoom = max(job["zooms"])
+        if not cli.is_topo_style(job["style"]) and max_zoom > cli.OPENFREEMAP_MAX_DETAIL_ZOOM:
+            raise ValueError(
+                "OpenFreeMap map detail currently stops at zoom 14. "
+                "Use osm-eink-topo for deeper terrain-focused exports."
+            )
+        if cli.is_topo_style(job["style"]) and max_zoom > MAX_PREVIEW_ZOOM:
+            raise ValueError(f"Topo exports are supported up to zoom {cli.TOPO_MAX_DETAIL_ZOOM}.")
 
     def run_export(self, job: dict[str, Any], output: Path) -> None:
         try:

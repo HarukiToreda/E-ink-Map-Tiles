@@ -56,6 +56,8 @@ Map controls:
 
 The preview keeps the current map visible while a new export preview is rendering, then swaps in the updated render when it is ready.
 
+The standard `osm-eink` map uses OpenFreeMap vector detail through zoom 14. The `osm-eink-topo` style can preview/export deeper, through zoom 16. At zooms 15-16 it uses deeper terrain data plus crisp overzoomed zoom-14 OpenFreeMap vectors, so labels, water, land shapes, and trails can remain visible without raster blur.
+
 ## Export Panel
 
 The export panel shows:
@@ -118,7 +120,13 @@ Output modes:
 Map styles:
 
 - `osm-eink`: default clean e-paper map.
-- `osm-eink-topo`: alternate e-paper topo map. At high zooms, it overlays subtle hillshade and contour lines from Mapzen Terrain Tiles on AWS Open Data. Trails/paths are drawn more visibly in this style.
+- `osm-eink-topo`: alternate e-paper topo map with land, water, labels, trails/paths, hillshade, and contour lines from Mapzen Terrain Tiles on AWS Open Data. Regular roads, highways, buildings, boundaries, POI, and transit are disabled by default for this style, though boundaries can be enabled in **Map Elements**.
+
+Zoom guidance:
+
+- Use `osm-eink` for normal map exports up to zoom 14.
+- Use `osm-eink-topo` for terrain-focused topo exports up to zoom 16.
+- At topo zooms above 14, the app keeps vector content sharp by clipping and redrawing zoom-14 OpenFreeMap vector data into the deeper child tiles. This avoids blurry scaling, but it does not add brand-new road/building/label detail beyond what exists at zoom 14.
 
 Output layouts:
 
@@ -235,7 +243,7 @@ Useful CLI options:
 Topo export example:
 
 ```powershell
-eink-map-tiles --style osm-eink-topo --bbox="-74.30,40.80,-73.80,41.10" --zooms 13-14 --zip
+eink-map-tiles --style osm-eink-topo --bbox="-74.30,40.80,-73.80,41.10" --zooms 4-16 --zip
 ```
 
 ## Rebuild The Exe
