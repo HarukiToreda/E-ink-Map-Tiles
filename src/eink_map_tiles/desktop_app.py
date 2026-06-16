@@ -234,7 +234,7 @@ class DesktopApp(tk.Tk):
             "threshold": tk.DoubleVar(value=DEFAULT_THRESHOLD),
             "output": tk.StringVar(value=str(DEFAULT_OUTPUT_BASE / f"osm-eink-{timestamp}")),
             "tile_count": tk.StringVar(value="Estimate: not calculated"),
-            "preview_status": tk.StringVar(value="Loading OpenFreeMap overview preview..."),
+            "preview_status": tk.StringVar(value="Loading preview..."),
             "status": tk.StringVar(value="Ready"),
             "progress_text": tk.StringVar(value="No export running"),
             "progress_value": tk.DoubleVar(value=0),
@@ -609,7 +609,18 @@ class DesktopApp(tk.Tk):
         top = ttk.Frame(frame, style="Card.TFrame", padding=(14, 0, 14, 10))
         top.grid(row=1, column=0, sticky="ew")
         top.columnconfigure(0, weight=1)
-        ttk.Label(top, textvariable=self.vars["preview_status"], style="Hint.TLabel").grid(row=0, column=0, sticky="w")
+        self.preview_status_canvas = tk.Canvas(top, height=34, background="#ffffff", highlightthickness=0, borderwidth=0)
+        self.preview_status_canvas.grid(row=0, column=0, sticky="ew")
+        self.preview_status_text = self.preview_status_canvas.create_text(
+            0,
+            4,
+            text=self.vars["preview_status"].get(),
+            fill="#536158",
+            font=("Segoe UI", 9),
+            anchor="nw",
+            width=520,
+        )
+        self.preview_status_canvas.bind("<Configure>", self.resize_preview_status)
         self.flat_button(top, "-", lambda: self.zoom_map(-1), width=3).grid(row=0, column=1, padx=(8, 3))
         self.flat_button(top, "+", lambda: self.zoom_map(1), width=3).grid(row=0, column=2, padx=3)
         self.flat_button(top, "Use View", self.use_map_view, primary=True).grid(row=0, column=3, padx=3)
@@ -630,6 +641,14 @@ class DesktopApp(tk.Tk):
         self.map_canvas.bind("<MouseWheel>", self.on_mouse_wheel)
         self.map_canvas.bind("<Configure>", lambda _event: self.schedule_preview())
         return frame
+
+    def resize_preview_status(self, event) -> None:
+        self.preview_status_canvas.itemconfigure(self.preview_status_text, width=max(event.width - 4, 120))
+
+    def set_preview_status(self, text: str) -> None:
+        self.vars["preview_status"].set(text)
+        if hasattr(self, "preview_status_canvas"):
+            self.preview_status_canvas.itemconfigure(self.preview_status_text, text=text)
 
     def build_actions(self, parent: ttk.Frame) -> ttk.Frame:
         frame = self.section_frame(parent, "Export")
@@ -834,7 +853,7 @@ class DesktopApp(tk.Tk):
         self.preview_button.configure(state="disabled")
         self.preview_render_id += 1
         render_id = self.preview_render_id
-        self.vars["preview_status"].set(f"Loading map view at zoom {self.map_zoom}...")
+        self.set_preview_status(f"Loading zoom {self.map_zoom}...")
         self.preview_thread = threading.Thread(target=self.load_preview, args=(job, render_id), daemon=True)
         self.preview_thread.start()
 
@@ -1076,12 +1095,12 @@ class DesktopApp(tk.Tk):
         self.map_canvas.delete("all")
         self.map_canvas.create_image(0, 0, image=self.preview_image, anchor="nw", tags=("map-image",))
         self.draw_zoom_badge()
-        self.vars["preview_status"].set("Drag to pan, wheel or +/- to zoom, Use View to set export area.")
+        self.set_preview_status("Drag to pan, wheel or +/- to zoom. Use View to set export area.")
 
     def preview_failed(self, error: str) -> None:
         self.draw_preview_placeholder("Preview unavailable.\n\nCheck your internet connection, then click Refresh.")
         self.preview_image = None
-        self.vars["preview_status"].set(f"Preview failed: {error}")
+        self.set_preview_status(f"Preview failed: {error}")
 
     def validate_tile_url(self, url_template: str) -> None:
         if self.vars["source"].get() == "openfreemap-vector":
