@@ -22,6 +22,11 @@ DEFAULT_USER_AGENT = "eink-map-tiles/1.0.0 (+https://github.com/HarukiToreda/E-i
 MAX_MERCATOR_LAT = 85.05112878
 VECTOR_EXTENT = 4096
 MAP_ELEMENTS = ("land", "water", "roads", "highways", "paths", "buildings", "boundaries", "labels", "pois", "transit")
+DEFAULT_STYLE = "osm-eink"
+DEFAULT_BRIGHTNESS = 0.99
+DEFAULT_CONTRAST = 1.15
+DEFAULT_THRESHOLD = 120
+DEFAULT_INCLUDE_ELEMENTS = [element for element in MAP_ELEMENTS if element not in {"buildings", "pois"}]
 DEFAULT_ATTRIBUTION = {
     "map_data": "\u00a9 OpenStreetMap contributors",
     "map_data_license": "Open Database License (ODbL) 1.0",
@@ -168,11 +173,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--center-lon", type=float, help="Center longitude for a radius download")
     parser.add_argument("--radius-km", type=float, help="Radius in kilometers when using --center-lat")
     parser.add_argument("--zooms", type=parse_zooms, help="Zooms like 6-10 or 6,8,12")
-    parser.add_argument("--style", default="osm", help="Style folder name")
+    parser.add_argument("--style", default=DEFAULT_STYLE, help="Style folder name")
     parser.add_argument(
         "--source",
         choices=["xyz", "openfreemap-vector"],
-        default="xyz",
+        default="openfreemap-vector",
         help="Tile source type. openfreemap-vector downloads open vector tiles and renders them locally.",
     )
     parser.add_argument(
@@ -202,13 +207,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="Image conversion mode. grayscale is the default for e-ink experiments.",
     )
     parser.add_argument("--colors", type=int, default=256, help="Palette colors for --mode palette")
-    parser.add_argument("--brightness", type=float, default=1.0, help="Brightness multiplier")
-    parser.add_argument("--contrast", type=float, default=1.0, help="Contrast multiplier")
-    parser.add_argument("--threshold", type=int, default=201, help="Black/white cutoff for --mode mono")
+    parser.add_argument("--brightness", type=float, default=DEFAULT_BRIGHTNESS, help="Brightness multiplier")
+    parser.add_argument("--contrast", type=float, default=DEFAULT_CONTRAST, help="Contrast multiplier")
+    parser.add_argument("--threshold", type=int, default=DEFAULT_THRESHOLD, help="Black/white cutoff for --mode mono")
     parser.add_argument(
         "--include-elements",
         type=parse_elements,
-        default=list(MAP_ELEMENTS),
+        default=list(DEFAULT_INCLUDE_ELEMENTS),
         help="Comma-separated vector-style element categories to include in the manifest.",
     )
     return parser
@@ -323,8 +328,21 @@ def render_openfreemap_tile(
     elements: list[str] | tuple[str, ...] | None = None,
     style: str = "osm-eink",
 ) -> None:
+    image = render_openfreemap_image(tile, user_agent, timeout, retries, elements, style)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    image.save(destination, format="PNG", optimize=True)
+
+
+def render_openfreemap_image(
+    tile: Tile,
+    user_agent: str,
+    timeout: float,
+    retries: int,
+    elements: list[str] | tuple[str, ...] | None = None,
+    style: str = "osm-eink",
+):
     from mapbox_vector_tile import decode
-    from PIL import Image, ImageDraw, ImageFont
+    from PIL import Image, ImageDraw
 
     selected = set(elements if elements is not None else MAP_ELEMENTS)
     raw = fetch_bytes(tile_url(OPENFREEMAP_VECTOR_TEMPLATE, tile), user_agent, timeout, retries)
@@ -351,9 +369,7 @@ def render_openfreemap_tile(
         draw_labels(draw, data, tile.z, load_label_font(tile.z))
     if "pois" in selected:
         draw_pois(draw, data, tile.z, load_label_font(tile.z, small=True))
-
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    image.save(destination, format="PNG", optimize=True)
+    return image
 
 
 def is_topo_style(style: str | None) -> bool:
@@ -384,7 +400,13 @@ def fetch_terrain_image(tile: Tile, user_agent: str, timeout: float, retries: in
     terrain_tile = Tile(z=terrain_z, x=tile.x // scale, y=tile.y // scale)
     data = fetch_bytes(tile_url(TERRAIN_TERRARIUM_TEMPLATE, terrain_tile), user_agent, timeout, retries)
     with Image.open(BytesIO(data)) as image:
-        return image.convert("RGB")
+        terrain = image.convert("RGB")
+    if scale > 1:
+        crop_size = max(1, 256 // scale)
+        offset_x = (tile.x % scale) * crop_size
+        offset_y = (tile.y % scale) * crop_size
+        terrain = terrain.crop((offset_x, offset_y, offset_x + crop_size, offset_y + crop_size)).resize((256, 256), Image.Resampling.BILINEAR)
+    return terrain
 
 
 def decode_terrarium(image) -> list[list[float]]:
@@ -787,6 +809,9 @@ def write_manifest(output_root: Path, args: argparse.Namespace, bbox: BBox, tile
         "single-map": "/map",
         "meshtastic-sd": f"/maps/{args.style}",
     }[args.layout]
+    attribution = dict(DEFAULT_ATTRIBUTION)
+    if not is_topo_style(args.style):
+        attribution.pop("terrain", None)
     manifest = {
         "created_utc": datetime.now(timezone.utc).isoformat(),
         "layout": args.layout,
@@ -812,7 +837,7 @@ def write_manifest(output_root: Path, args: argparse.Namespace, bbox: BBox, tile
             "include": args.include_elements,
             "exclude": [element for element in MAP_ELEMENTS if element not in args.include_elements],
         },
-        "attribution": DEFAULT_ATTRIBUTION,
+        "attribution": attribution,
     }
     output_root.mkdir(parents=True, exist_ok=True)
     (output_root / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")

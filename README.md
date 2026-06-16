@@ -34,7 +34,7 @@ Basic flow:
 1. Run `EinkMapTiles.exe`.
 2. Pan and zoom the map preview.
 3. Click **Use View** to make the visible map your export area.
-4. Leave **Source preset** on **OpenFreeMap open vector tiles**.
+4. Leave **Map Source** on **OpenFreeMap open vector tiles**.
 5. Choose zoom levels and e-paper settings.
 6. Click **Estimate** to check tile count.
 7. Click **Export Tiles**.
@@ -200,10 +200,12 @@ Additional attribution may be required by the tile source or renderer.
 
 ## CLI
 
-The desktop app wraps the CLI. You can also run the CLI directly with the built-in OpenFreeMap source:
+The desktop app wraps the CLI. The CLI defaults to the same OpenFreeMap source, `osm-eink` style, grayscale mode, and e-paper tuning used by the desktop app.
+
+Run the CLI directly with an explicit area and zoom range:
 
 ```powershell
-eink-map-tiles --source openfreemap-vector --bbox="-122.55,47.45,-122.15,47.75" --zooms 6-12 --mode grayscale --contrast 1.15 --brightness 0.99 --threshold 120 --zip
+eink-map-tiles --bbox="-122.55,47.45,-122.15,47.75" --zooms 6-12 --zip
 ```
 
 Preview tile count without downloading:
@@ -223,7 +225,7 @@ Useful CLI options:
 --brightness VALUE
 --contrast VALUE
 --threshold VALUE
---elements land,water,roads,highways,paths,boundaries,labels,transit
+--include-elements land,water,roads,highways,paths,boundaries,labels,transit
 --layout inkhud-dev|style-root|single-map|meshtastic-sd
 --output PATH
 --zip
@@ -233,7 +235,7 @@ Useful CLI options:
 Topo export example:
 
 ```powershell
-eink-map-tiles --source openfreemap-vector --style osm-eink-topo --bbox="-74.30,40.80,-73.80,41.10" --zooms 13-14 --mode grayscale --contrast 1.15 --brightness 0.99 --zip
+eink-map-tiles --style osm-eink-topo --bbox="-74.30,40.80,-73.80,41.10" --zooms 13-14 --zip
 ```
 
 ## Rebuild The Exe

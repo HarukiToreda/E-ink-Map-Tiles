@@ -5,7 +5,6 @@ import json
 import math
 import queue
 import re
-import tempfile
 import threading
 import tkinter as tk
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -19,11 +18,7 @@ from . import cli
 
 
 DEFAULT_OUTPUT_BASE = Path.home() / "Downloads" / "EinkMapTiles"
-DEFAULT_BRIGHTNESS = 0.99
-DEFAULT_CONTRAST = 1.15
-DEFAULT_THRESHOLD = 120
 DESKTOP_RATE_LIMIT_SECONDS = 0.05
-DEFAULT_ELEMENTS = [element for element in cli.MAP_ELEMENTS if element not in {"buildings", "pois"}]
 ELEMENT_LABELS = {
     "land": "Land",
     "water": "Water",
@@ -214,28 +209,28 @@ class DesktopApp(tk.Tk):
             "radius_km": tk.StringVar(value="1500"),
             "min_zoom": tk.StringVar(value="4"),
             "max_zoom": tk.StringVar(value="8"),
-            "style": tk.StringVar(value="osm-eink"),
+            "style": tk.StringVar(value=cli.DEFAULT_STYLE),
             "layout": tk.StringVar(value="inkhud-dev"),
             "mode": tk.StringVar(value="grayscale"),
-            "brightness": tk.DoubleVar(value=DEFAULT_BRIGHTNESS),
-            "contrast": tk.DoubleVar(value=DEFAULT_CONTRAST),
-            "threshold": tk.DoubleVar(value=DEFAULT_THRESHOLD),
+            "brightness": tk.DoubleVar(value=cli.DEFAULT_BRIGHTNESS),
+            "contrast": tk.DoubleVar(value=cli.DEFAULT_CONTRAST),
+            "threshold": tk.DoubleVar(value=cli.DEFAULT_THRESHOLD),
             "output": tk.StringVar(value=str(DEFAULT_OUTPUT_BASE / f"osm-eink-{timestamp}")),
             "tile_count": tk.StringVar(value="Estimate: not calculated"),
             "preview_status": tk.StringVar(value="Loading preview..."),
             "status": tk.StringVar(value="Ready"),
             "progress_text": tk.StringVar(value="No export running"),
             "progress_value": tk.DoubleVar(value=0),
-            "brightness_text": tk.StringVar(value=f"{DEFAULT_BRIGHTNESS:.2f}"),
-            "contrast_text": tk.StringVar(value=f"{DEFAULT_CONTRAST:.2f}"),
-            "threshold_text": tk.StringVar(value=f"{DEFAULT_THRESHOLD:.0f}"),
+            "brightness_text": tk.StringVar(value=f"{cli.DEFAULT_BRIGHTNESS:.2f}"),
+            "contrast_text": tk.StringVar(value=f"{cli.DEFAULT_CONTRAST:.2f}"),
+            "threshold_text": tk.StringVar(value=f"{cli.DEFAULT_THRESHOLD:.0f}"),
             "collapse_map_source": tk.BooleanVar(value=False),
             "collapse_area": tk.BooleanVar(value=False),
             "collapse_export_settings": tk.BooleanVar(value=True),
             "collapse_map_elements": tk.BooleanVar(value=True),
         }
         for element in cli.MAP_ELEMENTS:
-            variables[f"element_{element}"] = tk.BooleanVar(value=element in DEFAULT_ELEMENTS)
+            variables[f"element_{element}"] = tk.BooleanVar(value=element in cli.DEFAULT_INCLUDE_ELEMENTS)
         return variables
 
     def configure_styles(self) -> None:
@@ -1011,27 +1006,20 @@ class DesktopApp(tk.Tk):
         self.draw_zoom_badge()
 
     def render_preview_vector_tile(self, tile: cli.Tile, job: dict[str, Any]):
-        from PIL import Image
-
         elements = tuple(job["elements"]["include"])
         cache_key = ("openfreemap-vector", tile.z, tile.x, tile.y, job.get("style", "osm-eink"), elements)
         cached = self.preview_tile_cache.get(cache_key)
         if cached is not None:
             return cached.copy()
 
-        with tempfile.TemporaryDirectory(prefix="eink-map-preview-") as temp_dir:
-            tile_path = Path(temp_dir) / "tile.png"
-            cli.render_openfreemap_tile(
-                tile,
-                tile_path,
-                cli.DEFAULT_USER_AGENT,
-                timeout=12,
-                retries=2,
-                elements=list(elements),
-                style=str(job.get("style", "osm-eink")),
-            )
-            with Image.open(tile_path) as image:
-                rendered = image.convert("RGBA")
+        rendered = cli.render_openfreemap_image(
+            tile,
+            cli.DEFAULT_USER_AGENT,
+            timeout=12,
+            retries=2,
+            elements=list(elements),
+            style=str(job.get("style", "osm-eink")),
+        ).convert("RGBA")
         self.preview_tile_cache[cache_key] = rendered.copy()
         return rendered
 
