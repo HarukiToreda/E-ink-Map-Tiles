@@ -786,8 +786,29 @@ class DesktopApp(tk.Tk):
         self.estimate_tiles()
         self.schedule_preview()
 
-    def zoom_map(self, delta: int) -> None:
-        self.map_zoom = cli.clamp(self.map_zoom + delta, 2, 14)
+    def zoom_map(self, delta: int, anchor: tuple[int, int] | None = None) -> None:
+        old_zoom = self.map_zoom
+        new_zoom = cli.clamp(old_zoom + delta, 2, 14)
+        if new_zoom == old_zoom:
+            return
+
+        if anchor is not None:
+            width = max(self.map_canvas.winfo_width(), 320)
+            height = max(self.map_canvas.winfo_height(), 260)
+            anchor_x, anchor_y = anchor
+            old_center_x, old_center_y = self.lon_lat_to_world_pixel(self.map_center_lon, self.map_center_lat, old_zoom)
+            anchor_world_x = old_center_x - width / 2 + anchor_x
+            anchor_world_y = old_center_y - height / 2 + anchor_y
+            anchor_lon, anchor_lat = self.world_pixel_to_lon_lat(anchor_world_x, anchor_world_y, old_zoom)
+
+            new_anchor_x, new_anchor_y = self.lon_lat_to_world_pixel(anchor_lon, anchor_lat, new_zoom)
+            new_center_x = new_anchor_x - anchor_x + width / 2
+            new_center_y = new_anchor_y - anchor_y + height / 2
+            new_lon, new_lat = self.world_pixel_to_lon_lat(new_center_x, new_center_y, new_zoom)
+            self.map_center_lon = cli.normalize_lon(new_lon)
+            self.map_center_lat = max(min(new_lat, cli.MAX_MERCATOR_LAT), -cli.MAX_MERCATOR_LAT)
+
+        self.map_zoom = new_zoom
         self.draw_preview_placeholder(f"Zoom {self.map_zoom}. Loading map...")
         self.schedule_preview(delay_ms=450)
 
@@ -812,7 +833,7 @@ class DesktopApp(tk.Tk):
         self.schedule_preview(delay_ms=250)
 
     def on_mouse_wheel(self, event) -> None:
-        self.zoom_map(1 if event.delta > 0 else -1)
+        self.zoom_map(1 if event.delta > 0 else -1, anchor=(event.x, event.y))
 
     def schedule_preview(self, delay_ms: int = 350) -> None:
         self.preview_render_id += 1
