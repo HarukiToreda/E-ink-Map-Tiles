@@ -43,7 +43,6 @@ ELEMENT_LABELS = {
     "pois": "POI",
     "transit": "Transit",
 }
-PREVIEW_RASTER_TEMPLATE = "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
 SOURCE_PRESETS = {
     "OpenFreeMap open vector tiles": {
         "source": "openfreemap-vector",
@@ -186,7 +185,6 @@ class DesktopApp(tk.Tk):
         self.export_thread: threading.Thread | None = None
         self.preview_thread: threading.Thread | None = None
         self.preview_pending = False
-        self.preview_pending_exact = False
         self.last_output: Path | None = None
         self.preview_image: tk.PhotoImage | None = None
         self.map_center_lat = 39.5
@@ -196,7 +194,6 @@ class DesktopApp(tk.Tk):
         self.map_drag_center: tuple[float, float] | None = None
         self.preview_render_id = 0
         self.preview_after_id: str | None = None
-        self.preview_exact_after_id: str | None = None
         self.live_update_after_id: str | None = None
         self.preview_tile_cache: dict[tuple, Any] = {}
         self.export_total = 0
@@ -746,7 +743,7 @@ class DesktopApp(tk.Tk):
                     "(c) OpenStreetMap contributors, ODbL 1.0.",
                     "",
                     "Default exports use OpenFreeMap vector tiles and local rendering.",
-                    "The preview uses OSM raster tiles only for interactive viewing and caches them locally for at least 7 days.",
+                    "The preview uses the same local vector renderer as OpenFreeMap exports.",
                     "",
                     "Bundled libraries include Pillow, mapbox-vector-tile, Shapely, pyclipper, protobuf, and NumPy.",
                     "See NOTICE.md in the repository or release folder for dependency license notes.",
@@ -809,8 +806,13 @@ class DesktopApp(tk.Tk):
             self.map_center_lat = max(min(new_lat, cli.MAX_MERCATOR_LAT), -cli.MAX_MERCATOR_LAT)
 
         self.map_zoom = new_zoom
-        self.draw_preview_placeholder(f"Zoom {self.map_zoom}. Loading map...")
-        self.schedule_preview(delay_ms=450)
+        self.set_preview_status(f"Rendering export preview z{self.map_zoom}...")
+        if self.preview_image is None:
+            self.draw_preview_placeholder(f"Rendering export preview z{self.map_zoom}...")
+        else:
+            self.map_canvas.delete("zoom-badge")
+            self.draw_zoom_badge()
+        self.schedule_preview(delay_ms=250)
 
     def start_map_drag(self, event) -> None:
         self.map_drag_start = (event.x, event.y)
@@ -842,21 +844,7 @@ class DesktopApp(tk.Tk):
                 self.after_cancel(self.preview_after_id)
             except tk.TclError:
                 pass
-        if self.preview_exact_after_id is not None:
-            try:
-                self.after_cancel(self.preview_exact_after_id)
-            except tk.TclError:
-                pass
-            self.preview_exact_after_id = None
         self.preview_after_id = self.after(delay_ms, self.refresh_preview)
-
-    def schedule_exact_preview(self, delay_ms: int = 800) -> None:
-        if self.preview_exact_after_id is not None:
-            try:
-                self.after_cancel(self.preview_exact_after_id)
-            except tk.TclError:
-                pass
-        self.preview_exact_after_id = self.after(delay_ms, lambda: self.refresh_preview(exact=True))
 
     def choose_output(self) -> None:
         selected = filedialog.askdirectory(initialdir=str(DEFAULT_OUTPUT_BASE))
@@ -907,22 +895,12 @@ class DesktopApp(tk.Tk):
         self.vars["tile_count"].set(f"Estimate: {len(tiles):,} tiles across zooms {job['zooms'][0]}-{job['zooms'][-1]}")
         self.vars["status"].set("Estimate updated")
 
-    def refresh_preview(self, exact: bool = False) -> None:
-        if not exact and self.preview_exact_after_id is not None:
-            try:
-                self.after_cancel(self.preview_exact_after_id)
-            except tk.TclError:
-                pass
-            self.preview_exact_after_id = None
+    def refresh_preview(self) -> None:
         if self.preview_thread and self.preview_thread.is_alive():
             self.preview_pending = True
-            self.preview_pending_exact = self.preview_pending_exact or exact
             return
         self.preview_after_id = None
-        if exact:
-            self.preview_exact_after_id = None
         self.preview_pending = False
-        self.preview_pending_exact = False
         try:
             job = self.build_job()
             self.validate_tile_url(job["urlTemplate"])
@@ -933,10 +911,8 @@ class DesktopApp(tk.Tk):
         self.preview_button.configure(state="disabled")
         self.preview_render_id += 1
         render_id = self.preview_render_id
-        if exact and job["source"] == "openfreemap-vector":
-            self.set_preview_status(f"Rendering export preview z{self.map_zoom}...")
-        else:
-            self.set_preview_status(f"Loading fast preview z{self.map_zoom}...")
+        exact = True
+        self.set_preview_status(f"Rendering export preview z{self.map_zoom}...")
         self.preview_thread = threading.Thread(target=self.load_preview, args=(job, render_id, exact), daemon=True)
         self.preview_thread.start()
 
@@ -945,23 +921,15 @@ class DesktopApp(tk.Tk):
             image = self.make_preview_image(job, exact=exact)
             self.after(0, lambda: self.show_preview_image(image, render_id, exact))
         except Exception as exc:  # noqa: BLE001 - report worker errors in GUI.
-            if exact:
-                self.after(0, lambda: self.exact_preview_failed(str(exc)))
-            else:
-                self.after(0, lambda: self.preview_failed(str(exc)))
+            self.after(0, lambda: self.preview_failed(str(exc)))
         finally:
             self.after(0, self.finish_preview_thread)
 
     def finish_preview_thread(self) -> None:
         self.preview_button.configure(state="normal")
         if self.preview_pending:
-            exact = self.preview_pending_exact
             self.preview_pending = False
-            self.preview_pending_exact = False
-            if exact:
-                self.schedule_exact_preview(delay_ms=200)
-            else:
-                self.schedule_preview(delay_ms=200)
+            self.schedule_preview(delay_ms=200)
 
     def make_preview_image(self, job: dict[str, Any], exact: bool = False):
         from PIL import Image, ImageDraw
@@ -996,17 +964,13 @@ class DesktopApp(tk.Tk):
             if exact and job["source"] == "openfreemap-vector":
                 image = self.render_preview_vector_tile(tile_id, job)
                 image = self.convert_preview_tile(image, job, exact=True)
-            elif job["source"] == "openfreemap-vector":
-                url = cli.tile_url(PREVIEW_RASTER_TEMPLATE, tile_id)
-                image = self.fetch_preview_tile(url)
-                image = self.convert_preview_tile(image, job, exact=False)
             else:
                 url = cli.tile_url(job["urlTemplate"], tile_id)
                 image = self.fetch_preview_tile(url)
                 image = self.convert_preview_tile(image, job, exact=True)
             return paste_x, paste_y, image.convert("RGB")
 
-        max_workers = 3 if exact and job["source"] == "openfreemap-vector" else 6
+        max_workers = 6
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = [executor.submit(render_tile, tile_job) for tile_job in tile_jobs]
             for future in as_completed(futures):
@@ -1021,7 +985,7 @@ class DesktopApp(tk.Tk):
         from PIL import ImageDraw, ImageFont
 
         draw = ImageDraw.Draw(canvas)
-        text = "(c) OpenStreetMap contributors - export preview" if exact else "(c) OpenStreetMap contributors - fast preview"
+        text = "(c) OpenStreetMap contributors - export preview"
         font = ImageFont.load_default()
         box = draw.textbbox((0, 0), text, font=font)
         width = box[2] - box[0] + 10
@@ -1195,20 +1159,12 @@ class DesktopApp(tk.Tk):
         self.map_canvas.delete("all")
         self.map_canvas.create_image(0, 0, image=self.preview_image, anchor="nw", tags=("map-image",))
         self.draw_zoom_badge()
-        if exact:
-            self.set_preview_status(f"Export preview z{self.map_zoom}: matches downloaded tile rendering.")
-        else:
-            self.set_preview_status("High-detail preview. Settling into export preview...")
-            if self.vars["source"].get() == "openfreemap-vector":
-                self.schedule_exact_preview()
+        self.set_preview_status(f"Export preview z{self.map_zoom}: matches downloaded tile rendering.")
 
     def preview_failed(self, error: str) -> None:
         self.draw_preview_placeholder("Preview unavailable.\n\nCheck your internet connection, then click Refresh.")
         self.preview_image = None
         self.set_preview_status(f"Preview failed: {error}")
-
-    def exact_preview_failed(self, error: str) -> None:
-        self.set_preview_status(f"Export preview failed; showing fast preview. {error}")
 
     def validate_tile_url(self, url_template: str) -> None:
         if self.vars["source"].get() == "openfreemap-vector":
