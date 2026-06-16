@@ -2,6 +2,7 @@
 /.ruff_cache/
 /build/
 /dist/
+/release/
 /.build-venv/
 /*.spec
 /htmlcov/
