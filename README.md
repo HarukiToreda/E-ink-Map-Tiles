@@ -16,7 +16,7 @@ This project is focused on the tile asset pipeline, not firmware integration. It
 - Exports a folder and zip bundle with `manifest.json` and `ATTRIBUTION.txt`.
 - Supports map element toggles, including land, water, roads, highways, paths, buildings, boundaries, labels, POI, and transit.
 - Supports grayscale, mono, palette, and original output modes.
-- Includes an alternate topo style with high-zoom hillshade, contour lines, and clearer trail/path rendering.
+- Includes regular map overzoom and an alternate topo style for crisp closer inspection without raster blur.
 - Shows export estimates, progress, tile counts, and an export log.
 
 The workflow is fully local and does not require a separate tile server.
@@ -56,7 +56,7 @@ Map controls:
 
 The preview keeps the current map visible while a new export preview is rendering, then swaps in the updated render when it is ready.
 
-The standard `osm-eink` map uses OpenFreeMap vector detail through zoom 14. The `osm-eink-topo` style can preview/export deeper, through zoom 16. At zooms 15-16 it uses deeper terrain data plus crisp overzoomed zoom-14 OpenFreeMap vectors, so labels, water, land shapes, and trails can remain visible without raster blur.
+The standard `osm-eink` map uses OpenFreeMap vector detail through zoom 14, then can preview/export deeper through zoom 16 by redrawing zoom-14 OpenFreeMap vectors into deeper child tiles. Labels, water, land shapes, roads, and trails stay crisp without raster blur. The `osm-eink-topo` style also adds deeper terrain data.
 
 ## Export Panel
 
@@ -119,14 +119,14 @@ Output modes:
 
 Map styles:
 
-- `osm-eink`: default clean e-paper map.
+- `osm-eink`: default clean e-paper map. It can export zooms 15-16 by clipping and redrawing zoom-14 OpenFreeMap vector data into deeper child tiles. This stays sharp, but it does not add new source detail beyond zoom 14.
 - `osm-eink-topo`: alternate e-paper topo map with land, water, labels, trails/paths, hillshade, and contour lines from Mapzen Terrain Tiles on AWS Open Data. Regular roads, highways, buildings, boundaries, POI, and transit are disabled by default for this style, though boundaries can be enabled in **Map Elements**.
 
 Zoom guidance:
 
-- Use `osm-eink` for normal map exports up to zoom 14.
+- Use `osm-eink` for regular map exports up to zoom 16 when crisp generalized detail is acceptable.
 - Use `osm-eink-topo` for terrain-focused topo exports up to zoom 16.
-- At topo zooms above 14, the app keeps vector content sharp by clipping and redrawing zoom-14 OpenFreeMap vector data into the deeper child tiles. This avoids blurry scaling, but it does not add brand-new road/building/label detail beyond what exists at zoom 14.
+- At zooms above 14, the app keeps vector content sharp by clipping and redrawing zoom-14 OpenFreeMap vector data into the deeper child tiles. This avoids blurry scaling, but it does not add brand-new road/building/label detail beyond what exists at zoom 14.
 
 Output layouts:
 
@@ -244,6 +244,12 @@ Topo export example:
 
 ```powershell
 eink-map-tiles --style osm-eink-topo --bbox="-74.30,40.80,-73.80,41.10" --zooms 4-16 --zip
+```
+
+Regular high-zoom example:
+
+```powershell
+eink-map-tiles --style osm-eink --bbox="-74.30,40.80,-73.80,41.10" --zooms 13-16 --zip
 ```
 
 ## Rebuild The Exe

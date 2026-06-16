@@ -18,7 +18,8 @@ from pathlib import Path
 DEFAULT_URL_TEMPLATE = None
 OPENFREEMAP_VECTOR_TEMPLATE = "https://tiles.openfreemap.org/planet/latest/{z}/{x}/{y}.pbf"
 OPENFREEMAP_MAX_DETAIL_ZOOM = 14
-TOPO_MAX_DETAIL_ZOOM = 16
+OVERZOOM_MAX_DETAIL_ZOOM = 16
+TOPO_MAX_DETAIL_ZOOM = OVERZOOM_MAX_DETAIL_ZOOM
 TERRAIN_TERRARIUM_TEMPLATE = "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png"
 DEFAULT_USER_AGENT = "eink-map-tiles/1.0.0 (+https://github.com/HarukiToreda/E-ink-Map-Tiles)"
 MAX_MERCATOR_LAT = 85.05112878
@@ -374,7 +375,7 @@ def render_openfreemap_image(
 
     selected = set(elements if elements is not None else MAP_ELEMENTS)
     topo = is_topo_style(style)
-    if topo and tile.z > OPENFREEMAP_MAX_DETAIL_ZOOM:
+    if supports_vector_overzoom(style) and tile.z > OPENFREEMAP_MAX_DETAIL_ZOOM:
         data = fetch_overzoomed_openfreemap_data(tile, user_agent, timeout, retries)
     else:
         raw = fetch_bytes(tile_url(OPENFREEMAP_VECTOR_TEMPLATE, tile), user_agent, timeout, retries)
@@ -406,6 +407,11 @@ def render_openfreemap_image(
 
 def is_topo_style(style: str | None) -> bool:
     return "topo" in (style or "").lower()
+
+
+def supports_vector_overzoom(style: str | None) -> bool:
+    style_name = (style or DEFAULT_STYLE).lower()
+    return style_name == DEFAULT_STYLE or is_topo_style(style_name)
 
 
 def fetch_overzoomed_openfreemap_data(tile: Tile, user_agent: str, timeout: float, retries: int) -> dict:
@@ -980,13 +986,14 @@ def run(args: argparse.Namespace) -> int:
         args.include_elements = list(DEFAULT_TOPO_ELEMENTS if is_topo_style(args.style) else DEFAULT_INCLUDE_ELEMENTS)
     if args.source == "openfreemap-vector":
         max_zoom = max(args.zooms)
-        if not is_topo_style(args.style) and max_zoom > OPENFREEMAP_MAX_DETAIL_ZOOM:
+        if not supports_vector_overzoom(args.style) and max_zoom > OPENFREEMAP_MAX_DETAIL_ZOOM:
             raise SystemExit(
                 f"OpenFreeMap map detail currently stops at zoom {OPENFREEMAP_MAX_DETAIL_ZOOM}. "
-                "Use --style osm-eink-topo for deeper terrain-focused exports."
+                "Use --style osm-eink for crisp generalized map overzoom, "
+                "or --style osm-eink-topo for terrain-focused exports."
             )
-        if is_topo_style(args.style) and max_zoom > TOPO_MAX_DETAIL_ZOOM:
-            raise SystemExit(f"Topo exports are supported up to zoom {TOPO_MAX_DETAIL_ZOOM}.")
+        if supports_vector_overzoom(args.style) and max_zoom > OVERZOOM_MAX_DETAIL_ZOOM:
+            raise SystemExit(f"Overzoom exports are supported up to zoom {OVERZOOM_MAX_DETAIL_ZOOM}.")
     tile_count = count_tiles_for_bbox(bbox, args.zooms)
     print(f"Area: west={bbox.west:.6f}, south={bbox.south:.6f}, east={bbox.east:.6f}, north={bbox.north:.6f}")
     print(f"Tiles: {tile_count} across zooms {','.join(map(str, args.zooms))}")

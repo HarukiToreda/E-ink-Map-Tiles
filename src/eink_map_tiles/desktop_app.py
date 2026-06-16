@@ -414,7 +414,7 @@ class DesktopApp(tk.Tk):
 
     def max_preview_zoom_for_style(self, style: str | None = None) -> int:
         style = self.vars["style"].get() if style is None else style
-        return MAX_PREVIEW_ZOOM if cli.is_topo_style(style) else NORMAL_PREVIEW_MAX_ZOOM
+        return MAX_PREVIEW_ZOOM if cli.supports_vector_overzoom(style) else NORMAL_PREVIEW_MAX_ZOOM
 
     def update_slider_labels(self) -> None:
         self.vars["brightness_text"].set(f"{float(self.vars['brightness'].get()):.2f}")
@@ -1121,13 +1121,14 @@ class DesktopApp(tk.Tk):
         if not bool(self.vars["permission"].get()):
             raise ValueError("Confirm that exported tiles will keep required attribution.")
         max_zoom = max(job["zooms"])
-        if not cli.is_topo_style(job["style"]) and max_zoom > cli.OPENFREEMAP_MAX_DETAIL_ZOOM:
+        if not cli.supports_vector_overzoom(job["style"]) and max_zoom > cli.OPENFREEMAP_MAX_DETAIL_ZOOM:
             raise ValueError(
                 "OpenFreeMap map detail currently stops at zoom 14. "
-                "Use osm-eink-topo for deeper terrain-focused exports."
+                "Use osm-eink for crisp generalized map overzoom, "
+                "or osm-eink-topo for terrain-focused exports."
             )
-        if cli.is_topo_style(job["style"]) and max_zoom > MAX_PREVIEW_ZOOM:
-            raise ValueError(f"Topo exports are supported up to zoom {cli.TOPO_MAX_DETAIL_ZOOM}.")
+        if cli.supports_vector_overzoom(job["style"]) and max_zoom > MAX_PREVIEW_ZOOM:
+            raise ValueError(f"Overzoom exports are supported up to zoom {cli.OVERZOOM_MAX_DETAIL_ZOOM}.")
 
     def run_export(self, job: dict[str, Any], output: Path) -> None:
         try:
