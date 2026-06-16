@@ -2,19 +2,15 @@ from __future__ import annotations
 
 import io
 import json
-import hashlib
 import math
-import os
 import queue
 import re
 import tempfile
 import threading
 import tkinter as tk
-import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import redirect_stdout
 from datetime import datetime
-from io import BytesIO
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 from typing import Any
@@ -27,9 +23,6 @@ DEFAULT_BRIGHTNESS = 0.99
 DEFAULT_CONTRAST = 1.15
 DEFAULT_THRESHOLD = 120
 DESKTOP_RATE_LIMIT_SECONDS = 0.05
-PREVIEW_CACHE_DAYS = 7
-PREVIEW_CACHE_SECONDS = PREVIEW_CACHE_DAYS * 24 * 60 * 60
-PREVIEW_CACHE_DIR = Path(os.environ.get("LOCALAPPDATA", str(Path.home() / ".cache"))) / "EinkMapTiles" / "preview-tiles"
 DEFAULT_ELEMENTS = [element for element in cli.MAP_ELEMENTS if element not in {"buildings", "pois"}]
 ELEMENT_LABELS = {
     "land": "Land",
@@ -43,13 +36,8 @@ ELEMENT_LABELS = {
     "pois": "POI",
     "transit": "Transit",
 }
-SOURCE_PRESETS = {
-    "OpenFreeMap open vector tiles": {
-        "source": "openfreemap-vector",
-        "url": cli.OPENFREEMAP_VECTOR_TEMPLATE,
-        "help": "Default open map source. No setup needed.",
-    }
-}
+DEFAULT_SOURCE_NAME = "OpenFreeMap open vector tiles"
+DEFAULT_SOURCE_HELP = "Default open vector source. The app renders preview and export tiles locally."
 
 
 class QueueWriter(io.TextIOBase):
@@ -206,7 +194,6 @@ class DesktopApp(tk.Tk):
         self.build_ui()
         self.update_mode_sensitive_controls()
         self.bind_live_controls()
-        self.apply_source_preset()
         self.estimate_tiles()
         self.after(700, self.refresh_preview)
         self.poll_messages()
@@ -214,10 +201,9 @@ class DesktopApp(tk.Tk):
     def make_vars(self) -> dict[str, tk.Variable]:
         timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
         variables: dict[str, tk.Variable] = {
-            "source_preset": tk.StringVar(value="OpenFreeMap open vector tiles"),
             "source": tk.StringVar(value="openfreemap-vector"),
-            "source_help": tk.StringVar(value=SOURCE_PRESETS["OpenFreeMap open vector tiles"]["help"]),
-            "url": tk.StringVar(value=SOURCE_PRESETS["OpenFreeMap open vector tiles"]["url"]),
+            "source_help": tk.StringVar(value=DEFAULT_SOURCE_HELP),
+            "url": tk.StringVar(value=cli.OPENFREEMAP_VECTOR_TEMPLATE),
             "permission": tk.BooleanVar(value=True),
             "west": tk.StringVar(value="-125.000000"),
             "south": tk.StringVar(value="24.000000"),
@@ -460,28 +446,14 @@ class DesktopApp(tk.Tk):
         frame, content = self.collapsible_section(parent, "Map Source", "collapse_map_source")
         content.columnconfigure(0, weight=1)
 
-        ttk.Label(content, text="Source preset").grid(row=0, column=0, sticky="w")
-        preset = ttk.Combobox(
-            content,
-            textvariable=self.vars["source_preset"],
-            values=list(SOURCE_PRESETS),
-            state="readonly",
-        )
-        preset.grid(row=1, column=0, sticky="ew", pady=(2, 4))
-        preset.bind("<<ComboboxSelected>>", lambda _event: self.apply_source_preset())
-
-        ttk.Label(content, textvariable=self.vars["source_help"], style="Hint.TLabel").grid(row=2, column=0, sticky="ew")
-
-        self.source_url_label = ttk.Label(content, text="Source URL")
-        self.source_url_entry = ttk.Entry(content, textvariable=self.vars["url"])
-        self.source_url_label.grid(row=3, column=0, sticky="w", pady=(6, 0))
-        self.source_url_entry.grid(row=4, column=0, sticky="ew", pady=(2, 0))
+        ttk.Label(content, text=DEFAULT_SOURCE_NAME, style="Section.TLabel").grid(row=0, column=0, sticky="w")
+        ttk.Label(content, textvariable=self.vars["source_help"], style="Hint.TLabel").grid(row=1, column=0, sticky="ew", pady=(2, 4))
 
         ttk.Checkbutton(
             content,
             text="I will keep required map attribution with exported tiles.",
             variable=self.vars["permission"],
-        ).grid(row=5, column=0, sticky="w", pady=(4, 0))
+        ).grid(row=2, column=0, sticky="w", pady=(4, 0))
         return frame
 
     def build_area(self, parent: ttk.Frame) -> ttk.LabelFrame:
@@ -716,20 +688,6 @@ class DesktopApp(tk.Tk):
         self.log.grid_remove()
         return frame
 
-    def apply_source_preset(self) -> None:
-        preset = SOURCE_PRESETS.get(str(self.vars["source_preset"].get()), SOURCE_PRESETS["OpenFreeMap open vector tiles"])
-        self.vars["source"].set(preset["source"])
-        self.vars["source_help"].set(preset["help"])
-        if preset["url"]:
-            self.vars["url"].set(preset["url"])
-        if preset["source"] == "openfreemap-vector":
-            self.vars["permission"].set(True)
-            self.source_url_label.grid_remove()
-            self.source_url_entry.grid_remove()
-        else:
-            self.source_url_label.grid()
-            self.source_url_entry.grid()
-
     def selected_elements(self) -> list[str]:
         return [element for element in cli.MAP_ELEMENTS if bool(self.vars[f"element_{element}"].get())]
 
@@ -909,7 +867,6 @@ class DesktopApp(tk.Tk):
         self.preview_pending = False
         try:
             job = self.build_job()
-            self.validate_tile_url(job["urlTemplate"])
         except Exception as exc:  # noqa: BLE001 - show validation errors in GUI.
             messagebox.showerror("Cannot preview", str(exc))
             return
@@ -917,15 +874,14 @@ class DesktopApp(tk.Tk):
         self.preview_button.configure(state="disabled")
         self.preview_render_id += 1
         render_id = self.preview_render_id
-        exact = True
         self.set_preview_status(f"Rendering export preview z{self.map_zoom}...")
-        self.preview_thread = threading.Thread(target=self.load_preview, args=(job, render_id, exact), daemon=True)
+        self.preview_thread = threading.Thread(target=self.load_preview, args=(job, render_id), daemon=True)
         self.preview_thread.start()
 
-    def load_preview(self, job: dict[str, Any], render_id: int, exact: bool) -> None:
+    def load_preview(self, job: dict[str, Any], render_id: int) -> None:
         try:
-            image = self.make_preview_image(job, exact=exact)
-            self.after(0, lambda: self.show_preview_image(image, render_id, exact))
+            image = self.make_preview_image(job)
+            self.after(0, lambda: self.show_preview_image(image, render_id))
         except Exception as exc:  # noqa: BLE001 - report worker errors in GUI.
             self.after(0, lambda: self.preview_failed(str(exc)))
         finally:
@@ -937,7 +893,7 @@ class DesktopApp(tk.Tk):
             self.preview_pending = False
             self.schedule_preview(delay_ms=200)
 
-    def make_preview_image(self, job: dict[str, Any], exact: bool = False):
+    def make_preview_image(self, job: dict[str, Any]):
         from PIL import Image, ImageDraw
 
         bbox = cli.BBox(**job["bbox"])
@@ -967,13 +923,8 @@ class DesktopApp(tk.Tk):
 
         def render_tile(tile_job):
             tile_id, paste_x, paste_y = tile_job
-            if exact and job["source"] == "openfreemap-vector":
-                image = self.render_preview_vector_tile(tile_id, job)
-                image = self.convert_preview_tile(image, job, exact=True)
-            else:
-                url = cli.tile_url(job["urlTemplate"], tile_id)
-                image = self.fetch_preview_tile(url)
-                image = self.convert_preview_tile(image, job, exact=True)
+            image = self.render_preview_vector_tile(tile_id, job)
+            image = self.convert_preview_tile(image, job)
             return paste_x, paste_y, image.convert("RGB")
 
         max_workers = 6
@@ -984,10 +935,10 @@ class DesktopApp(tk.Tk):
                 canvas.paste(tile_image, (paste_x, paste_y))
 
         self.draw_preview_bbox(canvas, bbox, zoom, left_world, top_world)
-        self.draw_preview_attribution(canvas, exact=exact and job["source"] == "openfreemap-vector")
+        self.draw_preview_attribution(canvas)
         return canvas
 
-    def draw_preview_attribution(self, canvas, exact: bool = False) -> None:
+    def draw_preview_attribution(self, canvas) -> None:
         from PIL import ImageDraw, ImageFont
 
         draw = ImageDraw.Draw(canvas)
@@ -1084,53 +1035,7 @@ class DesktopApp(tk.Tk):
         self.preview_tile_cache[cache_key] = rendered.copy()
         return rendered
 
-    def fetch_preview_tile(self, url: str):
-        from PIL import Image
-
-        cache_key = ("xyz", url)
-        cached = self.preview_tile_cache.get(cache_key)
-        if cached is not None:
-            return cached.copy()
-
-        cache_path = self.preview_cache_path(url)
-        data = self.read_preview_cache(cache_path)
-        if data is None:
-            request = urllib.request.Request(url, headers={"User-Agent": cli.DEFAULT_USER_AGENT})
-            try:
-                with urllib.request.urlopen(request, timeout=12) as response:
-                    if response.status != 200:
-                        raise RuntimeError(f"HTTP {response.status} for {url}")
-                    data = response.read()
-                self.write_preview_cache(cache_path, data)
-            except Exception:
-                data = self.read_preview_cache(cache_path, allow_expired=True)
-                if data is None:
-                    raise
-        image = Image.open(BytesIO(data)).convert("RGBA")
-        self.preview_tile_cache[cache_key] = image.copy()
-        return image
-
-    def preview_cache_path(self, url: str) -> Path:
-        digest = hashlib.sha256(url.encode("utf-8")).hexdigest()
-        return PREVIEW_CACHE_DIR / digest[:2] / f"{digest}.png"
-
-    def read_preview_cache(self, cache_path: Path, allow_expired: bool = False) -> bytes | None:
-        try:
-            age = datetime.now().timestamp() - cache_path.stat().st_mtime
-            if not allow_expired and age > PREVIEW_CACHE_SECONDS:
-                return None
-            return cache_path.read_bytes()
-        except OSError:
-            return None
-
-    def write_preview_cache(self, cache_path: Path, data: bytes) -> None:
-        try:
-            cache_path.parent.mkdir(parents=True, exist_ok=True)
-            cache_path.write_bytes(data)
-        except OSError:
-            return
-
-    def convert_preview_tile(self, image, job: dict[str, Any], exact: bool = False):
+    def convert_preview_tile(self, image, job: dict[str, Any]):
         from PIL import Image, ImageEnhance
 
         image = image.convert("RGBA")
@@ -1142,21 +1047,7 @@ class DesktopApp(tk.Tk):
         gray = image.convert("L")
         if mode == "mono":
             threshold = int(job["threshold"])
-            if exact:
-                return gray.point(lambda pixel: 255 if pixel >= threshold else 0, mode="1")
-            return gray.point(
-                lambda pixel: 246
-                if pixel >= threshold + 42
-                else 218
-                if pixel >= threshold + 18
-                else 172
-                if pixel >= threshold
-                else 112
-                if pixel >= threshold - 28
-                else 48
-                if pixel >= threshold - 70
-                else 18
-            )
+            return gray.point(lambda pixel: 255 if pixel >= threshold else 0, mode="1")
         if mode == "grayscale":
             return gray
         if mode == "palette":
@@ -1164,7 +1055,7 @@ class DesktopApp(tk.Tk):
             return image.quantize(colors=colors)
         return image
 
-    def show_preview_image(self, image, render_id: int, exact: bool = False) -> None:
+    def show_preview_image(self, image, render_id: int) -> None:
         from PIL import ImageTk
 
         if render_id != self.preview_render_id:
@@ -1179,14 +1070,6 @@ class DesktopApp(tk.Tk):
         self.draw_preview_placeholder("Preview unavailable.\n\nCheck your internet connection, then click Refresh.")
         self.preview_image = None
         self.set_preview_status(f"Preview failed: {error}")
-
-    def validate_tile_url(self, url_template: str) -> None:
-        if self.vars["source"].get() == "openfreemap-vector":
-            return
-        if not url_template:
-            raise ValueError("Choose a source preset or enter an XYZ PNG tile URL.")
-        if "{z}" not in url_template or "{x}" not in url_template or "{y}" not in url_template:
-            raise ValueError("Tile URL must include {z}, {x}, and {y}.")
 
     def center_lon(self, bbox: cli.BBox) -> float:
         if bbox.west <= bbox.east:
@@ -1221,7 +1104,6 @@ class DesktopApp(tk.Tk):
         self.vars["progress_text"].set(f"Exporting 0 / {self.export_total:,} tiles...")
 
     def validate_export(self, job: dict[str, Any]) -> None:
-        self.validate_tile_url(job["urlTemplate"])
         if not bool(self.vars["permission"].get()):
             raise ValueError("Confirm that exported tiles will keep required attribution.")
 

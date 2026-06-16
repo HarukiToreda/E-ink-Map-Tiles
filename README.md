@@ -19,7 +19,7 @@ This project is focused on the tile asset pipeline, not firmware integration. It
 - Includes an alternate topo style with high-zoom hillshade, contour lines, and clearer trail/path rendering.
 - Shows export estimates, progress, tile counts, and an export log.
 
-There is no hosted website, GitHub Pages app, browser workflow, or separate tile server requirement.
+The workflow is fully local and does not require a separate tile server.
 
 ## Use The App
 
