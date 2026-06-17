@@ -1,6 +1,6 @@
 # E-ink Map Tiles
 
-Version 1.0.0
+Version 1.1.0
 
 Local-only Windows tool for generating e-paper-friendly offline map tiles for future InkHUD work in the Meshtastic firmware repo.
 
@@ -271,7 +271,7 @@ The build script also copies `README.md`, `LICENSE`, `NOTICE.md`, and `CHANGELOG
 
 ## Release Package
 
-The 1.0.0 Windows release package should include:
+The 1.1.0 Windows release package should include:
 
 ```text
 EinkMapTiles.exe
@@ -284,7 +284,7 @@ CHANGELOG.md
 Release zip naming:
 
 ```text
-EinkMapTiles-1.0.0-windows-x64.zip
+EinkMapTiles-1.1.0-windows-x64.zip
 ```
 
 ## Development

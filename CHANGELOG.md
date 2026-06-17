@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 1.1.0 - 2026-06-17
+
 - Added an alternate `osm-eink-topo` map style with hillshade and contour overlays from Mapzen Terrain Tiles on AWS Open Data.
 - Added regular `osm-eink` map exports through zoom 16 using crisp vector overzooming.
 - Made topo mode use its own cleaner default layer set: land, water, labels, and trails/paths.
