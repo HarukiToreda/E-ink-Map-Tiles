@@ -112,7 +112,7 @@ Output modes:
 
 - `grayscale`: 8-bit grayscale PNGs tuned for detailed e-paper map viewing.
 - `mono`: true 1-bit black/white PNGs for devices or tests that require binary output.
-- `inkhud`: preview/export processing that mirrors the InkHUD header pipeline.
+- `inkhud`: preview/export processing that mirrors the InkHUD header pipeline. When selected, unchanged sliders default to brightness `1.03` and contrast `2.41`.
 - `palette`: indexed-color PNGs.
 - `original`: rendered/source PNGs with no e-paper conversion.
 
@@ -172,6 +172,8 @@ tiles/{style}/{z}/{x}/{y}.png
 ```
 
 Use **Export for InkHUD** when you need an InkHUD firmware header instead of a normal tile bundle.
+
+**Export for InkHUD** also applies the InkHUD brightness and contrast defaults when the sliders are still unchanged.
 
 ## Legal Map Sources
 

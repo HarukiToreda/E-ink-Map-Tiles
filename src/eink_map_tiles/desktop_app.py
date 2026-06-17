@@ -21,6 +21,8 @@ from . import cli
 DEFAULT_OUTPUT_BASE = Path.home() / "Downloads" / "EinkMapTiles"
 DESKTOP_RATE_LIMIT_SECONDS = 0.05
 DESKTOP_TILE_LAYOUT = "inkhud-dev"
+INKHUD_DEFAULT_BRIGHTNESS = 1.03
+INKHUD_DEFAULT_CONTRAST = 2.41
 MIN_PREVIEW_ZOOM = 2
 MAX_PREVIEW_ZOOM = cli.TOPO_MAX_DETAIL_ZOOM
 NORMAL_PREVIEW_MAX_ZOOM = cli.OPENFREEMAP_MAX_DETAIL_ZOOM
@@ -190,6 +192,9 @@ class DesktopApp(tk.Tk):
         self.threshold_grid_options: dict[tk.Widget, dict[str, Any]] = {}
         self.applying_style_preset = False
         self.syncing_view_bounds = False
+        self.applying_mode_defaults = False
+        self.brightness_user_changed = False
+        self.contrast_user_changed = False
 
         self.vars = self.make_vars()
         self.configure_styles()
@@ -365,8 +370,8 @@ class DesktopApp(tk.Tk):
         preview_keys = ("mode", "brightness", "contrast", "threshold", "source", "url", "style")
         for key in preview_keys:
             self.vars[key].trace_add("write", lambda *_args: self.queue_live_update(preview=True, estimate=False))
-        self.vars["brightness"].trace_add("write", lambda *_args: self.update_slider_labels())
-        self.vars["contrast"].trace_add("write", lambda *_args: self.update_slider_labels())
+        self.vars["brightness"].trace_add("write", lambda *_args: self.on_brightness_changed())
+        self.vars["contrast"].trace_add("write", lambda *_args: self.on_contrast_changed())
         self.vars["threshold"].trace_add("write", lambda *_args: self.update_slider_labels())
         self.vars["mode"].trace_add("write", lambda *_args: self.update_mode_sensitive_controls())
         self.vars["style"].trace_add("write", lambda *_args: self.apply_style_preset())
@@ -428,6 +433,40 @@ class DesktopApp(tk.Tk):
         else:
             self.vars["threshold_text"].set("")
 
+    def on_brightness_changed(self) -> None:
+        if not self.applying_mode_defaults:
+            self.brightness_user_changed = True
+        self.update_slider_labels()
+
+    def on_contrast_changed(self) -> None:
+        if not self.applying_mode_defaults:
+            self.contrast_user_changed = True
+        self.update_slider_labels()
+
+    def should_apply_brightness_default(self) -> bool:
+        return not self.brightness_user_changed or math.isclose(float(self.vars["brightness"].get()), cli.DEFAULT_BRIGHTNESS, abs_tol=0.005)
+
+    def should_apply_contrast_default(self) -> bool:
+        return not self.contrast_user_changed or math.isclose(float(self.vars["contrast"].get()), cli.DEFAULT_CONTRAST, abs_tol=0.005)
+
+    def apply_inkhud_defaults_if_unchanged(self) -> None:
+        apply_brightness = self.should_apply_brightness_default()
+        apply_contrast = self.should_apply_contrast_default()
+        if not apply_brightness and not apply_contrast:
+            return
+
+        self.applying_mode_defaults = True
+        try:
+            if apply_brightness:
+                self.vars["brightness"].set(INKHUD_DEFAULT_BRIGHTNESS)
+                self.brightness_user_changed = False
+            if apply_contrast:
+                self.vars["contrast"].set(INKHUD_DEFAULT_CONTRAST)
+                self.contrast_user_changed = False
+        finally:
+            self.applying_mode_defaults = False
+        self.update_slider_labels()
+
     def update_mode_sensitive_controls(self) -> None:
         mode = self.vars["mode"].get()
         visible = mode == "mono"
@@ -438,6 +477,7 @@ class DesktopApp(tk.Tk):
                 widget.grid_remove()
         # InkHUD mode: uncheck Land so water renders through (matches export behavior)
         if mode == "inkhud":
+            self.apply_inkhud_defaults_if_unchanged()
             self.vars["element_land"].set(False)
         self.update_slider_labels()
 
@@ -1213,6 +1253,7 @@ class DesktopApp(tk.Tk):
         if self.export_thread and self.export_thread.is_alive():
             return
 
+        self.apply_inkhud_defaults_if_unchanged()
         clat = self.map_center_lat
         clng = self.map_center_lon
 
