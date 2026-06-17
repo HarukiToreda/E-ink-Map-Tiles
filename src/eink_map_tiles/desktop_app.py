@@ -20,6 +20,7 @@ from . import cli
 
 DEFAULT_OUTPUT_BASE = Path.home() / "Downloads" / "EinkMapTiles"
 DESKTOP_RATE_LIMIT_SECONDS = 0.05
+DESKTOP_TILE_LAYOUT = "inkhud-dev"
 MIN_PREVIEW_ZOOM = 2
 MAX_PREVIEW_ZOOM = cli.TOPO_MAX_DETAIL_ZOOM
 NORMAL_PREVIEW_MAX_ZOOM = cli.OPENFREEMAP_MAX_DETAIL_ZOOM
@@ -217,7 +218,6 @@ class DesktopApp(tk.Tk):
             "min_zoom": tk.StringVar(value="4"),
             "max_zoom": tk.StringVar(value="8"),
             "style": tk.StringVar(value=cli.DEFAULT_STYLE),
-            "layout": tk.StringVar(value="inkhud-dev"),
             "mode": tk.StringVar(value="grayscale"),
             "brightness": tk.DoubleVar(value=cli.DEFAULT_BRIGHTNESS),
             "contrast": tk.DoubleVar(value=cli.DEFAULT_CONTRAST),
@@ -371,7 +371,7 @@ class DesktopApp(tk.Tk):
         self.vars["mode"].trace_add("write", lambda *_args: self.update_mode_sensitive_controls())
         self.vars["style"].trace_add("write", lambda *_args: self.apply_style_preset())
 
-        export_keys = ("min_zoom", "max_zoom", "layout")
+        export_keys = ("min_zoom", "max_zoom")
         for key in export_keys:
             self.vars[key].trace_add("write", lambda *_args: self.queue_live_update(preview=False, estimate=True))
 
@@ -539,23 +539,14 @@ class DesktopApp(tk.Tk):
             width=12,
         ).grid(row=1, column=1, sticky="ew", padx=(6, 10), pady=(4, 0))
 
-        ttk.Label(content, text="Layout").grid(row=1, column=2, sticky="w", pady=(4, 0))
-        ttk.Combobox(
-            content,
-            textvariable=self.vars["layout"],
-            values=["inkhud-dev", "style-root", "single-map", "meshtastic-sd"],
-            state="readonly",
-            width=16,
-        ).grid(row=1, column=3, sticky="ew", padx=(6, 0), pady=(4, 0))
-
-        ttk.Label(content, text="Style").grid(row=2, column=0, sticky="w", pady=(4, 0))
+        ttk.Label(content, text="Style").grid(row=1, column=2, sticky="w", pady=(4, 0))
         ttk.Combobox(
             content,
             textvariable=self.vars["style"],
             values=["osm-eink", "osm-eink-topo"],
             state="readonly",
             width=16,
-        ).grid(row=2, column=1, columnspan=3, sticky="ew", padx=(6, 0), pady=(4, 0))
+        ).grid(row=1, column=3, sticky="ew", padx=(6, 0), pady=(4, 0))
 
         ttk.Label(content, text="Brightness").grid(row=3, column=0, sticky="w", pady=(6, 0))
         ttk.Scale(content, from_=0.6, to=1.6, variable=self.vars["brightness"], orient="horizontal").grid(
@@ -888,7 +879,7 @@ class DesktopApp(tk.Tk):
                 "include": self.selected_elements(),
                 "exclude": [element for element in cli.MAP_ELEMENTS if element not in self.selected_elements()],
             },
-            "layout": self.vars["layout"].get(),
+            "layout": DESKTOP_TILE_LAYOUT,
             "urlTemplate": url_template,
             "attribution": cli.DEFAULT_ATTRIBUTION,
         }
@@ -1253,7 +1244,7 @@ class DesktopApp(tk.Tk):
             return
         job["bbox"]   = zoom_specs[0]["bbox"]
         job["zooms"]  = list(range(min_zoom, max_zoom + 1))
-        job["layout"] = "inkhud-dev"
+        job["layout"] = DESKTOP_TILE_LAYOUT
         # Remove land layer so water renders through correctly (land sits on top of water)
         job["elements"]["include"] = [e for e in job["elements"]["include"] if e != "land"]
         job["elements"]["exclude"] = list(set(job["elements"]["exclude"]) | {"land"})

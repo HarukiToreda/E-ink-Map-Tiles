@@ -100,7 +100,6 @@ Default desktop settings:
 min zoom: 4
 max zoom: 8
 mode: grayscale
-layout: inkhud-dev
 style: osm-eink
 brightness: 0.99
 contrast: 1.15
@@ -113,6 +112,7 @@ Output modes:
 
 - `grayscale`: 8-bit grayscale PNGs tuned for detailed e-paper map viewing.
 - `mono`: true 1-bit black/white PNGs for devices or tests that require binary output.
+- `inkhud`: preview/export processing that mirrors the InkHUD header pipeline.
 - `palette`: indexed-color PNGs.
 - `original`: rendered/source PNGs with no e-paper conversion.
 
@@ -126,13 +126,6 @@ Zoom guidance:
 - Use `osm-eink` for regular map exports up to zoom 16 when crisp generalized detail is acceptable.
 - Use `osm-eink-topo` for terrain-focused topo exports up to zoom 16.
 - At zooms above 14, the app keeps vector content sharp by clipping and redrawing zoom-14 OpenFreeMap vector data into the deeper child tiles. This avoids blurry scaling, but it does not add brand-new road/building/label detail beyond what exists at zoom 14.
-
-Output layouts:
-
-- `inkhud-dev`: `tiles/{style}/{z}/{x}/{y}.png`
-- `style-root`: `{style}/{z}/{x}/{y}.png`
-- `single-map`: `map/{z}/{x}/{y}.png`
-- `meshtastic-sd`: `maps/{style}/{z}/{x}/{y}.png`
 
 ## Map Elements
 
@@ -171,6 +164,14 @@ ATTRIBUTION.txt
 ```
 
 Keep `manifest.json` and `ATTRIBUTION.txt` with any shared tile bundle.
+
+The desktop app always writes normal tile bundles as:
+
+```text
+tiles/{style}/{z}/{x}/{y}.png
+```
+
+Use **Export for InkHUD** when you need an InkHUD firmware header instead of a normal tile bundle.
 
 ## Legal Map Sources
 
@@ -233,11 +234,12 @@ Useful CLI options:
 --contrast VALUE
 --threshold VALUE
 --include-elements land,water,roads,highways,paths,boundaries,labels,transit
---layout inkhud-dev|style-root|single-map|meshtastic-sd
 --output PATH
 --zip
 --dry-run
 ```
+
+The CLI still accepts `--layout` for compatibility and scripted exports, but the desktop app intentionally uses one fixed normal tile-bundle layout.
 
 Topo export example:
 

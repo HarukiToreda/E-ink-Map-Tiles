@@ -8,6 +8,7 @@
 - Allowed regular and topo preview/export through zoom 16.
 - Added crisp vector overzooming for zooms 15-16 so zoom-14 OpenFreeMap labels, land/water shapes, roads, and trails can remain visible without raster blur.
 - Made the visible map view the export area automatically and added a center marker to the preview.
+- Removed the desktop layout selector; normal exports now use one fixed tile-bundle layout, while InkHUD export generates the firmware header.
 - Aligned CLI defaults with the desktop app defaults and removed stale desktop preview/source code.
 - Raised desktop preview zoom to 16 for closer topo inspection.
 
