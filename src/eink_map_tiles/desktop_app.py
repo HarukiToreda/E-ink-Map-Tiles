@@ -429,12 +429,16 @@ class DesktopApp(tk.Tk):
             self.vars["threshold_text"].set("")
 
     def update_mode_sensitive_controls(self) -> None:
-        visible = self.vars["mode"].get() == "mono"
+        mode = self.vars["mode"].get()
+        visible = mode == "mono"
         for widget in self.threshold_widgets:
             if visible:
                 widget.grid(**self.threshold_grid_options[widget])
             else:
                 widget.grid_remove()
+        # InkHUD mode: uncheck Land so water renders through (matches export behavior)
+        if mode == "inkhud":
+            self.vars["element_land"].set(False)
         self.update_slider_labels()
 
     def build_scrollable_controls(self, parent: ttk.Frame) -> ttk.Frame:
@@ -530,7 +534,7 @@ class DesktopApp(tk.Tk):
         ttk.Combobox(
             content,
             textvariable=self.vars["mode"],
-            values=["mono", "grayscale", "palette", "original"],
+            values=["mono", "grayscale", "inkhud", "palette", "original"],
             state="readonly",
             width=12,
         ).grid(row=1, column=1, sticky="ew", padx=(6, 10), pady=(4, 0))
@@ -1088,9 +1092,13 @@ class DesktopApp(tk.Tk):
         image = image.convert("RGBA")
         background = Image.new("RGBA", image.size, (255, 255, 255, 255))
         image = Image.alpha_composite(background, image).convert("RGB")
+        mode = job["mode"]
+
+        if mode == "inkhud":
+            return self._inkhud_process(image, float(job["contrast"]), float(job["brightness"])).convert("RGB")
+
         image = ImageEnhance.Brightness(image).enhance(float(job["brightness"]))
         image = ImageEnhance.Contrast(image).enhance(float(job["contrast"]))
-        mode = job["mode"]
         gray = image.convert("L")
         if mode == "mono":
             threshold = int(job["threshold"])
@@ -1214,29 +1222,41 @@ class DesktopApp(tk.Tk):
         if self.export_thread and self.export_thread.is_alive():
             return
 
-        # Clamp zoom to a sensible InkHUD range (zoom 10-14)
-        zoom = min(14, max(10, self.map_zoom))
         clat = self.map_center_lat
         clng = self.map_center_lon
 
-        # Compute 3x3 tile bbox at chosen zoom centered on current map view
-        tx, ty = cli.lonlat_to_tile(clng, clat, zoom)
-        n = 2**zoom
-        west  = (tx - 1) / n * 360 - 180
-        east  = (tx + 2) / n * 360 - 180
-        north = math.degrees(math.atan(math.sinh(math.pi * (1 - 2 * (ty - 1) / n))))
-        south = math.degrees(math.atan(math.sinh(math.pi * (1 - 2 * (ty + 2) / n))))
+        try:
+            min_zoom = int(self.vars["min_zoom"].get())
+            max_zoom = int(self.vars["max_zoom"].get())
+        except ValueError:
+            min_zoom = max_zoom = self.map_zoom
 
-        # Build job from current settings, override bbox/zoom/layout
+        # Compute per-zoom tile origins and bboxes (3x3 mosaic centered on map center)
+        zoom_specs = []
+        eps = 1e-6
+        for z in range(min_zoom, max_zoom + 1):
+            tx, ty = cli.lonlat_to_tile(clng, clat, z)
+            n = 2**z
+            west  = (tx - 1) / n * 360 - 180
+            east  = (tx + 2) / n * 360 - 180 - eps
+            north = math.degrees(math.atan(math.sinh(math.pi * (1 - 2 * (ty - 1) / n))))
+            south = math.degrees(math.atan(math.sinh(math.pi * (1 - 2 * (ty + 2) / n)))) + eps
+            zoom_specs.append({"zoom": z, "tx": tx, "ty": ty,
+                                "bbox": {"west": west, "south": south, "east": east, "north": north}})
+
+        # Build a combined job covering all zooms with the widest bbox (min_zoom)
         try:
             job = self.build_job()
             self.validate_export(job)
         except Exception as exc:  # noqa: BLE001
             messagebox.showerror("Cannot export", str(exc))
             return
-        job["bbox"]   = {"west": west, "south": south, "east": east, "north": north}
-        job["zooms"]  = [zoom]
+        job["bbox"]   = zoom_specs[0]["bbox"]
+        job["zooms"]  = list(range(min_zoom, max_zoom + 1))
         job["layout"] = "inkhud-dev"
+        # Remove land layer so water renders through correctly (land sits on top of water)
+        job["elements"]["include"] = [e for e in job["elements"]["include"] if e != "land"]
+        job["elements"]["exclude"] = list(set(job["elements"]["exclude"]) | {"land"})
 
         # Ask where to save map_tile.h
         fw_default = Path(r"C:\firmware\src\graphics\niche\InkHUD\Applets\Bases\Map")
@@ -1259,19 +1279,61 @@ class DesktopApp(tk.Tk):
         self.vars["status"].set("Exporting for InkHUD...")
         self.export_thread = threading.Thread(
             target=self._run_inkhud_export,
-            args=(job, zoom, tx, ty, Path(save_path)),
+            args=(job, zoom_specs, Path(save_path)),
             daemon=True,
         )
         self.export_thread.start()
 
-    def _run_inkhud_export(self, job: dict[str, Any], zoom: int, tx: int, ty: int, save_path: Path) -> None:
-        from PIL import Image, ImageFilter
+    def _inkhud_process(self, rgb_image: "Image.Image", contrast: float, brightness: float) -> "Image.Image":
+        """Shared inkhud pipeline used by both preview and export — always identical."""
+        import numpy as np
+        from PIL import Image as _Image, ImageEnhance, ImageFilter
+        # Detect water by blue dominance before grayscale (osm-eink water = light blue ~#aad3df)
+        arr_rgb = np.array(rgb_image.convert("RGB"), dtype=np.int16)
+        water_mask = (arr_rgb[:, :, 2] - arr_rgb[:, :, 0]) > 25
+        gray = rgb_image.convert("L")
+        gray = ImageEnhance.Contrast(gray).enhance(contrast)
+        gray = ImageEnhance.Brightness(gray).enhance(brightness)
+        sharp = gray.filter(ImageFilter.UnsharpMask(radius=1, percent=150, threshold=2))
+        result = np.array(self._bayer_dither(sharp), dtype=np.uint8)
+        result[water_mask] = 0  # Force water solid black
+        return _Image.fromarray(result, mode="L")
+
+    @staticmethod
+    def _bayer_dither(img: "Image.Image") -> "Image.Image":
+        """3-level posterize + Bayer dither.
+        <=140 → solid black (water, roads, labels, building outlines)
+        141-205 → light Bayer dither (building interiors, soft shading)
+        >205 → solid white (background/land)
+        """
+        import numpy as np
+        from PIL import Image as _Image
+        bayer = np.array([
+            [ 0,  8,  2, 10],
+            [12,  4, 14,  6],
+            [ 3, 11,  1,  9],
+            [15,  7, 13,  5],
+        ], dtype=np.float32) * (255.0 / 16.0)
+        arr = np.array(img, dtype=np.float32)
+        # Only dither a narrow band of very light grays (building interiors).
+        # Water, text, roads (<=175) → solid black. Background (>215) → solid white.
+        quantized = np.where(arr <= 175, 0.0,
+                    np.where(arr <= 215, 170.0, 255.0))
+        h, w = quantized.shape
+        pattern = np.tile(bayer, (h // 4 + 1, w // 4 + 1))[:h, :w]
+        dithered = np.where(quantized < pattern, 0, 255).astype(np.uint8)
+        result = np.where(quantized >= 255, 255, np.where(quantized <= 0, 0, dithered)).astype(np.uint8)
+        return _Image.fromarray(result, mode="L")
+
+    def _run_inkhud_export(self, job: dict[str, Any], zoom_specs: list[dict], save_path: Path) -> None:
+        from PIL import Image, ImageEnhance, ImageFilter
 
         clat = self.map_center_lat
         clng = self.map_center_lon
-        x0, y0 = tx - 1, ty - 1
         cols, rows = 3, 3
         style = job["style"]
+        min_zoom = zoom_specs[0]["zoom"]
+        max_zoom = zoom_specs[-1]["zoom"]
 
         try:
             with tempfile.TemporaryDirectory(prefix="inkhud-export-") as temp_dir:
@@ -1290,47 +1352,61 @@ class DesktopApp(tk.Tk):
                 if exit_code:
                     raise RuntimeError(f"Tile download failed (exit code {exit_code})")
 
-                # Build 3x3 mosaic from downloaded tiles (inkhud-dev layout)
-                mosaic = Image.new("L", (cols * 256, rows * 256), 255)
-                for dy in range(rows):
-                    for dx in range(cols):
-                        tile_path = temp_out / "tiles" / style / str(zoom) / str(x0 + dx) / f"{y0 + dy}.png"
-                        if tile_path.exists():
-                            mosaic.paste(Image.open(tile_path).convert("L"), (dx * 256, dy * 256))
+                # Process each zoom level into a 3x3 mosaic and convert to 1-bit XBM
+                zoom_data: list[tuple[int, int, int, list[int]]] = []  # (zoom, x0, y0, bytes)
+                for spec in zoom_specs:
+                    z = spec["zoom"]
+                    x0, y0 = spec["tx"] - 1, spec["ty"] - 1
+                    mosaic_rgb = Image.new("RGB", (cols * 256, rows * 256), (255, 255, 255))
+                    for dy in range(rows):
+                        for dx in range(cols):
+                            tile_path = temp_out / "tiles" / style / str(z) / str(x0 + dx) / f"{y0 + dy}.png"
+                            if tile_path.exists():
+                                mosaic_rgb.paste(Image.open(tile_path).convert("RGB"), (dx * 256, dy * 256))
+                    bw = self._inkhud_process(mosaic_rgb, float(job["contrast"]), float(job["brightness"]))
 
-            # Sharpen + threshold to 1-bit
-            sharp = mosaic.filter(ImageFilter.UnsharpMask(radius=1, percent=150, threshold=3))
-            bw = sharp.point(lambda p: 0 if p < 165 else 255)
+                    W, H = cols * 256, rows * 256
+                    bpr = W // 8
+                    data: list[int] = []
+                    for y in range(H):
+                        for bx in range(bpr):
+                            byte = 0
+                            for bit in range(8):
+                                if bw.getpixel((bx * 8 + bit, y)) == 0:
+                                    byte |= 1 << bit
+                            data.append(byte)
+                    zoom_data.append((z, x0, y0, data))
+                    self.messages.put(f"  zoom {z}: mosaic built ({len(data)} bytes)\n")
 
+            # Generate multi-zoom map_tile.h
             W, H = cols * 256, rows * 256
-            bpr = W // 8
-            data: list[int] = []
-            for y in range(H):
-                for bx in range(bpr):
-                    byte = 0
-                    for bit in range(8):
-                        if bw.getpixel((bx * 8 + bit, y)) == 0:
-                            byte |= 1 << bit
-                    data.append(byte)
-
+            x0_arr = ", ".join(str(zd[1]) for zd in zoom_data)
+            y0_arr = ", ".join(str(zd[2]) for zd in zoom_data)
             lines = [
                 "#pragma once",
                 "#include <stdint.h>",
                 "",
-                f"// {style} zoom {zoom}, {cols}x{rows} mosaic origin ({x0},{y0}), {W}x{H}px",
+                f"// {style} zooms {min_zoom}-{max_zoom}, {cols}x{rows} mosaic per zoom, {W}x{H}px",
                 f"// center: lat={clat:.6f} lng={clng:.6f}",
-                "static const uint8_t map_tile_data[] = {",
-            ]
-            for i in range(0, len(data), 16):
-                lines.append("    " + ", ".join(f"0x{b:02X}" for b in data[i : i + 16]) + ",")
-            lines += [
-                "};",
-                f"static const int map_tile_zoom = {zoom};",
-                f"static const int map_tile_x0   = {x0};",
-                f"static const int map_tile_y0   = {y0};",
+                f"static const int map_tile_min_zoom = {min_zoom};",
+                f"static const int map_tile_max_zoom = {max_zoom};",
                 f"static const int map_tile_cols = {cols};",
                 f"static const int map_tile_rows = {rows};",
+                f"static const int map_tile_x0[] = {{ {x0_arr} }};",
+                f"static const int map_tile_y0[] = {{ {y0_arr} }};",
+                "",
             ]
+            # Individual data arrays
+            for idx, (z, x0, y0, data) in enumerate(zoom_data):
+                lines.append(f"static const uint8_t map_tile_data_{idx}[] = {{")
+                for i in range(0, len(data), 16):
+                    lines.append("    " + ", ".join(f"0x{b:02X}" for b in data[i : i + 16]) + ",")
+                lines.append("};")
+                lines.append("")
+            # Pointer lookup table
+            ptr_list = ", ".join(f"map_tile_data_{i}" for i in range(len(zoom_data)))
+            lines.append(f"static const uint8_t* const map_tile_data[] = {{ {ptr_list} }};")
+
             save_path.write_text("\n".join(lines), encoding="utf-8")
             self.messages.put(f"\nmap_tile.h saved to: {save_path}\n")
             self.after(0, self.finish_export_success)
