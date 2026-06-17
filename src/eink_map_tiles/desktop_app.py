@@ -701,9 +701,11 @@ class DesktopApp(tk.Tk):
         self.export_button.grid(row=2, column=1, sticky="ew", padx=5)
         self.flat_button(content, "Folder", self.open_output_folder).grid(row=2, column=2, sticky="ew", padx=5)
         self.flat_button(content, "About", self.show_about_licenses).grid(row=2, column=3, sticky="ew", padx=(5, 0))
+        self.inkhud_button = self.flat_button(content, "⬡ Export for InkHUD", self.export_for_inkhud)
+        self.inkhud_button.grid(row=3, column=0, columnspan=4, sticky="ew", pady=(6, 0))
         self.progress_bar = ttk.Progressbar(content, variable=self.vars["progress_value"], maximum=1, mode="determinate")
-        self.progress_bar.grid(row=3, column=0, columnspan=4, sticky="ew", pady=(8, 2))
-        ttk.Label(content, textvariable=self.vars["progress_text"], style="Hint.TLabel").grid(row=4, column=0, columnspan=4, sticky="ew")
+        self.progress_bar.grid(row=4, column=0, columnspan=4, sticky="ew", pady=(8, 2))
+        ttk.Label(content, textvariable=self.vars["progress_text"], style="Hint.TLabel").grid(row=5, column=0, columnspan=4, sticky="ew")
         self.log = tk.Text(
             content,
             height=3,
@@ -713,7 +715,7 @@ class DesktopApp(tk.Tk):
             relief="flat",
             borderwidth=0,
         )
-        self.log.grid(row=5, column=0, columnspan=4, sticky="ew", pady=(6, 0))
+        self.log.grid(row=6, column=0, columnspan=4, sticky="ew", pady=(6, 0))
         self.log.grid_remove()
         return frame
 
@@ -1207,6 +1209,141 @@ class DesktopApp(tk.Tk):
             os.startfile(folder)  # type: ignore[attr-defined]
         except OSError as exc:
             messagebox.showerror("Open output folder failed", str(exc))
+
+    def export_for_inkhud(self) -> None:
+        if self.export_thread and self.export_thread.is_alive():
+            return
+
+        # Clamp zoom to a sensible InkHUD range (zoom 10-14)
+        zoom = min(14, max(10, self.map_zoom))
+        clat = self.map_center_lat
+        clng = self.map_center_lon
+
+        # Compute 3x3 tile bbox at chosen zoom centered on current map view
+        tx, ty = cli.lonlat_to_tile(clng, clat, zoom)
+        n = 2**zoom
+        west  = (tx - 1) / n * 360 - 180
+        east  = (tx + 2) / n * 360 - 180
+        north = math.degrees(math.atan(math.sinh(math.pi * (1 - 2 * (ty - 1) / n))))
+        south = math.degrees(math.atan(math.sinh(math.pi * (1 - 2 * (ty + 2) / n))))
+
+        # Build job from current settings, override bbox/zoom/layout
+        try:
+            job = self.build_job()
+            self.validate_export(job)
+        except Exception as exc:  # noqa: BLE001
+            messagebox.showerror("Cannot export", str(exc))
+            return
+        job["bbox"]   = {"west": west, "south": south, "east": east, "north": north}
+        job["zooms"]  = [zoom]
+        job["layout"] = "inkhud-dev"
+
+        # Ask where to save map_tile.h
+        fw_default = Path(r"C:\firmware\src\graphics\niche\InkHUD\Applets\Bases\Map")
+        initial_dir = str(fw_default) if fw_default.exists() else str(Path.home())
+        save_path = filedialog.asksaveasfilename(
+            title="Save map_tile.h for InkHUD firmware",
+            defaultextension=".h",
+            initialfile="map_tile.h",
+            initialdir=initial_dir,
+            filetypes=[("C header files", "*.h")],
+        )
+        if not save_path:
+            return
+
+        self.log.delete("1.0", "end")
+        self.log.grid()
+        self.reset_export_progress(job)
+        self.inkhud_button.configure(state="disabled")
+        self.export_button.configure(state="disabled")
+        self.vars["status"].set("Exporting for InkHUD...")
+        self.export_thread = threading.Thread(
+            target=self._run_inkhud_export,
+            args=(job, zoom, tx, ty, Path(save_path)),
+            daemon=True,
+        )
+        self.export_thread.start()
+
+    def _run_inkhud_export(self, job: dict[str, Any], zoom: int, tx: int, ty: int, save_path: Path) -> None:
+        from PIL import Image, ImageFilter
+
+        clat = self.map_center_lat
+        clng = self.map_center_lon
+        x0, y0 = tx - 1, ty - 1
+        cols, rows = 3, 3
+        style = job["style"]
+
+        try:
+            with tempfile.TemporaryDirectory(prefix="inkhud-export-") as temp_dir:
+                temp_out = Path(temp_dir)
+                job_path = temp_out / "job.json"
+                job_path.write_text(json.dumps(job, indent=2) + "\n", encoding="utf-8")
+
+                writer = QueueWriter(self.messages)
+                argv = [
+                    "--job", str(job_path),
+                    "--output", str(temp_out),
+                    "--rate-limit", str(DESKTOP_RATE_LIMIT_SECONDS),
+                ]
+                with redirect_stdout(writer):
+                    exit_code = cli.main(argv)
+                if exit_code:
+                    raise RuntimeError(f"Tile download failed (exit code {exit_code})")
+
+                # Build 3x3 mosaic from downloaded tiles (inkhud-dev layout)
+                mosaic = Image.new("L", (cols * 256, rows * 256), 255)
+                for dy in range(rows):
+                    for dx in range(cols):
+                        tile_path = temp_out / "tiles" / style / str(zoom) / str(x0 + dx) / f"{y0 + dy}.png"
+                        if tile_path.exists():
+                            mosaic.paste(Image.open(tile_path).convert("L"), (dx * 256, dy * 256))
+
+            # Sharpen + threshold to 1-bit
+            sharp = mosaic.filter(ImageFilter.UnsharpMask(radius=1, percent=150, threshold=3))
+            bw = sharp.point(lambda p: 0 if p < 165 else 255)
+
+            W, H = cols * 256, rows * 256
+            bpr = W // 8
+            data: list[int] = []
+            for y in range(H):
+                for bx in range(bpr):
+                    byte = 0
+                    for bit in range(8):
+                        if bw.getpixel((bx * 8 + bit, y)) == 0:
+                            byte |= 1 << bit
+                    data.append(byte)
+
+            lines = [
+                "#pragma once",
+                "#include <stdint.h>",
+                "",
+                f"// {style} zoom {zoom}, {cols}x{rows} mosaic origin ({x0},{y0}), {W}x{H}px",
+                f"// center: lat={clat:.6f} lng={clng:.6f}",
+                "static const uint8_t map_tile_data[] = {",
+            ]
+            for i in range(0, len(data), 16):
+                lines.append("    " + ", ".join(f"0x{b:02X}" for b in data[i : i + 16]) + ",")
+            lines += [
+                "};",
+                f"static const int map_tile_zoom = {zoom};",
+                f"static const int map_tile_x0   = {x0};",
+                f"static const int map_tile_y0   = {y0};",
+                f"static const int map_tile_cols = {cols};",
+                f"static const int map_tile_rows = {rows};",
+            ]
+            save_path.write_text("\n".join(lines), encoding="utf-8")
+            self.messages.put(f"\nmap_tile.h saved to: {save_path}\n")
+            self.after(0, self.finish_export_success)
+            self.after(0, lambda: messagebox.showinfo(
+                "InkHUD Export Complete",
+                f"map_tile.h saved to:\n{save_path}\n\nRebuild and flash your InkHUD firmware to apply.",
+            ))
+        except Exception as exc:  # noqa: BLE001
+            self.messages.put(f"\nInkHUD export failed: {exc}\n")
+            self.after(0, lambda: self.finish_export_failed(str(exc)))
+        finally:
+            self.after(0, lambda: self.inkhud_button.configure(state="normal"))
+            self.after(0, lambda: self.export_button.configure(state="normal"))
 
     def poll_messages(self) -> None:
         while True:
