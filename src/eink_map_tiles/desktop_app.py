@@ -203,6 +203,7 @@ class DesktopApp(tk.Tk):
         self.bind_live_controls()
         self.sync_view_area(update_estimate=False)
         self.estimate_tiles()
+        self.update_inkhud_flash_bars()
         self.after(700, self.refresh_preview)
         self.poll_messages()
 
@@ -937,7 +938,7 @@ class DesktopApp(tk.Tk):
     # nRF52840: usable flash = 0xC6000 (811,008 B) after SoftDevice, firmware ~720 KB → ~88 KB free
     FLASH_TARGETS = [
         (1_100_000, "ESP32-S3 (8 MB flash)"),
-        (  88_000,  "nRF52840 (1 MB flash)"),
+        (  87_232,  "nRF52840 (1 MB flash)"),
     ]
 
     def draw_flash_bars(self, tile_bytes: int | None = None, upper_bound: bool = False) -> None:
@@ -1001,10 +1002,14 @@ class DesktopApp(tk.Tk):
         except ValueError:
             return
         num_zooms = max(0, max_zoom - min_zoom + 1)
-        # InkHUD export always generates a fixed 3x3 mosaic per zoom level.
-        # RLE compression typically reduces this by 70-90%; show uncompressed as upper bound.
         tile_bytes = num_zooms * 3 * 3 * 256 * 256 // 8
         self.draw_flash_bars(tile_bytes, upper_bound=True)
+        unc_kb = tile_bytes // 1024
+        rle_lo = max(1, unc_kb * 10 // 100)
+        rle_hi = max(1, unc_kb * 30 // 100)
+        self.vars["tile_count"].set(
+            f"InkHUD: {num_zooms} zoom(s) — ≤{unc_kb} KB raw; ~{rle_lo}–{rle_hi} KB after RLE"
+        )
 
     def estimate_tiles(self, show_errors: bool = True, update_bars: bool = False) -> None:
         try:
@@ -1016,7 +1021,16 @@ class DesktopApp(tk.Tk):
                 messagebox.showerror("Invalid export settings", str(exc))
             return
 
-        self.vars["tile_count"].set(f"Estimate: {tile_count:,} tiles across zooms {job['zooms'][0]}-{job['zooms'][-1]}")
+        if self.vars["mode"].get() == "inkhud":
+            num_zooms = len(job["zooms"])
+            unc_kb = num_zooms * 3 * 3 * 256 * 256 // 8 // 1024
+            rle_lo = max(1, unc_kb * 10 // 100)
+            rle_hi = max(1, unc_kb * 30 // 100)
+            self.vars["tile_count"].set(
+                f"InkHUD: {num_zooms} zoom(s) — ≤{unc_kb} KB raw; ~{rle_lo}–{rle_hi} KB after RLE"
+            )
+        else:
+            self.vars["tile_count"].set(f"Estimate: {tile_count:,} tiles across zooms {job['zooms'][0]}-{job['zooms'][-1]}")
         self.vars["status"].set("Estimate updated")
 
         # Flash bars update only on explicit Estimate click (InkHUD bars use a separate live path)
@@ -1213,7 +1227,7 @@ class DesktopApp(tk.Tk):
         mode = job["mode"]
 
         if mode == "inkhud":
-            return self._inkhud_process(image, float(job["contrast"]), float(job["brightness"])).convert("RGB")
+            return cli.inkhud_process(image, float(job["contrast"]), float(job["brightness"])).convert("RGB")
 
         image = ImageEnhance.Brightness(image).enhance(float(job["brightness"]))
         image = ImageEnhance.Contrast(image).enhance(float(job["contrast"]))
@@ -1414,6 +1428,7 @@ class DesktopApp(tk.Tk):
         self.export_button.configure(state="disabled")
         self.cancel_button.grid()
         self.vars["status"].set("Exporting for InkHUD...")
+        self._last_zoom_specs = zoom_specs
         self.export_thread = threading.Thread(
             target=self._run_inkhud_export,
             args=(job, zoom_specs, Path(save_path), self._cancel_event),
@@ -1503,7 +1518,7 @@ class DesktopApp(tk.Tk):
                             tile_path = temp_out / "tiles" / style / str(z) / str(x0 + dx) / f"{y0 + dy}.png"
                             if tile_path.exists():
                                 mosaic_rgb.paste(Image.open(tile_path).convert("RGB"), (dx * 256, dy * 256))
-                    bw = self._inkhud_process(mosaic_rgb, float(job["contrast"]), float(job["brightness"]))
+                    bw = cli.inkhud_process(mosaic_rgb, float(job["contrast"]), float(job["brightness"]))
 
                     W, H = cols * 256, rows * 256
                     bpr = W // 8
@@ -1572,6 +1587,8 @@ class DesktopApp(tk.Tk):
             lines.append(f"static const uint8_t* const map_tile_data[] = {{ {ptr_list} }};")
 
             save_path.write_text("\n".join(lines), encoding="utf-8")
+            total_rle_bytes = sum(len(zd[4]) for zd in zoom_data)
+            self.messages.put(f"__RLE_TOTAL_BYTES__:{total_rle_bytes}\n")
             self.messages.put(f"\nmap_tile.h saved to: {save_path}\n")
             self.after(0, self.finish_export_success)
             self.after(0, lambda: messagebox.showinfo(
@@ -1592,6 +1609,16 @@ class DesktopApp(tk.Tk):
                 message = self.messages.get_nowait()
             except queue.Empty:
                 break
+            if message.startswith("__RLE_TOTAL_BYTES__:"):
+                actual_bytes = int(message.split(":")[1])
+                self.draw_flash_bars(actual_bytes, upper_bound=False)
+                num_zooms = len(getattr(self, "_last_zoom_specs", []) or [])
+                unc_bytes = num_zooms * 3 * 3 * 256 * 256 // 8
+                savings = 100 - actual_bytes * 100 // max(unc_bytes, 1)
+                self.vars["tile_count"].set(
+                    f"InkHUD: {actual_bytes // 1024} KB actual RLE ({savings}% smaller than {unc_bytes // 1024} KB raw)"
+                )
+                continue
             if not self.log.grid_info():
                 self.log.grid()
             self.log.insert("end", message)

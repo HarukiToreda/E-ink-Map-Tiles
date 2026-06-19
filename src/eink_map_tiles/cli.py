@@ -245,6 +245,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Comma-separated vector-style element categories to include in the manifest.",
     )
+    parser.add_argument(
+        "--inkhud",
+        action="store_true",
+        help="Export a 3x3 mosaic InkHUD firmware header (map_tile.h) with RLE compression. "
+             "Requires --center-lat, --center-lon, --zooms, --output (path to .h file).",
+    )
     return parser
 
 
@@ -980,6 +986,154 @@ def make_zip(output_root: Path) -> Path:
     return zip_path
 
 
+def inkhud_process(rgb_image, contrast: float, brightness: float):
+    """Shared InkHUD 1-bit pipeline: water detection, contrast/brightness, unsharp mask, Bayer dither."""
+    import numpy as np
+    from PIL import Image as _Image, ImageEnhance, ImageFilter
+
+    arr_rgb = np.array(rgb_image.convert("RGB"), dtype=np.int16)
+    water_mask = (arr_rgb[:, :, 2] - arr_rgb[:, :, 0]) > 25
+    gray = rgb_image.convert("L")
+    gray = ImageEnhance.Contrast(gray).enhance(contrast)
+    gray = ImageEnhance.Brightness(gray).enhance(brightness)
+    sharp = gray.filter(ImageFilter.UnsharpMask(radius=1, percent=150, threshold=2))
+
+    bayer = np.array([
+        [ 0,  8,  2, 10],
+        [12,  4, 14,  6],
+        [ 3, 11,  1,  9],
+        [15,  7, 13,  5],
+    ], dtype=np.float32) * (255.0 / 16.0)
+    arr = np.array(sharp, dtype=np.float32)
+    quantized = np.where(arr <= 175, 0.0, np.where(arr <= 215, 170.0, 255.0))
+    h, w = quantized.shape
+    pattern = np.tile(bayer, (h // 4 + 1, w // 4 + 1))[:h, :w]
+    dithered = np.where(quantized < pattern, 0, 255).astype(np.uint8)
+    result = np.where(quantized >= 255, 255, np.where(quantized <= 0, 0, dithered)).astype(np.uint8)
+    result[water_mask] = 0
+    return _Image.fromarray(result, mode="L")
+
+
+def export_inkhud(args: argparse.Namespace, cancel_event=None) -> int:
+    """Render a 3x3 mosaic per zoom level, RLE-compress, and write map_tile.h.
+    Uses the same inkhud_process pipeline as the desktop app export."""
+    from PIL import Image
+
+    lat = args.center_lat
+    lon = args.center_lon
+    if lat is None or lon is None:
+        raise SystemExit("--inkhud requires --center-lat and --center-lon")
+
+    cols, rows = 3, 3
+    zooms = sorted(args.zooms)
+    output = args.output  # treat as file path for .h
+    elements = args.include_elements
+    if elements is None:
+        elements = list(DEFAULT_TOPO_ELEMENTS if is_topo_style(args.style) else DEFAULT_INCLUDE_ELEMENTS)
+    # Remove land: landcover gray polygons fall in the Bayer dither zone and bloat RLE output
+    elements = [e for e in elements if e != "land"]
+
+    zoom_data = []
+    for z in zooms:
+        if cancel_event and cancel_event.is_set():
+            print("Cancelled.")
+            return 2
+
+        n = 2 ** z
+        tx = int(math.floor((lon + 180.0) / 360.0 * n))
+        lat_rad = math.radians(max(min(lat, MAX_MERCATOR_LAT), -MAX_MERCATOR_LAT))
+        ty = int(math.floor((1.0 - math.asinh(math.tan(lat_rad)) / math.pi) / 2.0 * n))
+        tx, ty = clamp(tx, 1, n - 2), clamp(ty, 1, n - 2)
+        x0, y0 = tx - 1, ty - 1
+
+        W, H = cols * 256, rows * 256
+        # Apply brightness/contrast per-tile before assembling (matches desktop app's optimize_tile path).
+        # PIL's Contrast uses image mean as pivot — per-tile mean is ~245 (mostly white background)
+        # so contrast is more aggressive and pushes grays to solid black, giving better RLE compression.
+        from PIL import ImageEnhance
+        mosaic = Image.new("RGB", (W, H), "#f7f8f4")
+        for row in range(rows):
+            for col in range(cols):
+                tile = Tile(z=z, x=x0 + col, y=y0 + row)
+                img = render_openfreemap_image(tile, args.user_agent, args.timeout, args.retries, elements, args.style)
+                if args.brightness != 1.0:
+                    img = ImageEnhance.Brightness(img).enhance(args.brightness)
+                if args.contrast != 1.0:
+                    img = ImageEnhance.Contrast(img).enhance(args.contrast)
+                mosaic.paste(img, (col * 256, row * 256))
+                print(f"  zoom {z}: rendered tile {col + row * cols + 1}/9")
+
+        bw = inkhud_process(mosaic, args.contrast, args.brightness)
+
+        bpr = W // 8
+        row_offsets: list[int] = []
+        rle_bytes: list[int] = []
+        for y in range(H):
+            row_buf = []
+            for bx in range(bpr):
+                byte = 0
+                for bit in range(8):
+                    if bw.getpixel((bx * 8 + bit, y)) == 0:
+                        byte |= 1 << bit
+                row_buf.append(byte)
+            row_offsets.append(len(rle_bytes))
+            i = 0
+            while i < len(row_buf):
+                val = row_buf[i]
+                count = 1
+                while i + count < len(row_buf) and row_buf[i + count] == val and count < 255:
+                    count += 1
+                rle_bytes.append(count)
+                rle_bytes.append(val)
+                i += count
+
+        raw = H * bpr
+        print(f"  zoom {z}: {raw:,} -> {len(rle_bytes):,} bytes ({len(rle_bytes) * 100 // raw}% of raw)")
+        zoom_data.append((z, x0, y0, row_offsets, rle_bytes))
+
+    # Write map_tile.h
+    W, H = cols * 256, rows * 256
+    x0_arr = ", ".join(str(zd[1]) for zd in zoom_data)
+    y0_arr = ", ".join(str(zd[2]) for zd in zoom_data)
+    lines = [
+        "#pragma once",
+        f"// InkHUD map tile header — {cols}x{rows} mosaic, RLE compressed",
+        f"// Zooms: {', '.join(str(zd[0]) for zd in zoom_data)}",
+        f"static const int map_tile_min_zoom = {zoom_data[0][0]};",
+        f"static const int map_tile_max_zoom = {zoom_data[-1][0]};",
+        f"static const int map_tile_cols = {cols};",
+        f"static const int map_tile_rows = {rows};",
+        f"static const int map_tile_x0[] = {{ {x0_arr} }};",
+        f"static const int map_tile_y0[] = {{ {y0_arr} }};",
+        "",
+    ]
+    for idx, (z, x0, y0, row_offsets, rle_bytes) in enumerate(zoom_data):
+        lines.append(f"static const uint16_t map_tile_row_offsets_{idx}[{H}] = {{")
+        for i in range(0, len(row_offsets), 16):
+            lines.append("    " + ", ".join(str(o) for o in row_offsets[i:i + 16]) + ",")
+        lines.append("};")
+        lines.append("")
+        lines.append(f"static const uint8_t map_tile_data_{idx}[] = {{")
+        for i in range(0, len(rle_bytes), 16):
+            lines.append("    " + ", ".join(f"0x{b:02X}" for b in rle_bytes[i:i + 16]) + ",")
+        lines.append("};")
+        lines.append("")
+    off_list = ", ".join(f"map_tile_row_offsets_{i}" for i in range(len(zoom_data)))
+    ptr_list = ", ".join(f"map_tile_data_{i}" for i in range(len(zoom_data)))
+    lines.append(f"static const uint16_t* const map_tile_row_offsets[] = {{ {off_list} }};")
+    lines.append(f"static const uint8_t* const map_tile_data[] = {{ {ptr_list} }};")
+
+    out_path = Path(output)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text("\n".join(lines), encoding="utf-8")
+
+    total_rle = sum(len(zd[4]) for zd in zoom_data)
+    total_raw = len(zoom_data) * H * (W // 8)
+    print(f"\nmap_tile.h saved: {out_path}")
+    print(f"Total: {total_rle:,} bytes RLE / {total_raw:,} bytes raw ({total_rle * 100 // total_raw}% of raw)")
+    return 0
+
+
 def run(args: argparse.Namespace, cancel_event=None) -> int:
     bbox = args_to_bbox(args)
     if args.include_elements is None:
@@ -1058,8 +1212,13 @@ def main(argv: list[str] | None = None, cancel_event=None) -> int:
     args = parser.parse_args(argv)
     if args.single_style:
         args.layout = "single-map"
-    apply_job_file(args)
+    if not args.inkhud:
+        apply_job_file(args)
+    elif not args.zooms:
+        raise SystemExit("--inkhud requires --zooms")
     try:
+        if args.inkhud:
+            return export_inkhud(args, cancel_event=cancel_event)
         return run(args, cancel_event=cancel_event)
     except KeyboardInterrupt:
         print("Interrupted", file=sys.stderr)
