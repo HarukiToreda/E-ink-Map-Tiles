@@ -1066,38 +1066,25 @@ def export_inkhud(args: argparse.Namespace, cancel_event=None) -> int:
         bw = inkhud_process(mosaic, args.contrast, args.brightness)
 
         bpr = W // 8
-        row_offsets: list[int] = []
-        rle_bytes: list[int] = []
+        raw: list[int] = []
         for y in range(H):
-            row_buf = []
             for bx in range(bpr):
                 byte = 0
                 for bit in range(8):
                     if bw.getpixel((bx * 8 + bit, y)) == 0:
                         byte |= 1 << bit
-                row_buf.append(byte)
-            row_offsets.append(len(rle_bytes))
-            i = 0
-            while i < len(row_buf):
-                val = row_buf[i]
-                count = 1
-                while i + count < len(row_buf) and row_buf[i + count] == val and count < 255:
-                    count += 1
-                rle_bytes.append(count)
-                rle_bytes.append(val)
-                i += count
+                raw.append(byte)
 
-        raw = H * bpr
-        print(f"  zoom {z}: {raw:,} -> {len(rle_bytes):,} bytes ({len(rle_bytes) * 100 // raw}% of raw)")
-        zoom_data.append((z, x0, y0, row_offsets, rle_bytes))
+        print(f"  zoom {z}: {len(raw):,} bytes")
+        zoom_data.append((z, x0, y0, raw))
 
-    # Write map_tile.h
+    # Write map_tile.h (uncompressed 1-bit)
     W, H = cols * 256, rows * 256
     x0_arr = ", ".join(str(zd[1]) for zd in zoom_data)
     y0_arr = ", ".join(str(zd[2]) for zd in zoom_data)
     lines = [
         "#pragma once",
-        f"// InkHUD map tile header — {cols}x{rows} mosaic, RLE compressed",
+        f"// InkHUD map tile header — {cols}x{rows} mosaic per zoom",
         f"// Zooms: {', '.join(str(zd[0]) for zd in zoom_data)}",
         f"static const int map_tile_min_zoom = {zoom_data[0][0]};",
         f"static const int map_tile_max_zoom = {zoom_data[-1][0]};",
@@ -1107,30 +1094,22 @@ def export_inkhud(args: argparse.Namespace, cancel_event=None) -> int:
         f"static const int map_tile_y0[] = {{ {y0_arr} }};",
         "",
     ]
-    for idx, (z, x0, y0, row_offsets, rle_bytes) in enumerate(zoom_data):
-        lines.append(f"static const uint16_t map_tile_row_offsets_{idx}[{H}] = {{")
-        for i in range(0, len(row_offsets), 16):
-            lines.append("    " + ", ".join(str(o) for o in row_offsets[i:i + 16]) + ",")
-        lines.append("};")
-        lines.append("")
+    for idx, (z, x0, y0, raw) in enumerate(zoom_data):
         lines.append(f"static const uint8_t map_tile_data_{idx}[] = {{")
-        for i in range(0, len(rle_bytes), 16):
-            lines.append("    " + ", ".join(f"0x{b:02X}" for b in rle_bytes[i:i + 16]) + ",")
+        for i in range(0, len(raw), 16):
+            lines.append("    " + ", ".join(f"0x{b:02X}" for b in raw[i:i + 16]) + ",")
         lines.append("};")
         lines.append("")
-    off_list = ", ".join(f"map_tile_row_offsets_{i}" for i in range(len(zoom_data)))
     ptr_list = ", ".join(f"map_tile_data_{i}" for i in range(len(zoom_data)))
-    lines.append(f"static const uint16_t* const map_tile_row_offsets[] = {{ {off_list} }};")
     lines.append(f"static const uint8_t* const map_tile_data[] = {{ {ptr_list} }};")
 
     out_path = Path(output)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text("\n".join(lines), encoding="utf-8")
 
-    total_rle = sum(len(zd[4]) for zd in zoom_data)
-    total_raw = len(zoom_data) * H * (W // 8)
+    total = sum(len(zd[3]) for zd in zoom_data)
     print(f"\nmap_tile.h saved: {out_path}")
-    print(f"Total: {total_rle:,} bytes RLE / {total_raw:,} bytes raw ({total_rle * 100 // total_raw}% of raw)")
+    print(f"Total: {total:,} bytes ({total // 1024} KB)")
     return 0
 
 
