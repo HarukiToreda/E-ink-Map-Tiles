@@ -374,11 +374,13 @@ class DesktopApp(tk.Tk):
         self.vars["contrast"].trace_add("write", lambda *_args: self.on_contrast_changed())
         self.vars["threshold"].trace_add("write", lambda *_args: self.update_slider_labels())
         self.vars["mode"].trace_add("write", lambda *_args: self.update_mode_sensitive_controls())
+        self.vars["mode"].trace_add("write", lambda *_args: self.update_inkhud_flash_bars())
         self.vars["style"].trace_add("write", lambda *_args: self.apply_style_preset())
 
         export_keys = ("min_zoom", "max_zoom")
         for key in export_keys:
             self.vars[key].trace_add("write", lambda *_args: self.queue_live_update(preview=False, estimate=True))
+            self.vars[key].trace_add("write", lambda *_args: self.update_inkhud_flash_bars())
 
         area_keys = ("west", "south", "east", "north")
         for key in area_keys:
@@ -730,8 +732,11 @@ class DesktopApp(tk.Tk):
         for column in range(4):
             content.columnconfigure(column, weight=1)
         ttk.Label(content, textvariable=self.vars["tile_count"], style="Hint.TLabel").grid(row=0, column=0, columnspan=4, sticky="ew", pady=(0, 2))
-        ttk.Label(content, textvariable=self.vars["status"], style="Hint.TLabel").grid(row=1, column=0, columnspan=4, sticky="ew", pady=(0, 6))
-        self.flat_button(content, "Estimate", self.estimate_tiles).grid(row=2, column=0, sticky="ew", padx=(0, 5))
+        self.flash_bars_canvas = tk.Canvas(content, height=44, background="#ffffff", highlightthickness=0)
+        self.flash_bars_canvas.grid(row=1, column=0, columnspan=4, sticky="ew", pady=(0, 4))
+        self.flash_bars_canvas.bind("<Configure>", lambda _e: self.draw_flash_bars())
+        ttk.Label(content, textvariable=self.vars["status"], style="Hint.TLabel").grid(row=2, column=0, columnspan=4, sticky="ew", pady=(0, 6))
+        self.flat_button(content, "Estimate", lambda: self.estimate_tiles(update_bars=True)).grid(row=2, column=0, sticky="ew", padx=(0, 5))
         self.export_button = self.flat_button(content, "Export Tiles", self.export_tiles, primary=True)
         self.export_button.grid(row=2, column=1, sticky="ew", padx=5)
         self.flat_button(content, "Folder", self.open_output_folder).grid(row=2, column=2, sticky="ew", padx=5)
@@ -739,7 +744,10 @@ class DesktopApp(tk.Tk):
         self.inkhud_button = self.flat_button(content, "⬡ Export for InkHUD", self.export_for_inkhud)
         self.inkhud_button.grid(row=3, column=0, columnspan=4, sticky="ew", pady=(6, 0))
         self.progress_bar = ttk.Progressbar(content, variable=self.vars["progress_value"], maximum=1, mode="determinate")
-        self.progress_bar.grid(row=4, column=0, columnspan=4, sticky="ew", pady=(8, 2))
+        self.progress_bar.grid(row=4, column=0, columnspan=3, sticky="ew", pady=(8, 2))
+        self.cancel_button = self.flat_button(content, "Cancel", self.cancel_export)
+        self.cancel_button.grid(row=4, column=3, sticky="ew", padx=(5, 0), pady=(8, 2))
+        self.cancel_button.grid_remove()
         ttk.Label(content, textvariable=self.vars["progress_text"], style="Hint.TLabel").grid(row=5, column=0, columnspan=4, sticky="ew")
         self.log = tk.Text(
             content,
@@ -924,7 +932,77 @@ class DesktopApp(tk.Tk):
             "attribution": cli.DEFAULT_ATTRIBUTION,
         }
 
-    def estimate_tiles(self, show_errors: bool = True) -> None:
+    # Flash budgets: (available_for_tiles_bytes, label)
+    # ESP32-S3: app0 partition = 0x330000 (3,342,336 B), InkHUD firmware ~2.2 MB → ~1.1 MB free
+    # nRF52840: usable flash = 0xC6000 (811,008 B) after SoftDevice, firmware ~720 KB → ~88 KB free
+    FLASH_TARGETS = [
+        (1_100_000, "ESP32-S3 (8 MB flash)"),
+        (  88_000,  "nRF52840 (1 MB flash)"),
+    ]
+
+    def draw_flash_bars(self, tile_bytes: int | None = None) -> None:
+        c = self.flash_bars_canvas
+        c.delete("all")
+        w = c.winfo_width()
+        if w < 10:
+            return
+        if tile_bytes is None:
+            tile_bytes = getattr(self, "_last_tile_bytes", None)
+        if tile_bytes is None:
+            return
+        self._last_tile_bytes = tile_bytes
+
+        bar_h = 14
+        label_w = 120
+        bar_w = w - label_w - 8
+        y0 = 2
+
+        for available, label in self.FLASH_TARGETS:
+            fill_ratio = min(tile_bytes / available, 1.0)
+            used_px = int(fill_ratio * bar_w)
+
+            if fill_ratio < 0.6:
+                color = "#3a9e5f"
+            elif fill_ratio < 0.85:
+                color = "#e0a020"
+            else:
+                color = "#c0392b"
+
+            kb = tile_bytes / 1024
+            avail_kb = available / 1024
+            pct = (tile_bytes / available) * 100
+            size_text = f"{kb:.0f} / {avail_kb:.0f} KB ({pct:.0f}%)"
+
+            # Label left of bar
+            c.create_text(0, y0 + bar_h // 2, anchor="w", text=label,
+                          font=("Segoe UI", 8), fill="#536158")
+            # Background track
+            c.create_rectangle(label_w, y0, label_w + bar_w, y0 + bar_h,
+                                fill="#e8ede9", outline="#d3ddd5")
+            # Fill
+            if used_px > 0:
+                c.create_rectangle(label_w, y0, label_w + used_px, y0 + bar_h,
+                                   fill=color, outline="")
+            # Size text centered inside the bar track
+            c.create_text(label_w + bar_w // 2, y0 + bar_h // 2, anchor="center",
+                          text=size_text, font=("Segoe UI", 8), fill="#1a2e22")
+
+            y0 += bar_h + 5
+
+    def update_inkhud_flash_bars(self) -> None:
+        if self.vars["mode"].get() != "inkhud":
+            return
+        try:
+            min_zoom = int(self.vars["min_zoom"].get())
+            max_zoom = int(self.vars["max_zoom"].get())
+        except ValueError:
+            return
+        num_zooms = max(0, max_zoom - min_zoom + 1)
+        # InkHUD export always generates a fixed 3x3 mosaic per zoom level
+        tile_bytes = num_zooms * 3 * 3 * 256 * 256 // 8
+        self.draw_flash_bars(tile_bytes)
+
+    def estimate_tiles(self, show_errors: bool = True, update_bars: bool = False) -> None:
         try:
             job = self.build_job()
             bbox = cli.BBox(**job["bbox"])
@@ -933,8 +1011,13 @@ class DesktopApp(tk.Tk):
             if show_errors:
                 messagebox.showerror("Invalid export settings", str(exc))
             return
+
         self.vars["tile_count"].set(f"Estimate: {tile_count:,} tiles across zooms {job['zooms'][0]}-{job['zooms'][-1]}")
         self.vars["status"].set("Estimate updated")
+
+        # Flash bars update only on explicit Estimate click (InkHUD bars use a separate live path)
+        if update_bars and self.vars["mode"].get() != "inkhud":
+            self.draw_flash_bars(tile_count * 256 * 256 // 8)
 
     def refresh_preview(self) -> None:
         if self.preview_thread and self.preview_thread.is_alive():
@@ -1163,6 +1246,12 @@ class DesktopApp(tk.Tk):
             return (bbox.west + bbox.east) / 2
         return cli.normalize_lon((bbox.west + bbox.east + 360) / 2)
 
+    def cancel_export(self) -> None:
+        if hasattr(self, "_cancel_event"):
+            self._cancel_event.set()
+        self.cancel_button.grid_remove()
+        self.vars["status"].set("Cancelling...")
+
     def export_tiles(self) -> None:
         if self.export_thread and self.export_thread.is_alive():
             return
@@ -1178,9 +1267,11 @@ class DesktopApp(tk.Tk):
         self.log.delete("1.0", "end")
         self.log.grid()
         self.reset_export_progress(job)
+        self._cancel_event = threading.Event()
         self.export_button.configure(state="disabled")
+        self.cancel_button.grid()
         self.vars["status"].set("Exporting...")
-        self.export_thread = threading.Thread(target=self.run_export, args=(job, output), daemon=True)
+        self.export_thread = threading.Thread(target=self.run_export, args=(job, output, self._cancel_event), daemon=True)
         self.export_thread.start()
 
     def reset_export_progress(self, job: dict[str, Any]) -> None:
@@ -1203,7 +1294,7 @@ class DesktopApp(tk.Tk):
         if cli.supports_vector_overzoom(job["style"]) and max_zoom > MAX_PREVIEW_ZOOM:
             raise ValueError(f"Overzoom exports are supported up to zoom {cli.OVERZOOM_MAX_DETAIL_ZOOM}.")
 
-    def run_export(self, job: dict[str, Any], output: Path) -> None:
+    def run_export(self, job: dict[str, Any], output: Path, cancel_event: threading.Event) -> None:
         try:
             output.parent.mkdir(parents=True, exist_ok=True)
             with tempfile.TemporaryDirectory(prefix="eink-map-tiles-job-") as temp_dir:
@@ -1220,7 +1311,10 @@ class DesktopApp(tk.Tk):
                     str(DESKTOP_RATE_LIMIT_SECONDS),
                 ]
                 with redirect_stdout(writer):
-                    exit_code = cli.main(argv)
+                    exit_code = cli.main(argv, cancel_event=cancel_event)
+                if exit_code == 2:
+                    self.after(0, self.finish_export_cancelled)
+                    return
                 if exit_code:
                     raise RuntimeError(f"Export failed with exit code {exit_code}")
             self.messages.put(f"\nDone. Output: {output}\nZIP: {output.with_suffix('.zip')}\n")
@@ -1230,11 +1324,16 @@ class DesktopApp(tk.Tk):
             self.after(0, lambda: self.finish_export_failed(str(exc)))
         finally:
             self.after(0, lambda: self.export_button.configure(state="normal"))
+            self.after(0, self.cancel_button.grid_remove)
 
     def finish_export_success(self) -> None:
         self.vars["status"].set("Export complete")
         self.vars["progress_value"].set(self.export_total)
         self.vars["progress_text"].set(f"Complete: {self.export_total:,} tiles exported")
+
+    def finish_export_cancelled(self) -> None:
+        self.vars["status"].set("Export cancelled")
+        self.vars["progress_text"].set("Export cancelled")
 
     def finish_export_failed(self, error: str) -> None:
         self.vars["status"].set("Export failed")
@@ -1306,12 +1405,14 @@ class DesktopApp(tk.Tk):
         self.log.delete("1.0", "end")
         self.log.grid()
         self.reset_export_progress(job)
+        self._cancel_event = threading.Event()
         self.inkhud_button.configure(state="disabled")
         self.export_button.configure(state="disabled")
+        self.cancel_button.grid()
         self.vars["status"].set("Exporting for InkHUD...")
         self.export_thread = threading.Thread(
             target=self._run_inkhud_export,
-            args=(job, zoom_specs, Path(save_path)),
+            args=(job, zoom_specs, Path(save_path), self._cancel_event),
             daemon=True,
         )
         self.export_thread.start()
@@ -1357,7 +1458,7 @@ class DesktopApp(tk.Tk):
         result = np.where(quantized >= 255, 255, np.where(quantized <= 0, 0, dithered)).astype(np.uint8)
         return _Image.fromarray(result, mode="L")
 
-    def _run_inkhud_export(self, job: dict[str, Any], zoom_specs: list[dict], save_path: Path) -> None:
+    def _run_inkhud_export(self, job: dict[str, Any], zoom_specs: list[dict], save_path: Path, cancel_event: threading.Event | None = None) -> None:
         from PIL import Image, ImageEnhance, ImageFilter
 
         clat = self.map_center_lat
@@ -1380,7 +1481,10 @@ class DesktopApp(tk.Tk):
                     "--rate-limit", str(DESKTOP_RATE_LIMIT_SECONDS),
                 ]
                 with redirect_stdout(writer):
-                    exit_code = cli.main(argv)
+                    exit_code = cli.main(argv, cancel_event=cancel_event)
+                if exit_code == 2:
+                    self.after(0, self.finish_export_cancelled)
+                    return
                 if exit_code:
                     raise RuntimeError(f"Tile download failed (exit code {exit_code})")
 
@@ -1452,6 +1556,7 @@ class DesktopApp(tk.Tk):
         finally:
             self.after(0, lambda: self.inkhud_button.configure(state="normal"))
             self.after(0, lambda: self.export_button.configure(state="normal"))
+            self.after(0, self.cancel_button.grid_remove)
 
     def poll_messages(self) -> None:
         while True:

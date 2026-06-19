@@ -980,7 +980,7 @@ def make_zip(output_root: Path) -> Path:
     return zip_path
 
 
-def run(args: argparse.Namespace) -> int:
+def run(args: argparse.Namespace, cancel_event=None) -> int:
     bbox = args_to_bbox(args)
     if args.include_elements is None:
         args.include_elements = list(DEFAULT_TOPO_ELEMENTS if is_topo_style(args.style) else DEFAULT_INCLUDE_ELEMENTS)
@@ -1017,6 +1017,9 @@ def run(args: argparse.Namespace) -> int:
     tiles = tiles_for_bbox(bbox, args.zooms)
     completed = 0
     for tile in tiles:
+        if cancel_event and cancel_event.is_set():
+            print("Export cancelled.")
+            return 2
         destination = tile_output_path(args.output, args.style, args.layout, tile)
         if destination.exists() and not args.overwrite:
             completed += 1
@@ -1050,14 +1053,14 @@ def run(args: argparse.Namespace) -> int:
     return 0
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(argv: list[str] | None = None, cancel_event=None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     if args.single_style:
         args.layout = "single-map"
     apply_job_file(args)
     try:
-        return run(args)
+        return run(args, cancel_event=cancel_event)
     except KeyboardInterrupt:
         print("Interrupted", file=sys.stderr)
         return 130

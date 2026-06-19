@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Added flash usage bars in the Export panel showing how much of the available firmware flash the tile data will consume on ESP32-S3 and nRF52840 targets. Bars turn yellow above 60% and red above 85%.
+- In InkHUD mode, flash bars update live as zoom range changes (always a fixed 3×3 mosaic per zoom level = 72 KB each). In other modes, bars update on explicit Estimate click.
+- Added a Cancel button that appears during export and stops tile downloading cleanly between tiles.
+
 ## 1.1.0 - 2026-06-17
 
 - Added an alternate `osm-eink-topo` map style with hillshade and contour overlays from Mapzen Terrain Tiles on AWS Open Data.
