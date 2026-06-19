@@ -3,8 +3,10 @@
 ## Unreleased
 
 - Added flash usage bars in the Export panel showing how much of the available firmware flash the tile data will consume on ESP32-S3 and nRF52840 targets. Bars turn yellow above 60% and red above 85%.
-- In InkHUD mode, flash bars update live as zoom range changes (always a fixed 3×3 mosaic per zoom level = 72 KB each). In other modes, bars update on explicit Estimate click.
+- In InkHUD mode, flash bars update live as zoom range changes (always a fixed 3×3 mosaic per zoom level = 72 KB each uncompressed). Estimate shows as upper bound (≤) since RLE compression typically reduces the actual size by 70–90%.
+- In other modes, bars update on explicit Estimate click.
 - Added a Cancel button that appears during export and stops tile downloading cleanly between tiles.
+- Added RLE compression for InkHUD tile exports. Each mosaic row is encoded as (count, byte) pairs with a uint16 row-offset table for O(1) row access in firmware. Typical maps compress to 10–30% of uncompressed size.
 
 ## 1.1.0 - 2026-06-17
 

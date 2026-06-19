@@ -734,7 +734,7 @@ class DesktopApp(tk.Tk):
         ttk.Label(content, textvariable=self.vars["tile_count"], style="Hint.TLabel").grid(row=0, column=0, columnspan=4, sticky="ew", pady=(0, 2))
         self.flash_bars_canvas = tk.Canvas(content, height=44, background="#ffffff", highlightthickness=0)
         self.flash_bars_canvas.grid(row=1, column=0, columnspan=4, sticky="ew", pady=(0, 4))
-        self.flash_bars_canvas.bind("<Configure>", lambda _e: self.draw_flash_bars())
+        self.flash_bars_canvas.bind("<Configure>", lambda _e: self.draw_flash_bars(None))
         ttk.Label(content, textvariable=self.vars["status"], style="Hint.TLabel").grid(row=2, column=0, columnspan=4, sticky="ew", pady=(0, 6))
         self.flat_button(content, "Estimate", lambda: self.estimate_tiles(update_bars=True)).grid(row=2, column=0, sticky="ew", padx=(0, 5))
         self.export_button = self.flat_button(content, "Export Tiles", self.export_tiles, primary=True)
@@ -940,7 +940,7 @@ class DesktopApp(tk.Tk):
         (  88_000,  "nRF52840 (1 MB flash)"),
     ]
 
-    def draw_flash_bars(self, tile_bytes: int | None = None) -> None:
+    def draw_flash_bars(self, tile_bytes: int | None = None, upper_bound: bool = False) -> None:
         c = self.flash_bars_canvas
         c.delete("all")
         w = c.winfo_width()
@@ -948,9 +948,11 @@ class DesktopApp(tk.Tk):
             return
         if tile_bytes is None:
             tile_bytes = getattr(self, "_last_tile_bytes", None)
+            upper_bound = getattr(self, "_last_tile_upper_bound", False)
         if tile_bytes is None:
             return
         self._last_tile_bytes = tile_bytes
+        self._last_tile_upper_bound = upper_bound
 
         bar_h = 14
         label_w = 120
@@ -971,7 +973,8 @@ class DesktopApp(tk.Tk):
             kb = tile_bytes / 1024
             avail_kb = available / 1024
             pct = (tile_bytes / available) * 100
-            size_text = f"{kb:.0f} / {avail_kb:.0f} KB ({pct:.0f}%)"
+            bound_tag = "≤ " if upper_bound else ""
+            size_text = f"{bound_tag}{kb:.0f} / {avail_kb:.0f} KB ({bound_tag}{pct:.0f}%)"
 
             # Label left of bar
             c.create_text(0, y0 + bar_h // 2, anchor="w", text=label,
@@ -998,9 +1001,10 @@ class DesktopApp(tk.Tk):
         except ValueError:
             return
         num_zooms = max(0, max_zoom - min_zoom + 1)
-        # InkHUD export always generates a fixed 3x3 mosaic per zoom level
+        # InkHUD export always generates a fixed 3x3 mosaic per zoom level.
+        # RLE compression typically reduces this by 70-90%; show uncompressed as upper bound.
         tile_bytes = num_zooms * 3 * 3 * 256 * 256 // 8
-        self.draw_flash_bars(tile_bytes)
+        self.draw_flash_bars(tile_bytes, upper_bound=True)
 
     def estimate_tiles(self, show_errors: bool = True, update_bars: bool = False) -> None:
         try:
@@ -1488,8 +1492,8 @@ class DesktopApp(tk.Tk):
                 if exit_code:
                     raise RuntimeError(f"Tile download failed (exit code {exit_code})")
 
-                # Process each zoom level into a 3x3 mosaic and convert to 1-bit XBM
-                zoom_data: list[tuple[int, int, int, list[int]]] = []  # (zoom, x0, y0, bytes)
+                # Process each zoom level into a 3x3 mosaic, convert to 1-bit, RLE compress
+                zoom_data: list[tuple[int, int, int, list[int], list[int]]] = []  # (zoom, x0, y0, offsets, rle_bytes)
                 for spec in zoom_specs:
                     z = spec["zoom"]
                     x0, y0 = spec["tx"] - 1, spec["ty"] - 1
@@ -1503,18 +1507,33 @@ class DesktopApp(tk.Tk):
 
                     W, H = cols * 256, rows * 256
                     bpr = W // 8
-                    data: list[int] = []
+                    row_offsets: list[int] = []
+                    rle_bytes: list[int] = []
                     for y in range(H):
+                        # Pack row to 1-bit bytes
+                        row = []
                         for bx in range(bpr):
                             byte = 0
                             for bit in range(8):
                                 if bw.getpixel((bx * 8 + bit, y)) == 0:
                                     byte |= 1 << bit
-                            data.append(byte)
-                    zoom_data.append((z, x0, y0, data))
-                    self.messages.put(f"  zoom {z}: mosaic built ({len(data)} bytes)\n")
+                            row.append(byte)
+                        # RLE encode: (count, value) pairs, max run 255
+                        row_offsets.append(len(rle_bytes))
+                        i = 0
+                        while i < len(row):
+                            val = row[i]
+                            count = 1
+                            while i + count < len(row) and row[i + count] == val and count < 255:
+                                count += 1
+                            rle_bytes.append(count)
+                            rle_bytes.append(val)
+                            i += count
+                    raw_bytes = H * bpr
+                    self.messages.put(f"  zoom {z}: {raw_bytes} → {len(rle_bytes)} bytes ({len(rle_bytes)*100//raw_bytes}% of original)\n")
+                    zoom_data.append((z, x0, y0, row_offsets, rle_bytes))
 
-            # Generate multi-zoom map_tile.h
+            # Generate multi-zoom map_tile.h with RLE compressed data
             W, H = cols * 256, rows * 256
             x0_arr = ", ".join(str(zd[1]) for zd in zoom_data)
             y0_arr = ", ".join(str(zd[2]) for zd in zoom_data)
@@ -1524,6 +1543,7 @@ class DesktopApp(tk.Tk):
                 "",
                 f"// {style} zooms {min_zoom}-{max_zoom}, {cols}x{rows} mosaic per zoom, {W}x{H}px",
                 f"// center: lat={clat:.6f} lng={clng:.6f}",
+                f"// RLE compressed: (count, byte) pairs per row; use map_tile_row_offsets to seek to any row",
                 f"static const int map_tile_min_zoom = {min_zoom};",
                 f"static const int map_tile_max_zoom = {max_zoom};",
                 f"static const int map_tile_cols = {cols};",
@@ -1532,15 +1552,23 @@ class DesktopApp(tk.Tk):
                 f"static const int map_tile_y0[] = {{ {y0_arr} }};",
                 "",
             ]
-            # Individual data arrays
-            for idx, (z, x0, y0, data) in enumerate(zoom_data):
-                lines.append(f"static const uint8_t map_tile_data_{idx}[] = {{")
-                for i in range(0, len(data), 16):
-                    lines.append("    " + ", ".join(f"0x{b:02X}" for b in data[i : i + 16]) + ",")
+            for idx, (z, x0, y0, row_offsets, rle_bytes) in enumerate(zoom_data):
+                # Row offset table (uint16, one per row)
+                lines.append(f"static const uint16_t map_tile_row_offsets_{idx}[{H}] = {{")
+                for i in range(0, len(row_offsets), 16):
+                    lines.append("    " + ", ".join(str(o) for o in row_offsets[i : i + 16]) + ",")
                 lines.append("};")
                 lines.append("")
-            # Pointer lookup table
+                # RLE data
+                lines.append(f"static const uint8_t map_tile_data_{idx}[] = {{")
+                for i in range(0, len(rle_bytes), 16):
+                    lines.append("    " + ", ".join(f"0x{b:02X}" for b in rle_bytes[i : i + 16]) + ",")
+                lines.append("};")
+                lines.append("")
+            # Pointer lookup tables
+            off_list = ", ".join(f"map_tile_row_offsets_{i}" for i in range(len(zoom_data)))
             ptr_list = ", ".join(f"map_tile_data_{i}" for i in range(len(zoom_data)))
+            lines.append(f"static const uint16_t* const map_tile_row_offsets[] = {{ {off_list} }};")
             lines.append(f"static const uint8_t* const map_tile_data[] = {{ {ptr_list} }};")
 
             save_path.write_text("\n".join(lines), encoding="utf-8")
