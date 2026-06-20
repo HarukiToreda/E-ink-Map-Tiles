@@ -695,7 +695,7 @@ class DesktopApp(tk.Tk):
         ttk.Label(content, text="Grid").grid(row=2, column=0, sticky="w", pady=(4, 0))
         self.grid_combo = ttk.Combobox(
             content, textvariable=self.vars["inkhud_grid"],
-            values=["4x4", "3x3", "2x2"], state="readonly", width=6,
+            values=["8x8", "6x6", "5x5", "4x4", "3x3", "2x2"], state="readonly", width=6,
         )
         self.grid_combo.grid(row=2, column=1, sticky="w", padx=(6, 10), pady=(4, 0))
         ttk.Label(content, text="Tiles per zoom level", style="Hint.TLabel").grid(

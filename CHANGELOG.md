@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- **Added 5×5, 6×6, and 8×8 grid size options** to the InkHUD/InkHUD2 export grid dropdown. Larger grids provide wider geographic coverage per zoom level and are well-suited to ESP32-S3 targets with larger flash budgets.
 - Added flash usage bars in the Export panel showing how much of the available firmware flash the tile data will consume on ESP32-S3 and nRF52840 targets. Bars turn yellow above 60% and red above 85%.
 - In InkHUD mode, flash bars update live as zoom range changes. Estimate shows as upper bound (≤) since RLE compression typically reduces the actual size by 70–90%.
 - In other modes, bars update on explicit Estimate click.

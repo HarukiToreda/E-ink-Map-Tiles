@@ -11,7 +11,7 @@ Exports normal XYZ tile folders with attribution and a manifest, and InkHUD firm
 - Pan and zoom an interactive map preview with cursor-anchored scroll wheel zoom.
 - Export the visible map area as e-paper-ready PNG tiles rendered locally from OpenFreeMap vector data.
 - Export InkHUD firmware headers (`map_tile.h`) with LZ4-compressed tiles for direct inclusion in Meshtastic firmware.
-- Configurable InkHUD grid sizes (2×2, 3×3, 4×4) to fit flash budgets on nRF52840.
+- Configurable InkHUD grid sizes (2×2, 3×3, 4×4, 5×5, 6×6, 8×8) to fit flash budgets on nRF52840 and ESP32-S3.
 - InkHUD2 mode for sparse per-tile selection across multiple zoom levels.
 - Coverage overlay showing the exact tile footprint per zoom level before export.
 - Flash usage bars showing how much of the available firmware flash the tiles will consume on ESP32-S3 and nRF52840.
@@ -70,7 +70,7 @@ Check **I will keep required map attribution with exported tiles** before export
 | Max zoom | 8 | |
 | Mode | `grayscale` | |
 | Style | `osm-eink` | |
-| Grid | `4×4` | InkHUD/InkHUD2 only |
+| Grid | `4×4` | InkHUD/InkHUD2 only. Options: 2×2, 3×3, 4×4, 5×5, 6×6, 8×8 |
 | Brightness | 0.99 | InkHUD defaults to 1.03 |
 | Contrast | 1.15 | InkHUD defaults to 2.41 |
 | Mono threshold | 120 | `mono` mode only, hidden otherwise |
@@ -90,6 +90,8 @@ Check **I will keep required map attribution with exported tiles** before export
 - `osm-eink-topo` — Topo map with hillshade and contour lines from Mapzen Terrain Tiles on AWS Open Data. Roads, buildings, POI, and transit are off by default; boundaries can be re-enabled in **Map Elements**.
 
 ## Map Elements
+
+This section is only shown when **OpenFreeMap** is selected as the map source. It is hidden when USGS National Map Topo is selected, since USGS tiles are pre-rendered and layer composition cannot be changed.
 
 Toggle which layers appear in the preview and exported tiles:
 
@@ -211,8 +213,11 @@ The firmware decompresses tiles on demand into a 2-entry LRU cache using an inli
 | 2×2 | 4 | 32 KB | ~15 KB |
 | 3×3 | 9 | 72 KB | ~32 KB |
 | 4×4 | 16 | 128 KB | ~56 KB |
+| 5×5 | 25 | 200 KB | ~90 KB |
+| 6×6 | 36 | 288 KB | ~130 KB |
+| 8×8 | 64 | 512 KB | ~230 KB |
 
-nRF52840 has approximately 85 KB available for tile data. Example combinations that fit:
+nRF52840 has approximately 85 KB available for tile data. ESP32-S3 has a much larger flash budget and can accommodate 5×5, 6×6, or 8×8 grids comfortably. Example combinations that fit nRF52840:
 
 - z12 2×2 + z13 2×2 + z14 4×4 ≈ 81 KB (3 zoom levels)
 - z13 4×4 + z14 4×4 ≈ 112 KB (fits ESP32-S3, tight for nRF)
