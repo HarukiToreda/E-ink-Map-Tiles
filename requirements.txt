@@ -1,2 +1,3 @@
 mapbox-vector-tile>=2.2
 Pillow>=10.4
+lz4>=4.0

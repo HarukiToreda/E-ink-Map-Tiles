@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import json
+import lz4.block
 import math
 import queue
 import re
@@ -184,6 +185,8 @@ class DesktopApp(tk.Tk):
         self.map_drag_center: tuple[float, float] | None = None
         self.preview_render_id = 0
         self.preview_after_id: str | None = None
+        self.preview_rendered_width: int = 0
+        self.preview_rendered_height: int = 0
         self.live_update_after_id: str | None = None
         self.preview_tile_cache: dict[tuple, Any] = {}
         self.export_total = 0
@@ -243,6 +246,7 @@ class DesktopApp(tk.Tk):
             "collapse_export_settings": tk.BooleanVar(value=True),
             "collapse_map_elements": tk.BooleanVar(value=True),
             "show_inkhud_coverage": tk.BooleanVar(value=False),
+            "inkhud_grid": tk.StringVar(value="4x4"),
         }
         for element in cli.MAP_ELEMENTS:
             variables[f"element_{element}"] = tk.BooleanVar(value=element in cli.DEFAULT_INCLUDE_ELEMENTS)
@@ -381,7 +385,7 @@ class DesktopApp(tk.Tk):
         self.vars["mode"].trace_add("write", lambda *_args: self.draw_inkhud_coverage_overlay())
         self.vars["style"].trace_add("write", lambda *_args: self.apply_style_preset())
 
-        export_keys = ("min_zoom", "max_zoom")
+        export_keys = ("min_zoom", "max_zoom", "inkhud_grid")
         for key in export_keys:
             self.vars[key].trace_add("write", lambda *_args: self.queue_live_update(preview=False, estimate=True))
             self.vars[key].trace_add("write", lambda *_args: self.update_inkhud_flash_bars())
@@ -647,6 +651,16 @@ class DesktopApp(tk.Tk):
             width=16,
         ).grid(row=1, column=3, sticky="ew", padx=(6, 0), pady=(4, 0))
 
+        ttk.Label(content, text="Grid").grid(row=2, column=0, sticky="w", pady=(4, 0))
+        self.grid_combo = ttk.Combobox(
+            content, textvariable=self.vars["inkhud_grid"],
+            values=["4x4", "3x3", "2x2"], state="readonly", width=6,
+        )
+        self.grid_combo.grid(row=2, column=1, sticky="w", padx=(6, 10), pady=(4, 0))
+        ttk.Label(content, text="Tiles per zoom level", style="Hint.TLabel").grid(
+            row=2, column=2, columnspan=2, sticky="w", pady=(4, 0)
+        )
+
         ttk.Label(content, text="Brightness").grid(row=3, column=0, sticky="w", pady=(6, 0))
         ttk.Scale(content, from_=0.6, to=1.6, variable=self.vars["brightness"], orient="horizontal").grid(
             row=3,
@@ -910,20 +924,15 @@ class DesktopApp(tk.Tk):
             return
 
         if anchor is not None:
-            width = max(self.map_canvas.winfo_width(), 320)
-            height = max(self.map_canvas.winfo_height(), 260)
+            width = self.preview_rendered_width or max(self.map_canvas.winfo_width(), 320)
+            height = self.preview_rendered_height or max(self.map_canvas.winfo_height(), 260)
             anchor_x, anchor_y = anchor
             old_center_x, old_center_y = self.lon_lat_to_world_pixel(self.map_center_lon, self.map_center_lat, old_zoom)
             anchor_world_x = old_center_x - width / 2 + anchor_x
             anchor_world_y = old_center_y - height / 2 + anchor_y
             anchor_lon, anchor_lat = self.world_pixel_to_lon_lat(anchor_world_x, anchor_world_y, old_zoom)
-
-            new_anchor_x, new_anchor_y = self.lon_lat_to_world_pixel(anchor_lon, anchor_lat, new_zoom)
-            new_center_x = new_anchor_x - anchor_x + width / 2
-            new_center_y = new_anchor_y - anchor_y + height / 2
-            new_lon, new_lat = self.world_pixel_to_lon_lat(new_center_x, new_center_y, new_zoom)
-            self.map_center_lon = cli.normalize_lon(new_lon)
-            self.map_center_lat = max(min(new_lat, cli.MAX_MERCATOR_LAT), -cli.MAX_MERCATOR_LAT)
+            self.map_center_lon = cli.normalize_lon(anchor_lon)
+            self.map_center_lat = max(min(anchor_lat, cli.MAX_MERCATOR_LAT), -cli.MAX_MERCATOR_LAT)
 
         self.map_zoom = new_zoom
         self.sync_view_area()
@@ -1006,6 +1015,8 @@ class DesktopApp(tk.Tk):
             "layout": DESKTOP_TILE_LAYOUT,
             "urlTemplate": url_template,
             "attribution": cli.DEFAULT_ATTRIBUTION,
+            "canvas_width": max(self.map_canvas.winfo_width(), 320),
+            "canvas_height": max(self.map_canvas.winfo_height(), 260),
         }
 
     # Flash budgets: (available_for_tiles_bytes, label)
@@ -1077,19 +1088,16 @@ class DesktopApp(tk.Tk):
             except ValueError:
                 return
             num_zooms = max(0, max_zoom - min_zoom + 1)
-            tile_bytes = num_zooms * 4 * 4 * 256 * 256 // 8
-            self.draw_flash_bars(tile_bytes, upper_bound=False)
-            self.vars["tile_count"].set(
-                f"InkHUD: {num_zooms} zoom(s) — {tile_bytes // 1024} KB"
-            )
+            g = int(self.vars["inkhud_grid"].get()[0])  # "4x4" -> 4
+            estimated = int(num_zooms * g * g * 256 * 256 // 8 * 0.45)
+            self.draw_flash_bars(estimated, upper_bound=True)
+            self.vars["tile_count"].set(f"InkHUD: {num_zooms} zoom(s) {g}×{g} — ≈{estimated // 1024} KB (LZ4 est.)")
         elif mode == "inkhud2":
             total = sum(len(v) for v in self.inkhud2_selected_tiles.values())
-            total_bytes = total * 256 * 256 // 8
+            estimated = int(total * 256 * 256 // 8 * 0.45)
             zoom_count = sum(1 for v in self.inkhud2_selected_tiles.values() if v)
-            self.draw_flash_bars(total_bytes, upper_bound=False)
-            self.vars["tile_count"].set(
-                f"InkHUD2: {total} tile(s) across {zoom_count} zoom(s) — {total_bytes // 1024} KB"
-            )
+            self.draw_flash_bars(estimated, upper_bound=True)
+            self.vars["tile_count"].set(f"InkHUD2: {total} tile(s) across {zoom_count} zoom(s) — ≈{estimated // 1024} KB (LZ4 est.)")
 
     def estimate_tiles(self, show_errors: bool = True, update_bars: bool = False) -> None:
         try:
@@ -1152,8 +1160,8 @@ class DesktopApp(tk.Tk):
         bbox = cli.BBox(**job["bbox"])
         zoom = self.map_zoom
         tile_size = 256
-        width = max(self.map_canvas.winfo_width(), 320)
-        height = max(self.map_canvas.winfo_height(), 260)
+        width = job.get("canvas_width") or max(self.map_canvas.winfo_width(), 320)
+        height = job.get("canvas_height") or max(self.map_canvas.winfo_height(), 260)
         center_world_x, center_world_y = self.lon_lat_to_world_pixel(self.map_center_lon, self.map_center_lat, zoom)
         left_world = center_world_x - width / 2
         top_world = center_world_y - height / 2
@@ -1332,6 +1340,58 @@ class DesktopApp(tk.Tk):
                     )
 
     @staticmethod
+    def _build_tile_header(tile_data: list[tuple[int, int, int, list[int]]], style: str, label: str, extra_comments: list[str] | None = None) -> tuple[str, int]:
+        """Compress tile_data with LZ4 and return (header_text, total_compressed_bytes).
+
+        tile_data: list of (zoom, tx, ty, raw_bytes)
+        Returns the full map_tile.h content and the total compressed byte count.
+        """
+        zoom_set = sorted(set(t[0] for t in tile_data))
+        compressed: list[bytes] = []
+        for _, _, _, raw in tile_data:
+            compressed.append(lz4.block.compress(bytes(raw), store_size=False))
+
+        total_bytes = sum(len(c) for c in compressed)
+
+        zoom_arr = ", ".join(str(t[0]) for t in tile_data)
+        tx_arr   = ", ".join(str(t[1]) for t in tile_data)
+        ty_arr   = ", ".join(str(t[2]) for t in tile_data)
+        size_arr = ", ".join(str(len(c)) for c in compressed)
+
+        lines = [
+            "#pragma once",
+            "#include <stdint.h>",
+            "",
+            f"// {style} {label}: {len(tile_data)} tiles, zooms [{', '.join(str(z) for z in zoom_set)}]",
+            f"// Each tile is 256x256px = 8192 bytes uncompressed, stored here as LZ4 blocks.",
+            f"// Byte layout is COLUMN-MAJOR: bytes are packed as [bx=0..31][y=0..255], not row-major.",
+            f"// To read pixel (px, py): byte = tile[(px/8)*256 + py], bit = px%8",
+            f"// Firmware: search map_tile_zooms/tx/ty for (zoom,tx,ty), decompress map_tile_data[i]",
+            f"// using map_tile_sizes[i] bytes into an 8192-byte buffer, then read pixels from buffer.",
+        ]
+        if extra_comments:
+            lines.extend(f"// {c}" for c in extra_comments)
+        lines += [
+            "",
+            f"static const int map_tile_count = {len(tile_data)};",
+            f"static const int map_tile_zooms[] = {{ {zoom_arr} }};",
+            f"static const int map_tile_tx[]    = {{ {tx_arr} }};",
+            f"static const int map_tile_ty[]    = {{ {ty_arr} }};",
+            f"static const int map_tile_sizes[] = {{ {size_arr} }};",
+            "",
+        ]
+        for idx, ((z, tx, ty, _), cdata) in enumerate(zip(tile_data, compressed)):
+            lines.append(f"static const uint8_t map_tile_data_{idx}[] = {{  // z{z}/{tx}/{ty}, {len(cdata)} bytes compressed")
+            for i in range(0, len(cdata), 16):
+                lines.append("    " + ", ".join(f"0x{b:02X}" for b in cdata[i : i + 16]) + ",")
+            lines.append("};")
+            lines.append("")
+        ptr_list = ", ".join(f"map_tile_data_{i}" for i in range(len(tile_data)))
+        lines.append(f"static const uint8_t* const map_tile_data[] = {{ {ptr_list} }};")
+
+        return "\n".join(lines), total_bytes
+
+    @staticmethod
     def _inkhud_grid_origin(lon: float, lat: float, z: int) -> tuple[int, int]:
         """Return (gx0, gy0) — top-left tile of the 4×4 export grid at zoom z.
 
@@ -1367,10 +1427,13 @@ class DesktopApp(tk.Tk):
 
         colors = ["#e63946", "#f4a261", "#2a9d8f", "#457b9d", "#6a4c93", "#e9c46a"]
 
+        g = int(self.vars["inkhud_grid"].get()[0])
+        half = g // 2
+
         for i, z in enumerate(range(min_zoom, max_zoom + 1)):
             tx, ty = cli.lonlat_to_tile(self.map_center_lon, self.map_center_lat, z)
-            gx0, gy0 = tx - 2, ty - 2
-            gx1, gy1 = gx0 + 4, gy0 + 4
+            gx0, gy0 = tx - half, ty - half
+            gx1, gy1 = gx0 + g, gy0 + g
 
             scale = 2 ** (view_zoom - z)
             tile_px = 256 * scale
@@ -1493,6 +1556,8 @@ class DesktopApp(tk.Tk):
         if render_id != self.preview_render_id:
             return
         self.preview_image = ImageTk.PhotoImage(image)
+        self.preview_rendered_width = image.width
+        self.preview_rendered_height = image.height
         self.map_canvas.delete("all")
         self.map_canvas.create_image(0, 0, image=self.preview_image, anchor="nw", tags=("map-image",))
         self.draw_zoom_badge()
@@ -1631,16 +1696,18 @@ class DesktopApp(tk.Tk):
         except ValueError:
             min_zoom = max_zoom = self.map_zoom
 
-        # Compute per-zoom tile origins and bboxes (3x3 mosaic centered on map center)
+        # Compute per-zoom tile origins and bboxes (gxg grid centered on map center)
+        g = int(self.vars["inkhud_grid"].get()[0])
+        half = g // 2
         zoom_specs = []
         eps = 1e-6
         for z in range(min_zoom, max_zoom + 1):
             tx, ty = cli.lonlat_to_tile(clng, clat, z)
             n = 2**z
-            west  = (tx - 2) / n * 360 - 180
-            east  = (tx + 2) / n * 360 - 180 - eps
-            north = math.degrees(math.atan(math.sinh(math.pi * (1 - 2 * (ty - 2) / n))))
-            south = math.degrees(math.atan(math.sinh(math.pi * (1 - 2 * (ty + 2) / n)))) + eps
+            west  = (tx - half) / n * 360 - 180
+            east  = (tx - half + g) / n * 360 - 180 - eps
+            north = math.degrees(math.atan(math.sinh(math.pi * (1 - 2 * (ty - half) / n))))
+            south = math.degrees(math.atan(math.sinh(math.pi * (1 - 2 * (ty - half + g) / n)))) + eps
             zoom_specs.append({"zoom": z, "tx": tx, "ty": ty,
                                 "bbox": {"west": west, "south": south, "east": east, "north": north}})
 
@@ -1786,8 +1853,8 @@ class DesktopApp(tk.Tk):
                     rgb = Image.open(tile_path).convert("RGB") if tile_path.exists() else Image.new("RGB", (256, 256), (255, 255, 255))
                     bw = cli.inkhud_process(rgb, float(job["contrast"]), float(job["brightness"]))
                     raw: list[int] = []
-                    for y in range(256):
-                        for bx in range(32):
+                    for bx in range(32):
+                        for y in range(256):
                             byte = 0
                             for bit in range(8):
                                 if bw.getpixel((bx * 8 + bit, y)) == 0:
@@ -1796,34 +1863,12 @@ class DesktopApp(tk.Tk):
                     tile_data.append((z, tx, ty, raw))
                     self.messages.put(f"  [{i+1}/{len(tile_list)}] z{z}/{tx}/{ty}: {len(raw):,} bytes\n")
 
-            # Sparse header: each tile stored individually, looked up by (zoom, tx, ty)
-            zoom_set = sorted(set(t[0] for t in tile_data))
-            zoom_arr = ", ".join(str(t[0]) for t in tile_data)
-            tx_arr   = ", ".join(str(t[1]) for t in tile_data)
-            ty_arr   = ", ".join(str(t[2]) for t in tile_data)
-            lines = [
-                "#pragma once",
-                "",
-                f"// {style} InkHUD2 sparse export: {len(tile_data)} tiles at 128x128px, zooms [{', '.join(str(z) for z in zoom_set)}]",
-                f"// firmware: look up tile by searching map_tile_zooms/tx/ty, then read map_tile_data[i]",
-                f"// each tile stored at 128x128px (downscaled from 256 for 4x flash savings; 2048 bytes each)",
-                f"static const int map_tile_count = {len(tile_data)};",
-                f"static const int map_tile_zooms[] = {{ {zoom_arr} }};",
-                f"static const int map_tile_tx[]    = {{ {tx_arr} }};",
-                f"static const int map_tile_ty[]    = {{ {ty_arr} }};",
-                "",
-            ]
-            for idx, (z, tx, ty, raw) in enumerate(tile_data):
-                lines.append(f"static const uint8_t map_tile_data_{idx}[] = {{  // z{z}/{tx}/{ty}")
-                for i in range(0, len(raw), 16):
-                    lines.append("    " + ", ".join(f"0x{b:02X}" for b in raw[i : i + 16]) + ",")
-                lines.append("};")
-                lines.append("")
-            ptr_list = ", ".join(f"map_tile_data_{i}" for i in range(len(tile_data)))
-            lines.append(f"static const uint8_t* const map_tile_data[] = {{ {ptr_list} }};")
+            header, total_bytes = self._build_tile_header(tile_data, style, "InkHUD2 sparse export")
+            uncompressed = len(tile_data) * 8192
+            ratio = total_bytes / uncompressed * 100 if uncompressed else 100
+            self.messages.put(f"  compressed: {total_bytes:,} bytes ({ratio:.0f}% of {uncompressed:,} uncompressed)\n")
 
-            save_path.write_text("\n".join(lines), encoding="utf-8")
-            total_bytes = len(tile_data) * 8192
+            save_path.write_text(header, encoding="utf-8")
             self.messages.put(f"__TILE_TOTAL_BYTES__:{total_bytes}\n")
             self.messages.put(f"\nmap_tile.h saved to: {save_path}\n")
             self.after(0, self.finish_export_success)
@@ -1885,7 +1930,8 @@ class DesktopApp(tk.Tk):
 
         clat = self.map_center_lat
         clng = self.map_center_lon
-        cols, rows = 4, 4
+        g = int(self.vars["inkhud_grid"].get()[0])
+        cols, rows = g, g
         style = job["style"]
         min_zoom = zoom_specs[0]["zoom"]
         max_zoom = zoom_specs[-1]["zoom"]
@@ -1910,11 +1956,11 @@ class DesktopApp(tk.Tk):
                 if exit_code:
                     raise RuntimeError(f"Tile download failed (exit code {exit_code})")
 
-                # Process each tile in the 4x4 grid per zoom individually at full 256x256
+                # Process each tile in the grid per zoom individually at full 256x256
                 tile_data: list[tuple[int, int, int, list[int]]] = []  # (zoom, tx, ty, raw)
                 for spec in zoom_specs:
                     z = spec["zoom"]
-                    x0, y0 = spec["tx"] - 2, spec["ty"] - 2
+                    x0, y0 = spec["tx"] - half, spec["ty"] - half
                     for dy in range(rows):
                         for dx in range(cols):
                             tx, ty = x0 + dx, y0 + dy
@@ -1922,8 +1968,8 @@ class DesktopApp(tk.Tk):
                             rgb = Image.open(tile_path).convert("RGB") if tile_path.exists() else Image.new("RGB", (256, 256), (255, 255, 255))
                             bw = cli.inkhud_process(rgb, float(job["contrast"]), float(job["brightness"]))
                             raw: list[int] = []
-                            for y in range(256):
-                                for bx in range(32):
+                            for bx in range(32):
+                                for y in range(256):
                                     byte = 0
                                     for bit in range(8):
                                         if bw.getpixel((bx * 8 + bit, y)) == 0:
@@ -1932,34 +1978,15 @@ class DesktopApp(tk.Tk):
                             tile_data.append((z, tx, ty, raw))
                     self.messages.put(f"  zoom {z}: {rows * cols} tiles, {rows * cols * 8192:,} bytes\n")
 
-            zoom_set = sorted(set(t[0] for t in tile_data))
-            zoom_arr = ", ".join(str(t[0]) for t in tile_data)
-            tx_arr   = ", ".join(str(t[1]) for t in tile_data)
-            ty_arr   = ", ".join(str(t[2]) for t in tile_data)
-            lines = [
-                "#pragma once",
-                "",
-                f"// {style} InkHUD sparse export: {len(tile_data)} tiles at 256x256px, zooms [{', '.join(str(z) for z in zoom_set)}]",
-                f"// center: lat={clat:.6f} lng={clng:.6f}",
-                f"// firmware: look up tile by searching map_tile_zooms/tx/ty, then read map_tile_data[i]",
-                f"// each tile is 256x256px = 8192 bytes",
-                f"static const int map_tile_count = {len(tile_data)};",
-                f"static const int map_tile_zooms[] = {{ {zoom_arr} }};",
-                f"static const int map_tile_tx[]    = {{ {tx_arr} }};",
-                f"static const int map_tile_ty[]    = {{ {ty_arr} }};",
-                "",
-            ]
-            for idx, (z, tx, ty, raw) in enumerate(tile_data):
-                lines.append(f"static const uint8_t map_tile_data_{idx}[] = {{  // z{z}/{tx}/{ty}")
-                for i in range(0, len(raw), 16):
-                    lines.append("    " + ", ".join(f"0x{b:02X}" for b in raw[i : i + 16]) + ",")
-                lines.append("};")
-                lines.append("")
-            ptr_list = ", ".join(f"map_tile_data_{i}" for i in range(len(tile_data)))
-            lines.append(f"static const uint8_t* const map_tile_data[] = {{ {ptr_list} }};")
+            header, total_bytes = self._build_tile_header(
+                tile_data, style, "InkHUD sparse export",
+                extra_comments=[f"center: lat={clat:.6f} lng={clng:.6f}"],
+            )
+            uncompressed = len(tile_data) * 8192
+            ratio = total_bytes / uncompressed * 100 if uncompressed else 100
+            self.messages.put(f"  compressed: {total_bytes:,} bytes ({ratio:.0f}% of {uncompressed:,} uncompressed)\n")
 
-            save_path.write_text("\n".join(lines), encoding="utf-8")
-            total_bytes = len(tile_data) * 8192
+            save_path.write_text(header, encoding="utf-8")
             self.messages.put(f"__TILE_TOTAL_BYTES__:{total_bytes}\n")
             self.messages.put(f"\nmap_tile.h saved to: {save_path}\n")
             self.after(0, self.finish_export_success)
