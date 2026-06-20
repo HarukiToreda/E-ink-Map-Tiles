@@ -145,11 +145,39 @@ map_tile.h
 
 ## InkHUD Firmware Export
 
-**⬡ Export for InkHUD** generates a `map_tile.h` C header for direct inclusion in the Meshtastic firmware. Each 256×256 tile is stored as a raw LZ4 block using column-major byte layout (`[bx][y]` instead of row-major), which makes vertical map features (roads, building edges) contiguous in memory — LZ4 compresses these ~30% better than row-major layout.
+**⬡ Export for InkHUD** generates a `map_tile.h` C header for direct inclusion in the Meshtastic firmware.
 
-Typical compression on dense urban areas: 128 KB per 4×4 zoom uncompressed → 53–57 KB after column-major LZ4.
+### Image pipeline
 
-The header uses parallel arrays:
+Before compression, each tile goes through the InkHUD image pipeline:
+
+1. Water detection — pixels where blue significantly exceeds red are forced black (water bodies render solid).
+2. Contrast and brightness adjustment using the configured slider values.
+3. Unsharp mask to sharpen edges before dithering.
+4. Bayer ordered dithering — pixels are quantized to three levels (black, mid-gray, white) and then dithered using a 4×4 Bayer matrix. This produces clean, firmware-friendly patterns that compress better than error-diffusion dithering.
+
+### Tile format and compression
+
+Each 256×256 tile is packed to 1 bit per pixel using **column-major byte layout**: bytes are stored as `[bx=0..31][y=0..255]` rather than the usual row-major `[y=0..255][bx=0..31]`. This means each byte covers 8 horizontally adjacent pixels in a single column.
+
+Column-major layout is chosen specifically to help LZ4. Map tiles have strong vertical structure — roads run top-to-bottom, building edges are vertical, water fills columns uniformly. In column-major order these features become long identical runs in memory, which LZ4's literal/match encoding compresses efficiently. Row-major order breaks those runs into 32-byte fragments (one row width), cutting compression ratio roughly in half.
+
+Each packed tile is then compressed as a **raw LZ4 block** (no frame header). Typical results on dense urban map tiles:
+
+| Layout | Compressed size per 4×4 zoom |
+|---|---|
+| Row-major + LZ4 | ~78–81 KB |
+| Column-major + LZ4 | ~53–57 KB |
+
+The firmware reads pixel `(px, py)` from a decompressed buffer as:
+
+```c
+buf[(px / 8) * 256 + py] & (1 << (px % 8))
+```
+
+### Header format
+
+The header uses parallel arrays, one entry per tile:
 
 ```c
 map_tile_count      // total number of tiles
@@ -160,7 +188,9 @@ map_tile_sizes[]    // compressed byte count for each tile
 map_tile_data[]     // pointers to per-tile LZ4 byte arrays
 ```
 
-The firmware decompresses tiles on demand into a 2-entry LRU cache using an inline LZ4 decompressor (~25 lines, no external dependencies). Pixel read from a decompressed buffer: `buf[(px/8)*256 + py] & (1 << (px%8))`.
+The firmware decompresses tiles on demand into a 2-entry LRU cache using an inline LZ4 decompressor (~25 lines of C, no external dependencies). Cache entries are 8192 bytes each (one decompressed tile), so RAM cost is 16 KB regardless of how many tiles are in flash.
+
+### Grid size and flash budget
 
 **Grid size** controls how many tiles are exported per zoom level, centered on the map bullseye:
 
@@ -175,9 +205,16 @@ nRF52840 has approximately 85 KB available for tile data. Example combinations t
 - z12 2×2 + z13 2×2 + z14 4×4 ≈ 81 KB (3 zoom levels)
 - z13 4×4 + z14 4×4 ≈ 112 KB (fits ESP32-S3, tight for nRF)
 
-**Coverage overlay** — enable the **Coverage** checkbox to see dashed per-zoom bounding boxes on the map preview showing the exact tile footprint before exporting.
+The flash bars in the Export panel show estimated usage. The estimate uses 45% of uncompressed size as a conservative upper bound based on real urban tile measurements.
 
-**InkHUD2 mode** — instead of a fixed grid, click individual tiles on the map to build a sparse, non-contiguous tile set across any combination of zoom levels. Useful when you want detailed coverage of specific areas without a uniform grid.
+### InkHUD vs InkHUD2
+
+Both modes use the same image pipeline and the same `map_tile.h` output format. The difference is in how tiles are selected:
+
+- **InkHUD** — fixed grid centered on the map bullseye. Every zoom level exports the same grid size (e.g. 4×4) in a square around the center. Simple and predictable.
+- **InkHUD2** — click individual tiles on the map to build a sparse, non-contiguous set across any combination of zoom levels. Useful when you want dense coverage of a specific corridor or route at one zoom level and broader context tiles at another, without paying for a full uniform grid.
+
+**Coverage overlay** — enable the **Coverage** checkbox to see dashed per-zoom bounding boxes on the preview showing the exact InkHUD tile footprint before exporting.
 
 ## Legal Map Sources
 
