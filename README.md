@@ -2,22 +2,24 @@
 
 Version 1.1.0
 
-Local-only Windows tool for generating e-paper-friendly offline map tiles for future InkHUD work in the Meshtastic firmware repo.
+Local-only Windows desktop app for generating e-paper-friendly offline map tiles for InkHUD in the Meshtastic firmware repo.
 
-This project is focused on the tile asset pipeline, not firmware integration. It exports normal XYZ tile folders, attribution files, a manifest, and a zip bundle that future firmware code can consume or transform.
+This project is focused on the tile asset pipeline, not firmware integration. It exports normal XYZ tile folders, attribution files, a manifest, and a zip bundle, as well as InkHUD firmware headers (`map_tile.h`) with LZ4-compressed tiles.
 
 ## What It Does
 
 - Runs as a native Windows desktop app.
-- Lets you pan and zoom an interactive map preview.
+- Lets you pan and zoom an interactive map preview with cursor-anchored scroll wheel zoom.
 - Lets you choose an export area from the current visible map.
-- Downloads OpenFreeMap vector tiles for that selected area.
-- Renders e-paper-ready PNG tiles locally.
+- Downloads OpenFreeMap vector tiles for that selected area and renders e-paper-ready PNG tiles locally.
 - Exports a folder and zip bundle with `manifest.json` and `ATTRIBUTION.txt`.
+- Exports InkHUD firmware headers (`map_tile.h`) with LZ4-compressed column-major tiles for ESP32-S3 and nRF52840 targets.
+- Supports configurable InkHUD grid sizes (2×2, 3×3, 4×4) to fit flash budgets.
+- Supports InkHUD2 mode for sparse per-tile selection across multiple zoom levels.
 - Supports map element toggles, including land, water, roads, highways, paths, buildings, boundaries, labels, POI, and transit.
 - Supports grayscale, mono, palette, and original output modes.
 - Includes regular map overzoom and an alternate topo style for crisp closer inspection without raster blur.
-- Shows export estimates, progress, tile counts, and an export log.
+- Shows flash usage bars, export estimates, progress, tile counts, and an export log.
 
 The workflow is fully local and does not require a separate tile server.
 
@@ -112,7 +114,8 @@ Output modes:
 
 - `grayscale`: 8-bit grayscale PNGs tuned for detailed e-paper map viewing.
 - `mono`: true 1-bit black/white PNGs for devices or tests that require binary output.
-- `inkhud`: preview/export processing that mirrors the InkHUD header pipeline. When selected, unchanged sliders default to brightness `1.03` and contrast `2.41`.
+- `inkhud`: Bayer-dithered 1-bit processing that mirrors the InkHUD firmware pipeline. When selected, unchanged sliders default to brightness `1.03` and contrast `2.41`. Use **Export for InkHUD** to generate a `map_tile.h` firmware header.
+- `inkhud2`: same pipeline as `inkhud`, but lets you click individual tiles on the map to build a sparse non-contiguous coverage area across multiple zoom levels.
 - `palette`: indexed-color PNGs.
 - `original`: rendered/source PNGs with no e-paper conversion.
 
@@ -171,9 +174,40 @@ The desktop app always writes normal tile bundles as:
 tiles/{style}/{z}/{x}/{y}.png
 ```
 
-Use **Export for InkHUD** when you need an InkHUD firmware header instead of a normal tile bundle.
+Use **Export for InkHUD** when you need a `map_tile.h` firmware header instead of a normal tile bundle. **Export for InkHUD** also applies the InkHUD brightness and contrast defaults when the sliders are still unchanged.
 
-**Export for InkHUD** also applies the InkHUD brightness and contrast defaults when the sliders are still unchanged.
+## InkHUD Firmware Export
+
+**Export for InkHUD** generates a `map_tile.h` C header for direct inclusion in the Meshtastic firmware. Each 256×256 tile is stored as a raw LZ4 block using column-major byte layout (`[bx][y]` instead of row-major), which makes vertical map features (roads, building edges) contiguous in memory so LZ4 compresses them ~30% better.
+
+Typical compression on dense urban areas: 128 KB per 4×4 zoom level uncompressed → 53–57 KB after column-major LZ4.
+
+The header contains parallel arrays:
+
+```c
+map_tile_count      // number of tiles
+map_tile_zooms[]    // zoom level per tile
+map_tile_tx[]       // tile X index
+map_tile_ty[]       // tile Y index
+map_tile_sizes[]    // compressed byte count per tile
+map_tile_data[]     // pointers to per-tile LZ4 byte arrays
+```
+
+The firmware decompresses tiles on demand into a 2-entry LRU cache. Pixel read from a decompressed tile: `tile[(px/8)*256 + py] & (1 << (px%8))`.
+
+**Grid size** controls how many tiles are exported per zoom level:
+
+| Grid | Tiles/zoom | Uncompressed | Typical LZ4 |
+|------|-----------|-------------|-------------|
+| 2×2  | 4         | 32 KB       | ~15 KB      |
+| 3×3  | 9         | 72 KB       | ~32 KB      |
+| 4×4  | 16        | 128 KB      | ~56 KB      |
+
+nRF52840 has approximately 85 KB available for tile data. Combinations like z12 2×2 + z13 2×2 + z14 4×4 fit in ~81 KB.
+
+**Coverage overlay**: enable the **Coverage** checkbox to see dashed per-zoom bounding boxes on the preview showing the exact tile footprint that will be exported.
+
+**InkHUD2 mode** lets you click individual tiles to build a sparse, non-contiguous coverage area across multiple zoom levels, useful when you want specific areas at different zoom levels without a fixed grid.
 
 ## Legal Map Sources
 
@@ -208,97 +242,4 @@ Terrain Tiles were accessed from https://registry.opendata.aws/terrain-tiles/, i
 Additional attribution may be required by the tile source or renderer.
 ```
 
-## CLI
 
-The desktop app wraps the CLI. The CLI defaults to the same OpenFreeMap source, `osm-eink` style, grayscale mode, and e-paper tuning used by the desktop app.
-
-Run the CLI directly with an explicit area and zoom range:
-
-```powershell
-eink-map-tiles --bbox="-122.55,47.45,-122.15,47.75" --zooms 6-12 --zip
-```
-
-Preview tile count without downloading:
-
-```powershell
-eink-map-tiles --center-lat 47.6062 --center-lon -122.3321 --radius-km 10 --zooms 6-12 --dry-run
-```
-
-Useful CLI options:
-
-```text
---source openfreemap-vector
---bbox west,south,east,north
---center-lat LAT --center-lon LON --radius-km KM
---zooms 4-8
---mode grayscale|mono|palette|original
---brightness VALUE
---contrast VALUE
---threshold VALUE
---include-elements land,water,roads,highways,paths,boundaries,labels,transit
---output PATH
---zip
---dry-run
-```
-
-The CLI still accepts `--layout` for compatibility and scripted exports, but the desktop app intentionally uses one fixed normal tile-bundle layout.
-
-Topo export example:
-
-```powershell
-eink-map-tiles --style osm-eink-topo --bbox="-74.30,40.80,-73.80,41.10" --zooms 4-16 --zip
-```
-
-Regular high-zoom example:
-
-```powershell
-eink-map-tiles --style osm-eink --bbox="-74.30,40.80,-73.80,41.10" --zooms 13-16 --zip
-```
-
-## Rebuild The Exe
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\build-windows-exe.ps1
-```
-
-The built executable is:
-
-```text
-dist\EinkMapTiles.exe
-```
-
-The build script also copies `README.md`, `LICENSE`, `NOTICE.md`, and `CHANGELOG.md` into `dist\` for release packaging.
-
-## Release Package
-
-The 1.1.0 Windows release package should include:
-
-```text
-EinkMapTiles.exe
-README.md
-LICENSE
-NOTICE.md
-CHANGELOG.md
-```
-
-Release zip naming:
-
-```text
-EinkMapTiles-1.1.0-windows-x64.zip
-```
-
-## Development
-
-```powershell
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-pip install -e .
-eink-map-tiles-app
-```
-
-Run tests:
-
-```powershell
-$env:PYTHONPATH='src'
-python -m unittest discover -s tests
-```

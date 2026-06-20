@@ -1,10 +1,8 @@
 from __future__ import annotations
 
-import argparse
 import json
 import math
 import shutil
-import sys
 import tempfile
 import time
 import urllib.error
@@ -32,10 +30,10 @@ DEFAULT_THRESHOLD = 120
 DEFAULT_INCLUDE_ELEMENTS = [element for element in MAP_ELEMENTS if element not in {"buildings", "pois"}]
 DEFAULT_TOPO_ELEMENTS = ["land", "water", "paths", "labels"]
 DEFAULT_ATTRIBUTION = {
-    "map_data": "\u00a9 OpenStreetMap contributors",
+    "map_data": "© OpenStreetMap contributors",
     "map_data_license": "Open Database License (ODbL) 1.0",
-    "openmaptiles": "\u00a9 OpenMapTiles, if using OpenMapTiles schema/data",
-    "terrain": "\u00a9 Mapzen terrain tiles, if using topo style",
+    "openmaptiles": "© OpenMapTiles, if using OpenMapTiles schema/data",
+    "terrain": "© Mapzen terrain tiles, if using topo style",
     "notes": "Verify and preserve attribution required by your tile source/provider.",
 }
 
@@ -66,54 +64,24 @@ def parse_zooms(value: str) -> list[int]:
             start = int(start_text)
             end = int(end_text)
             if end < start:
-                raise argparse.ArgumentTypeError(f"Invalid zoom range: {part}")
+                raise ValueError(f"Invalid zoom range: {part}")
             zooms.update(range(start, end + 1))
         else:
             zooms.add(int(part))
-
     if not zooms:
-        raise argparse.ArgumentTypeError("At least one zoom level is required")
+        raise ValueError("At least one zoom level is required")
     if min(zooms) < 0 or max(zooms) > 20:
-        raise argparse.ArgumentTypeError("Zoom levels must be between 0 and 20")
+        raise ValueError("Zoom levels must be between 0 and 20")
     return sorted(zooms)
-
-
-def parse_bbox(value: str) -> BBox:
-    try:
-        west, south, east, north = [float(item.strip()) for item in value.split(",")]
-    except ValueError as exc:
-        raise argparse.ArgumentTypeError("Use west,south,east,north") from exc
-
-    if not -180 <= west <= 180 or not -180 <= east <= 180:
-        raise argparse.ArgumentTypeError("Longitude values must be between -180 and 180")
-    if not -90 <= south <= 90 or not -90 <= north <= 90:
-        raise argparse.ArgumentTypeError("Latitude values must be between -90 and 90")
-    if south >= north:
-        raise argparse.ArgumentTypeError("south must be less than north")
-    return BBox(west=west, south=south, east=east, north=north)
-
-
-def parse_elements(value: str) -> list[str]:
-    selected = []
-    valid = set(MAP_ELEMENTS)
-    for item in value.split(","):
-        element = item.strip().lower()
-        if not element:
-            continue
-        if element not in valid:
-            raise argparse.ArgumentTypeError(f"Unknown map element: {element}")
-        selected.append(element)
-    return selected
 
 
 def bbox_from_center(lat: float, lon: float, radius_km: float) -> BBox:
     if not -90 <= lat <= 90:
-        raise argparse.ArgumentTypeError("--center-lat must be between -90 and 90")
+        raise ValueError("lat must be between -90 and 90")
     if not -180 <= lon <= 180:
-        raise argparse.ArgumentTypeError("--center-lon must be between -180 and 180")
+        raise ValueError("lon must be between -180 and 180")
     if radius_km <= 0:
-        raise argparse.ArgumentTypeError("--radius-km must be greater than zero")
-
+        raise ValueError("radius_km must be greater than zero")
     lat_delta = radius_km / 111.32
     lon_scale = max(math.cos(math.radians(lat)), 0.01)
     lon_delta = radius_km / (111.32 * lon_scale)
@@ -164,7 +132,6 @@ def tile_ranges_for_bbox(bbox: BBox, z: int) -> list[tuple[int, int, int, int]]:
     lon_spans = [(bbox.west, bbox.east)]
     if bbox.west > bbox.east:
         lon_spans = [(bbox.west, 180.0), (-180.0, bbox.east)]
-
     ranges = []
     for west, east in lon_spans:
         x_min, y_min = lonlat_to_tile(west, bbox.north, z)
@@ -189,116 +156,6 @@ def first_tile_for_bbox(bbox: BBox, zooms: list[int]) -> Tile | None:
         return None
     x_min, _x_max, y_min, _y_max = ranges[0]
     return Tile(z=zooms[0], x=x_min, y=y_min)
-
-
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        description="Download and optimize XYZ map tiles for e-ink firmware experiments.",
-    )
-    parser.add_argument("--job", type=Path, help="Read settings from a JSON job exported by the picker")
-    area = parser.add_mutually_exclusive_group()
-    area.add_argument("--bbox", type=parse_bbox, help="Area as west,south,east,north")
-    area.add_argument("--center-lat", type=float, help="Center latitude for a radius download")
-    parser.add_argument("--center-lon", type=float, help="Center longitude for a radius download")
-    parser.add_argument("--radius-km", type=float, help="Radius in kilometers when using --center-lat")
-    parser.add_argument("--zooms", type=parse_zooms, help="Zooms like 6-10 or 6,8,12")
-    parser.add_argument("--style", default=DEFAULT_STYLE, help="Style folder name")
-    parser.add_argument(
-        "--source",
-        choices=["xyz", "openfreemap-vector"],
-        default="openfreemap-vector",
-        help="Tile source type. openfreemap-vector downloads open vector tiles and renders them locally.",
-    )
-    parser.add_argument(
-        "--url-template",
-        default=DEFAULT_URL_TEMPLATE,
-        help="XYZ URL with {z}, {x}, {y}. Required only for --source xyz.",
-    )
-    parser.add_argument("--output", type=Path, default=Path("build/inkhud-tiles"), help="Output root folder")
-    parser.add_argument(
-        "--layout",
-        choices=["inkhud-dev", "style-root", "single-map", "meshtastic-sd"],
-        default="inkhud-dev",
-        help="Output layout. Default writes /tiles/{style}/z/x/y.png.",
-    )
-    parser.add_argument("--single-style", action="store_true", help=argparse.SUPPRESS)
-    parser.add_argument("--zip", action="store_true", help="Create a ZIP next to the output folder")
-    parser.add_argument("--dry-run", action="store_true", help="Only print tile count and sample paths")
-    parser.add_argument("--overwrite", action="store_true", help="Re-download existing tiles")
-    parser.add_argument("--rate-limit", type=float, default=1.0, help="Seconds between tile requests")
-    parser.add_argument("--timeout", type=float, default=30.0, help="HTTP timeout in seconds")
-    parser.add_argument("--retries", type=int, default=3, help="Retry count for failed requests")
-    parser.add_argument("--user-agent", default=DEFAULT_USER_AGENT, help="HTTP User-Agent")
-    parser.add_argument(
-        "--mode",
-        choices=["palette", "grayscale", "mono", "original"],
-        default="grayscale",
-        help="Image conversion mode. grayscale is the default for e-ink experiments.",
-    )
-    parser.add_argument("--colors", type=int, default=256, help="Palette colors for --mode palette")
-    parser.add_argument("--brightness", type=float, default=DEFAULT_BRIGHTNESS, help="Brightness multiplier")
-    parser.add_argument("--contrast", type=float, default=DEFAULT_CONTRAST, help="Contrast multiplier")
-    parser.add_argument("--threshold", type=int, default=DEFAULT_THRESHOLD, help="Black/white cutoff for --mode mono")
-    parser.add_argument(
-        "--include-elements",
-        type=parse_elements,
-        default=None,
-        help="Comma-separated vector-style element categories to include in the manifest.",
-    )
-    parser.add_argument(
-        "--inkhud",
-        action="store_true",
-        help="Export a 3x3 mosaic InkHUD firmware header (map_tile.h) with RLE compression. "
-             "Requires --center-lat, --center-lon, --zooms, --output (path to .h file).",
-    )
-    return parser
-
-
-def apply_job_file(args: argparse.Namespace) -> None:
-    if not args.job:
-        if not args.bbox and args.center_lat is None:
-            raise SystemExit("Provide --bbox, --center-lat with --center-lon and --radius-km, or --job")
-        if not args.zooms:
-            raise SystemExit("Provide --zooms or --job")
-        return
-
-    job = json.loads(args.job.read_text(encoding="utf-8"))
-    bbox = job.get("bbox")
-    if not isinstance(bbox, dict):
-        raise SystemExit("Job file must include a bbox object")
-
-    args.bbox = BBox(
-        west=float(bbox["west"]),
-        south=float(bbox["south"]),
-        east=float(bbox["east"]),
-        north=float(bbox["north"]),
-    )
-    args.center_lat = None
-    args.center_lon = None
-    args.radius_km = None
-    args.zooms = [int(z) for z in job.get("zooms", [])]
-    if not args.zooms:
-        raise SystemExit("Job file must include zooms")
-
-    args.style = job.get("style") or args.style
-    args.source = job.get("source") or args.source
-    args.mode = job.get("mode") or args.mode
-    args.brightness = float(job.get("brightness", args.brightness))
-    args.contrast = float(job.get("contrast", args.contrast))
-    args.threshold = int(job.get("threshold", args.threshold))
-    job_elements = job.get("elements")
-    if isinstance(job_elements, dict):
-        args.include_elements = [element for element in job_elements.get("include", []) if element in MAP_ELEMENTS]
-    args.layout = job.get("layout") or args.layout
-    args.url_template = job.get("urlTemplate") or job.get("url_template") or args.url_template
-
-
-def args_to_bbox(args: argparse.Namespace) -> BBox:
-    if args.bbox:
-        return args.bbox
-    if args.center_lon is None or args.radius_km is None:
-        raise SystemExit("--center-lon and --radius-km are required with --center-lat")
-    return bbox_from_center(args.center_lat, args.center_lon, args.radius_km)
 
 
 def tile_output_path(output_root: Path, style: str, layout: str, tile: Tile) -> Path:
@@ -436,7 +293,6 @@ def fetch_overzoomed_openfreemap_data(tile: Tile, user_agent: str, timeout: floa
 def overzoom_vector_data(data: dict, tile: Tile, scale: int) -> dict:
     offset_x = (tile.x % scale) * VECTOR_EXTENT / scale
     offset_y = (tile.y % scale) * VECTOR_EXTENT / scale
-
     transformed: dict[str, dict] = {}
     for layer_name, layer in data.items():
         features = []
@@ -475,12 +331,10 @@ def draw_topography(image, tile: Tile, user_agent: str, timeout: float, retries:
 
     if tile.z < 4:
         return
-
     try:
         terrain = fetch_terrain_image(tile, user_agent, timeout, retries)
     except RuntimeError:
         return
-
     elevations = decode_terrarium(terrain)
     apply_hillshade(image, elevations)
     draw_contours(ImageDraw.Draw(image), elevations, tile.z)
@@ -569,13 +423,8 @@ def draw_contours(draw, elevations: list[list[float]], z: int) -> None:
 
 
 def contour_intersections(
-    x: int,
-    y: int,
-    step: int,
-    e00: float,
-    e10: float,
-    e11: float,
-    e01: float,
+    x: int, y: int, step: int,
+    e00: float, e10: float, e11: float, e01: float,
     level: float,
 ) -> list[tuple[float, float]]:
     points: list[tuple[float, float]] = []
@@ -588,11 +437,8 @@ def contour_intersections(
 
 def add_contour_point(
     points: list[tuple[float, float]],
-    a: float,
-    b: float,
-    level: float,
-    start: tuple[int, int],
-    end: tuple[int, int],
+    a: float, b: float, level: float,
+    start: tuple[int, int], end: tuple[int, int],
 ) -> None:
     if (a < level <= b) or (b < level <= a):
         fraction = 0.5 if a == b else (level - a) / (b - a)
@@ -627,7 +473,6 @@ def draw_line_layer(draw, data: dict, layer_name: str, color: str, width: int = 
 def draw_transportation(draw, data: dict, z: int, elements: set[str], topo: bool = False) -> None:
     if z <= 5 and not topo:
         return
-
     path_style = ("#424a45", None, 1, 0) if topo else ("#707a74", None, 1, 0)
     class_styles = {
         "motorway": ("#9ea7a1", None, 1, 0) if z < 12 else ("#5c655f", "#fbfbf8", 5, 3),
@@ -674,13 +519,8 @@ def draw_transportation(draw, data: dict, z: int, elements: set[str], topo: bool
 
 
 def draw_geometry_lines(
-    draw,
-    geometry: dict,
-    color: str,
-    width: int,
-    dashed: bool = False,
-    dash: int = 1,
-    gap: int = 5,
+    draw, geometry: dict, color: str, width: int,
+    dashed: bool = False, dash: int = 1, gap: int = 5,
 ) -> None:
     geometry_type = geometry.get("type")
     coordinates = geometry.get("coordinates", [])
@@ -776,19 +616,11 @@ def label_priority(properties: dict, z: int) -> int:
     label_class = properties.get("class", "")
     if z <= 6:
         return {
-            "country": 0,
-            "state": 1,
-            "aboriginal_lands": 2,
-            "city": 3,
-            "town": 4,
-            "village": 5,
+            "country": 0, "state": 1, "aboriginal_lands": 2,
+            "city": 3, "town": 4, "village": 5,
         }.get(label_class, 6)
     return {
-        "city": 0,
-        "town": 1,
-        "state": 2,
-        "village": 3,
-        "country": 4,
+        "city": 0, "town": 1, "state": 2, "village": 3, "country": 4,
     }.get(label_class, 5)
 
 
@@ -865,30 +697,22 @@ def scale_point(point: list[float] | tuple[float, float]) -> tuple[int, int]:
 
 
 def optimize_tile(
-    source: Path,
-    destination: Path,
-    mode: str,
-    colors: int,
-    brightness: float,
-    contrast: float,
-    threshold: int,
+    source: Path, destination: Path,
+    mode: str, colors: int, brightness: float, contrast: float, threshold: int,
 ) -> None:
     if mode == "original" and brightness == 1.0 and contrast == 1.0:
         source.replace(destination)
         return
-
     from PIL import Image, ImageEnhance
 
     with Image.open(source) as image:
         image = image.convert("RGBA")
         background = Image.new("RGBA", image.size, (255, 255, 255, 255))
         image = Image.alpha_composite(background, image).convert("RGB")
-
         if brightness != 1.0:
             image = ImageEnhance.Brightness(image).enhance(brightness)
         if contrast != 1.0:
             image = ImageEnhance.Contrast(image).enhance(contrast)
-
         if mode == "palette":
             converted = image.quantize(colors=max(2, min(colors, 256)))
         elif mode == "grayscale":
@@ -897,55 +721,78 @@ def optimize_tile(
             converted = image.convert("L").point(lambda pixel: 255 if pixel >= threshold else 0, mode="1")
         else:
             converted = image
-
         destination.parent.mkdir(parents=True, exist_ok=True)
         converted.save(destination, format="PNG", optimize=True)
     source.unlink(missing_ok=True)
 
 
-def write_manifest(output_root: Path, args: argparse.Namespace, bbox: BBox, tiles: list[Tile]) -> None:
+def make_zip(output_root: Path) -> Path:
+    archive_base = output_root.with_suffix("")
+    zip_path = Path(shutil.make_archive(str(archive_base), "zip", root_dir=output_root))
+    return zip_path
+
+
+def write_manifest(output_root: Path, job: dict, bbox: BBox, tiles: list[Tile]) -> None:
+    style = job.get("style", DEFAULT_STYLE)
+    layout = job.get("layout", "inkhud-dev")
+    source = job.get("source", "openfreemap-vector")
+    url_template = job.get("urlTemplate") or job.get("url_template")
+    mode = job.get("mode", "grayscale")
+    colors = int(job.get("colors", 256))
+    brightness = float(job.get("brightness", DEFAULT_BRIGHTNESS))
+    contrast = float(job.get("contrast", DEFAULT_CONTRAST))
+    threshold = int(job.get("threshold", DEFAULT_THRESHOLD))
+    elements_d = job.get("elements", {})
+    include_elements = elements_d.get("include") if isinstance(elements_d, dict) else list(DEFAULT_INCLUDE_ELEMENTS)
+    zooms = sorted({t.z for t in tiles})
+
     layout_path = {
-        "inkhud-dev": f"/tiles/{args.style}",
-        "style-root": f"/{args.style}",
+        "inkhud-dev": f"/tiles/{style}",
+        "style-root": f"/{style}",
         "single-map": "/map",
-        "meshtastic-sd": f"/maps/{args.style}",
-    }[args.layout]
+        "meshtastic-sd": f"/maps/{style}",
+    }.get(layout, f"/tiles/{style}")
+
     attribution = dict(DEFAULT_ATTRIBUTION)
-    if not is_topo_style(args.style):
+    if not is_topo_style(style):
         attribution.pop("terrain", None)
+
     manifest = {
         "created_utc": datetime.now(timezone.utc).isoformat(),
-        "layout": args.layout,
+        "layout": layout,
         "layout_path": layout_path,
-        "style": args.style,
-        "bbox": {
-            "west": bbox.west,
-            "south": bbox.south,
-            "east": bbox.east,
-            "north": bbox.north,
-        },
-        "zooms": args.zooms,
+        "style": style,
+        "bbox": {"west": bbox.west, "south": bbox.south, "east": bbox.east, "north": bbox.north},
+        "zooms": zooms,
         "tile_count": len(tiles),
-        "source": args.source,
-        "url_template": args.url_template,
-        "mode": args.mode,
-        "colors": args.colors if args.mode == "palette" else None,
-        "brightness": args.brightness,
-        "contrast": args.contrast,
-        "threshold": args.threshold if args.mode == "mono" else None,
-        "topography": is_topo_style(args.style),
+        "source": source,
+        "url_template": url_template,
+        "mode": mode,
+        "colors": colors if mode == "palette" else None,
+        "brightness": brightness,
+        "contrast": contrast,
+        "threshold": threshold if mode == "mono" else None,
+        "topography": is_topo_style(style),
         "elements": {
-            "include": args.include_elements,
-            "exclude": [element for element in MAP_ELEMENTS if element not in args.include_elements],
+            "include": include_elements,
+            "exclude": [e for e in MAP_ELEMENTS if e not in (include_elements or [])],
         },
         "attribution": attribution,
     }
     output_root.mkdir(parents=True, exist_ok=True)
     (output_root / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
-    write_attribution_file(output_root, args)
+    _write_attribution_file(output_root, source, url_template, is_topo_style(style))
 
 
-def write_attribution_file(output_root: Path, args: argparse.Namespace) -> None:
+def _write_attribution_file(output_root: Path, source: str, url_template: str | None, topo: bool) -> None:
+    terrain_section = ""
+    if topo:
+        terrain_section = """
+Terrain data:
+  (c) Mapzen terrain tiles, if using topo style.
+  Terrain Tiles were accessed from https://registry.opendata.aws/terrain-tiles/.
+  See source data attribution: https://github.com/tilezen/joerd/blob/master/docs/attribution.md
+"""
     text = f"""E-ink Map Tiles export attribution
 
 Map data:
@@ -957,33 +804,15 @@ Map data:
 OpenMapTiles schema/data:
   (c) OpenMapTiles, if using OpenMapTiles-derived schema or data.
   https://openmaptiles.org/
-{terrain_attribution(args)}
-
+{terrain_section}
 Export source:
-  source: {args.source}
-  url_template: {args.url_template}
+  source: {source}
+  url_template: {url_template}
 
 Keep this file and manifest.json with the exported tiles. Additional attribution may be required by
 your tile source, local renderer, or downstream use case.
 """
     (output_root / "ATTRIBUTION.txt").write_text(text, encoding="utf-8")
-
-
-def terrain_attribution(args: argparse.Namespace) -> str:
-    if not is_topo_style(args.style):
-        return ""
-    return """
-Terrain data:
-  (c) Mapzen terrain tiles, if using topo style.
-  Terrain Tiles were accessed from https://registry.opendata.aws/terrain-tiles/.
-  See source data attribution: https://github.com/tilezen/joerd/blob/master/docs/attribution.md
-"""
-
-
-def make_zip(output_root: Path) -> Path:
-    archive_base = output_root.with_suffix("")
-    zip_path = Path(shutil.make_archive(str(archive_base), "zip", root_dir=output_root))
-    return zip_path
 
 
 def inkhud_process(rgb_image, contrast: float, brightness: float):
@@ -1014,195 +843,66 @@ def inkhud_process(rgb_image, contrast: float, brightness: float):
     return _Image.fromarray(result, mode="L")
 
 
-def export_inkhud(args: argparse.Namespace, cancel_event=None) -> int:
-    """Render a 3x3 mosaic per zoom level, RLE-compress, and write map_tile.h.
-    Uses the same inkhud_process pipeline as the desktop app export."""
-    from PIL import Image
+def download_tiles(
+    job: dict,
+    output_dir: Path,
+    cancel_event=None,
+    rate_limit: float = 1.0,
+    overwrite: bool = False,
+    zip_output: bool = False,
+    print_fn=print,
+) -> int:
+    """Download and render tiles from a job dict to output_dir. Returns 0 on success, 2 on cancel."""
+    bbox_d = job["bbox"]
+    bbox = BBox(
+        west=float(bbox_d["west"]), south=float(bbox_d["south"]),
+        east=float(bbox_d["east"]), north=float(bbox_d["north"]),
+    )
+    zooms = [int(z) for z in job["zooms"]]
+    style = job.get("style", DEFAULT_STYLE)
+    source = job.get("source", "openfreemap-vector")
+    layout = job.get("layout", "inkhud-dev")
+    mode = job.get("mode", "grayscale")
+    brightness = float(job.get("brightness", DEFAULT_BRIGHTNESS))
+    contrast = float(job.get("contrast", DEFAULT_CONTRAST))
+    threshold = int(job.get("threshold", DEFAULT_THRESHOLD))
+    url_template = job.get("urlTemplate") or job.get("url_template") or DEFAULT_URL_TEMPLATE
+    colors = int(job.get("colors", 256))
+    elements_d = job.get("elements", {})
+    include_elements = elements_d.get("include") if isinstance(elements_d, dict) else None
+    if include_elements is None:
+        include_elements = list(DEFAULT_TOPO_ELEMENTS if is_topo_style(style) else DEFAULT_INCLUDE_ELEMENTS)
 
-    lat = args.center_lat
-    lon = args.center_lon
-    if lat is None or lon is None:
-        raise SystemExit("--inkhud requires --center-lat and --center-lon")
+    tiles = tiles_for_bbox(bbox, zooms)
+    print_fn(f"Area: west={bbox.west:.6f}, south={bbox.south:.6f}, east={bbox.east:.6f}, north={bbox.north:.6f}")
+    print_fn(f"Tiles: {len(tiles)} across zooms {','.join(map(str, zooms))}")
 
-    cols, rows = 3, 3
-    zooms = sorted(args.zooms)
-    output = args.output  # treat as file path for .h
-    elements = args.include_elements
-    if elements is None:
-        elements = list(DEFAULT_TOPO_ELEMENTS if is_topo_style(args.style) else DEFAULT_INCLUDE_ELEMENTS)
-    # Remove land: landcover gray polygons fall in the Bayer dither zone and bloat RLE output
-    elements = [e for e in elements if e != "land"]
-
-    zoom_data = []
-    for z in zooms:
-        if cancel_event and cancel_event.is_set():
-            print("Cancelled.")
-            return 2
-
-        n = 2 ** z
-        tx = int(math.floor((lon + 180.0) / 360.0 * n))
-        lat_rad = math.radians(max(min(lat, MAX_MERCATOR_LAT), -MAX_MERCATOR_LAT))
-        ty = int(math.floor((1.0 - math.asinh(math.tan(lat_rad)) / math.pi) / 2.0 * n))
-        tx, ty = clamp(tx, 1, n - 2), clamp(ty, 1, n - 2)
-        x0, y0 = tx - 1, ty - 1
-
-        W, H = cols * 256, rows * 256
-        # Apply brightness/contrast per-tile before assembling (matches desktop app's optimize_tile path).
-        # PIL's Contrast uses image mean as pivot — per-tile mean is ~245 (mostly white background)
-        # so contrast is more aggressive and pushes grays to solid black, giving better RLE compression.
-        from PIL import ImageEnhance
-        mosaic = Image.new("RGB", (W, H), "#f7f8f4")
-        for row in range(rows):
-            for col in range(cols):
-                tile = Tile(z=z, x=x0 + col, y=y0 + row)
-                img = render_openfreemap_image(tile, args.user_agent, args.timeout, args.retries, elements, args.style)
-                if args.brightness != 1.0:
-                    img = ImageEnhance.Brightness(img).enhance(args.brightness)
-                if args.contrast != 1.0:
-                    img = ImageEnhance.Contrast(img).enhance(args.contrast)
-                mosaic.paste(img, (col * 256, row * 256))
-                print(f"  zoom {z}: rendered tile {col + row * cols + 1}/9")
-
-        bw = inkhud_process(mosaic, args.contrast, args.brightness)
-
-        bpr = W // 8
-        raw: list[int] = []
-        for y in range(H):
-            for bx in range(bpr):
-                byte = 0
-                for bit in range(8):
-                    if bw.getpixel((bx * 8 + bit, y)) == 0:
-                        byte |= 1 << bit
-                raw.append(byte)
-
-        print(f"  zoom {z}: {len(raw):,} bytes")
-        zoom_data.append((z, x0, y0, raw))
-
-    # Write map_tile.h (uncompressed 1-bit)
-    W, H = cols * 256, rows * 256
-    x0_arr = ", ".join(str(zd[1]) for zd in zoom_data)
-    y0_arr = ", ".join(str(zd[2]) for zd in zoom_data)
-    lines = [
-        "#pragma once",
-        f"// InkHUD map tile header — {cols}x{rows} mosaic per zoom",
-        f"// Zooms: {', '.join(str(zd[0]) for zd in zoom_data)}",
-        f"static const int map_tile_min_zoom = {zoom_data[0][0]};",
-        f"static const int map_tile_max_zoom = {zoom_data[-1][0]};",
-        f"static const int map_tile_cols = {cols};",
-        f"static const int map_tile_rows = {rows};",
-        f"static const int map_tile_x0[] = {{ {x0_arr} }};",
-        f"static const int map_tile_y0[] = {{ {y0_arr} }};",
-        "",
-    ]
-    for idx, (z, x0, y0, raw) in enumerate(zoom_data):
-        lines.append(f"static const uint8_t map_tile_data_{idx}[] = {{")
-        for i in range(0, len(raw), 16):
-            lines.append("    " + ", ".join(f"0x{b:02X}" for b in raw[i:i + 16]) + ",")
-        lines.append("};")
-        lines.append("")
-    ptr_list = ", ".join(f"map_tile_data_{i}" for i in range(len(zoom_data)))
-    lines.append(f"static const uint8_t* const map_tile_data[] = {{ {ptr_list} }};")
-
-    out_path = Path(output)
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text("\n".join(lines), encoding="utf-8")
-
-    total = sum(len(zd[3]) for zd in zoom_data)
-    print(f"\nmap_tile.h saved: {out_path}")
-    print(f"Total: {total:,} bytes ({total // 1024} KB)")
-    return 0
-
-
-def run(args: argparse.Namespace, cancel_event=None) -> int:
-    bbox = args_to_bbox(args)
-    if args.include_elements is None:
-        args.include_elements = list(DEFAULT_TOPO_ELEMENTS if is_topo_style(args.style) else DEFAULT_INCLUDE_ELEMENTS)
-    if args.source == "openfreemap-vector":
-        max_zoom = max(args.zooms)
-        if not supports_vector_overzoom(args.style) and max_zoom > OPENFREEMAP_MAX_DETAIL_ZOOM:
-            raise SystemExit(
-                f"OpenFreeMap map detail currently stops at zoom {OPENFREEMAP_MAX_DETAIL_ZOOM}. "
-                "Use --style osm-eink for crisp generalized map overzoom, "
-                "or --style osm-eink-topo for terrain-focused exports."
-            )
-        if supports_vector_overzoom(args.style) and max_zoom > OVERZOOM_MAX_DETAIL_ZOOM:
-            raise SystemExit(f"Overzoom exports are supported up to zoom {OVERZOOM_MAX_DETAIL_ZOOM}.")
-    tile_count = count_tiles_for_bbox(bbox, args.zooms)
-    print(f"Area: west={bbox.west:.6f}, south={bbox.south:.6f}, east={bbox.east:.6f}, north={bbox.north:.6f}")
-    print(f"Tiles: {tile_count} across zooms {','.join(map(str, args.zooms))}")
-    sample_tile = first_tile_for_bbox(bbox, args.zooms)
-    if sample_tile:
-        sample = tile_output_path(args.output, args.style, args.layout, sample_tile)
-        print(f"First output path: {sample}")
-
-    if args.dry_run:
-        return 0
-
-    if args.source == "xyz" and not args.url_template:
-        raise SystemExit("--url-template is required for --source xyz.")
-    if args.colors < 2 or args.colors > 256:
-        raise SystemExit("--colors must be between 2 and 256")
-    if args.threshold < 0 or args.threshold > 255:
-        raise SystemExit("--threshold must be between 0 and 255")
-    if args.rate_limit < 0:
-        raise SystemExit("--rate-limit cannot be negative")
-
-    tiles = tiles_for_bbox(bbox, args.zooms)
     completed = 0
     for tile in tiles:
         if cancel_event and cancel_event.is_set():
-            print("Export cancelled.")
+            print_fn("Export cancelled.")
             return 2
-        destination = tile_output_path(args.output, args.style, args.layout, tile)
-        if destination.exists() and not args.overwrite:
+        destination = tile_output_path(output_dir, style, layout, tile)
+        if destination.exists() and not overwrite:
             completed += 1
             continue
-
         with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as temp_file:
             temp_path = Path(temp_file.name)
-        if args.source == "openfreemap-vector":
-            render_openfreemap_tile(
-                tile,
-                temp_path,
-                args.user_agent,
-                args.timeout,
-                args.retries,
-                args.include_elements,
-                style=args.style,
-            )
+        if source == "openfreemap-vector":
+            render_openfreemap_tile(tile, temp_path, DEFAULT_USER_AGENT, 30.0, 3, include_elements, style=style)
         else:
-            fetch_tile(tile_url(args.url_template, tile), temp_path, args.user_agent, args.timeout, args.retries)
-        optimize_tile(temp_path, destination, args.mode, args.colors, args.brightness, args.contrast, args.threshold)
+            if not url_template:
+                raise RuntimeError("url_template is required for XYZ source")
+            fetch_tile(tile_url(url_template, tile), temp_path, DEFAULT_USER_AGENT, 30.0, 3)
+        optimize_tile(temp_path, destination, mode, colors, brightness, contrast, threshold)
         completed += 1
-        print(f"[{completed}/{len(tiles)}] {destination}")
-        if args.rate_limit and completed < len(tiles):
-            time.sleep(args.rate_limit)
+        print_fn(f"[{completed}/{len(tiles)}] {destination}")
+        if rate_limit and completed < len(tiles):
+            time.sleep(rate_limit)
 
-    write_manifest(args.output, args, bbox, tiles)
-    print(f"Wrote manifest: {args.output / 'manifest.json'}")
-    if args.zip:
-        zip_path = make_zip(args.output)
-        print(f"Wrote ZIP: {zip_path}")
+    write_manifest(output_dir, job, bbox, tiles)
+    print_fn(f"Wrote manifest: {output_dir / 'manifest.json'}")
+    if zip_output:
+        zip_path = make_zip(output_dir)
+        print_fn(f"Wrote ZIP: {zip_path}")
     return 0
-
-
-def main(argv: list[str] | None = None, cancel_event=None) -> int:
-    parser = build_parser()
-    args = parser.parse_args(argv)
-    if args.single_style:
-        args.layout = "single-map"
-    if not args.inkhud:
-        apply_job_file(args)
-    elif not args.zooms:
-        raise SystemExit("--inkhud requires --zooms")
-    try:
-        if args.inkhud:
-            return export_inkhud(args, cancel_event=cancel_event)
-        return run(args, cancel_event=cancel_event)
-    except KeyboardInterrupt:
-        print("Interrupted", file=sys.stderr)
-        return 130
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

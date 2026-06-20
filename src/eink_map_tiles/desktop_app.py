@@ -16,7 +16,7 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 from typing import Any
 
-from . import cli
+from . import core as cli
 
 
 DEFAULT_OUTPUT_BASE = Path.home() / "Downloads" / "EinkMapTiles"
@@ -1628,26 +1628,18 @@ class DesktopApp(tk.Tk):
     def run_export(self, job: dict[str, Any], output: Path, cancel_event: threading.Event) -> None:
         try:
             output.parent.mkdir(parents=True, exist_ok=True)
-            with tempfile.TemporaryDirectory(prefix="eink-map-tiles-job-") as temp_dir:
-                job_path = Path(temp_dir) / "inkhud-tile-job.json"
-                job_path.write_text(json.dumps(job, indent=2) + "\n", encoding="utf-8")
-                writer = QueueWriter(self.messages)
-                argv = [
-                    "--job",
-                    str(job_path),
-                    "--output",
-                    str(output),
-                    "--zip",
-                    "--rate-limit",
-                    str(DESKTOP_RATE_LIMIT_SECONDS),
-                ]
-                with redirect_stdout(writer):
-                    exit_code = cli.main(argv, cancel_event=cancel_event)
-                if exit_code == 2:
-                    self.after(0, self.finish_export_cancelled)
-                    return
-                if exit_code:
-                    raise RuntimeError(f"Export failed with exit code {exit_code}")
+            writer = QueueWriter(self.messages)
+            with redirect_stdout(writer):
+                exit_code = cli.download_tiles(
+                    job, output, cancel_event=cancel_event,
+                    rate_limit=DESKTOP_RATE_LIMIT_SECONDS, zip_output=True,
+                    print_fn=lambda s: writer.write(s + "\n"),
+                )
+            if exit_code == 2:
+                self.after(0, self.finish_export_cancelled)
+                return
+            if exit_code:
+                raise RuntimeError(f"Export failed with exit code {exit_code}")
             self.messages.put(f"\nDone. Output: {output}\nZIP: {output.with_suffix('.zip')}\n")
             self.after(0, self.finish_export_success)
         except Exception as exc:  # noqa: BLE001 - report worker errors in GUI.
@@ -1830,13 +1822,12 @@ class DesktopApp(tk.Tk):
         try:
             with tempfile.TemporaryDirectory(prefix="inkhud2-export-") as temp_dir:
                 temp_out = Path(temp_dir)
-                job_path = temp_out / "job.json"
-                job_path.write_text(json.dumps(job, indent=2) + "\n", encoding="utf-8")
-
                 writer = QueueWriter(self.messages)
-                argv = ["--job", str(job_path), "--output", str(temp_out), "--rate-limit", str(DESKTOP_RATE_LIMIT_SECONDS)]
                 with redirect_stdout(writer):
-                    exit_code = cli.main(argv, cancel_event=cancel_event)
+                    exit_code = cli.download_tiles(
+                        job, temp_out, cancel_event=cancel_event,
+                        rate_limit=DESKTOP_RATE_LIMIT_SECONDS, print_fn=lambda s: writer.write(s + "\n"),
+                    )
                 if exit_code == 2:
                     self.after(0, self.finish_export_cancelled)
                     return
@@ -1939,17 +1930,12 @@ class DesktopApp(tk.Tk):
         try:
             with tempfile.TemporaryDirectory(prefix="inkhud-export-") as temp_dir:
                 temp_out = Path(temp_dir)
-                job_path = temp_out / "job.json"
-                job_path.write_text(json.dumps(job, indent=2) + "\n", encoding="utf-8")
-
                 writer = QueueWriter(self.messages)
-                argv = [
-                    "--job", str(job_path),
-                    "--output", str(temp_out),
-                    "--rate-limit", str(DESKTOP_RATE_LIMIT_SECONDS),
-                ]
                 with redirect_stdout(writer):
-                    exit_code = cli.main(argv, cancel_event=cancel_event)
+                    exit_code = cli.download_tiles(
+                        job, temp_out, cancel_event=cancel_event,
+                        rate_limit=DESKTOP_RATE_LIMIT_SECONDS, print_fn=lambda s: writer.write(s + "\n"),
+                    )
                 if exit_code == 2:
                     self.after(0, self.finish_export_cancelled)
                     return
