@@ -46,7 +46,19 @@ The visible map area is the export area for normal tile exports. For InkHUD expo
 
 ## Map Source
 
-The only built-in source is **OpenFreeMap open vector tiles**. The app downloads those vector tiles and renders local e-paper PNG output — no raster tile server or separate download tool needed.
+The **Map Source** dropdown selects where tiles come from:
+
+**OpenFreeMap open vector tiles** (default)
+- Downloads OpenFreeMap vector tiles and renders e-paper PNG output locally.
+- No API key or separate tile server needed.
+- Supports `osm-eink` and `osm-eink-topo` styles up to zoom 16.
+
+**USGS National Map Topo (US only)**
+- Downloads pre-rendered topo tiles directly from the USGS National Map REST API.
+- Public domain, no API key required, US coverage only.
+- Supports up to zoom 16.
+- Same style as USGS 7.5-minute quad maps: dense contour lines, hillshade, elevation labels, roads, and boundaries.
+- Works with all export modes including InkHUD.
 
 Check **I will keep required map attribution with exported tiles** before exporting. The generated `ATTRIBUTION.txt` and `manifest.json` must travel with any shared tile bundle.
 

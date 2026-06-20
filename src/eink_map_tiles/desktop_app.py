@@ -39,8 +39,34 @@ ELEMENT_LABELS = {
     "pois": "POI",
     "transit": "Transit",
 }
-DEFAULT_SOURCE_NAME = "OpenFreeMap open vector tiles"
-DEFAULT_SOURCE_HELP = "Default open vector source. The app renders preview and export tiles locally."
+USGS_TOPO_TEMPLATE = "https://basemap.nationalmap.gov/arcgis/rest/services/USGSTopo/MapServer/tile/{z}/{y}/{x}"
+USGS_TOPO_MAX_ZOOM = 16
+
+SOURCES = {
+    "openfreemap-vector": {
+        "label": "OpenFreeMap open vector tiles",
+        "help": "Default open vector source. The app renders preview and export tiles locally.",
+        "url_template": None,
+        "max_zoom": MAX_PREVIEW_ZOOM,
+    },
+    "usgs-topo": {
+        "label": "USGS National Map Topo (US only)",
+        "help": "Public domain pre-rendered topo tiles from the USGS National Map. US coverage only.",
+        "url_template": USGS_TOPO_TEMPLATE,
+        "max_zoom": USGS_TOPO_MAX_ZOOM,
+    },
+}
+DEFAULT_SOURCE_NAME = SOURCES["openfreemap-vector"]["label"]
+DEFAULT_SOURCE_HELP = SOURCES["openfreemap-vector"]["help"]
+
+
+def _set_widget_state(widget: tk.Widget, state: str) -> None:
+    try:
+        widget.configure(state=state)
+    except tk.TclError:
+        pass
+    for child in widget.winfo_children():
+        _set_widget_state(child, state)
 
 
 class QueueWriter(io.TextIOBase):
@@ -204,6 +230,7 @@ class DesktopApp(tk.Tk):
         self.configure_styles()
         self.build_ui()
         self.update_mode_sensitive_controls()
+        self.update_elements_state()
         self.bind_live_controls()
         self.sync_view_area(update_estimate=False)
         self.estimate_tiles()
@@ -371,7 +398,8 @@ class DesktopApp(tk.Tk):
         self.build_source(controls).grid(row=1, column=0, sticky="ew", pady=(0, 6))
         self.build_area(controls).grid(row=2, column=0, sticky="ew", pady=(0, 6))
         self.build_settings(controls).grid(row=3, column=0, sticky="ew", pady=(0, 6))
-        self.build_elements(controls).grid(row=4, column=0, sticky="ew", pady=(0, 6))
+        elements_outer, self.elements_content = self.build_elements(controls)
+        elements_outer.grid(row=4, column=0, sticky="ew", pady=(0, 6))
 
     def bind_live_controls(self) -> None:
         preview_keys = ("mode", "brightness", "contrast", "threshold", "source", "url", "style")
@@ -433,6 +461,9 @@ class DesktopApp(tk.Tk):
         self.live_update_after_id = self.after(250, run_update)
 
     def max_preview_zoom_for_style(self, style: str | None = None) -> int:
+        source = self.vars["source"].get()
+        if source != "openfreemap-vector":
+            return SOURCES.get(source, {}).get("max_zoom", MAX_PREVIEW_ZOOM)
         style = self.vars["style"].get() if style is None else style
         return MAX_PREVIEW_ZOOM if cli.supports_vector_overzoom(style) else NORMAL_PREVIEW_MAX_ZOOM
 
@@ -565,8 +596,26 @@ class DesktopApp(tk.Tk):
         frame, content = self.collapsible_section(parent, "Map Source", "collapse_map_source")
         content.columnconfigure(0, weight=1)
 
-        ttk.Label(content, text=DEFAULT_SOURCE_NAME, style="Section.TLabel").grid(row=0, column=0, sticky="w")
-        ttk.Label(content, textvariable=self.vars["source_help"], style="Hint.TLabel").grid(row=1, column=0, sticky="ew", pady=(2, 4))
+        source_combo = ttk.Combobox(
+            content,
+            values=[info["label"] for info in SOURCES.values()],
+            state="readonly",
+        )
+        source_combo.set(SOURCES[self.vars["source"].get()]["label"])
+        source_combo.grid(row=0, column=0, sticky="ew", pady=(0, 2))
+
+        def on_source_selected(_event):
+            label = source_combo.get()
+            key = next(k for k, v in SOURCES.items() if v["label"] == label)
+            self.vars["source"].set(key)
+            self.vars["source_help"].set(SOURCES[key]["help"])
+            self.map_zoom = min(self.map_zoom, SOURCES[key]["max_zoom"])
+            self.update_elements_state()
+            self.queue_live_update(preview=True, estimate=True)
+
+        source_combo.bind("<<ComboboxSelected>>", on_source_selected)
+
+        ttk.Label(content, textvariable=self.vars["source_help"], style="Hint.TLabel").grid(row=1, column=0, sticky="ew", pady=(0, 4))
 
         ttk.Checkbutton(
             content,
@@ -715,7 +764,7 @@ class DesktopApp(tk.Tk):
         self.flat_button(content, "Browse", self.choose_output).grid(row=6, column=3, sticky="ew", pady=(6, 0))
         return frame
 
-    def build_elements(self, parent: ttk.Frame) -> tk.Frame:
+    def build_elements(self, parent: ttk.Frame) -> tuple[tk.Frame, ttk.Frame]:
         frame, content = self.collapsible_section(parent, "Map Elements", "collapse_map_elements")
         element_columns = 3
         for column in range(element_columns):
@@ -734,7 +783,7 @@ class DesktopApp(tk.Tk):
         buttons.columnconfigure(1, weight=1)
         self.flat_button(buttons, "All", lambda: self.set_all_elements(True), primary=True).grid(row=0, column=0, sticky="ew", padx=(0, 6))
         self.flat_button(buttons, "None", lambda: self.set_all_elements(False)).grid(row=0, column=1, sticky="ew", padx=(6, 0))
-        return frame
+        return frame, content
 
     def build_log(self, parent: ttk.Frame) -> ttk.LabelFrame:
         frame = ttk.LabelFrame(parent, text="Output Log", padding=12)
@@ -845,6 +894,11 @@ class DesktopApp(tk.Tk):
         for element in cli.MAP_ELEMENTS:
             self.vars[f"element_{element}"].set(enabled)
         self.queue_live_update(preview=True, estimate=False)
+
+    def update_elements_state(self) -> None:
+        source = self.vars["source"].get()
+        state = "normal" if source == "openfreemap-vector" else "disabled"
+        _set_widget_state(self.elements_content, state)
 
     def show_about_licenses(self) -> None:
         messagebox.showinfo(
@@ -997,12 +1051,13 @@ class DesktopApp(tk.Tk):
     def build_job(self) -> dict[str, Any]:
         bbox = self.current_map_bbox()
         zooms = cli.parse_zooms(f"{self.vars['min_zoom'].get()}-{self.vars['max_zoom'].get()}")
-        url_template = self.vars["url"].get().strip()
+        source = self.vars["source"].get()
+        url_template = SOURCES.get(source, {}).get("url_template") or self.vars["url"].get().strip() or None
         return {
             "bbox": {"west": bbox.west, "south": bbox.south, "east": bbox.east, "north": bbox.north},
             "zooms": zooms,
             "style": self.vars["style"].get().strip() or "osm-eink",
-            "source": self.vars["source"].get(),
+            "source": "xyz" if source != "openfreemap-vector" else source,
             "mode": self.vars["mode"].get(),
             "brightness": float(self.vars["brightness"].get()),
             "contrast": float(self.vars["contrast"].get()),
@@ -1182,9 +1237,14 @@ class DesktopApp(tk.Tk):
                 paste_y = round(y * tile_size - top_world)
                 tile_jobs.append((tile_id, paste_x, paste_y))
 
+        source = job.get("source", "openfreemap-vector")
+
         def render_tile(tile_job):
             tile_id, paste_x, paste_y = tile_job
-            image = self.render_preview_vector_tile(tile_id, job)
+            if source == "openfreemap-vector":
+                image = self.render_preview_vector_tile(tile_id, job)
+            else:
+                image = self.render_preview_raster_tile(tile_id, job)
             image = self.convert_preview_tile(image, job)
             return paste_x, paste_y, image.convert("RGB")
 
@@ -1526,6 +1586,27 @@ class DesktopApp(tk.Tk):
         self.preview_tile_cache[cache_key] = rendered.copy()
         return rendered
 
+    def render_preview_raster_tile(self, tile: cli.Tile, job: dict[str, Any]):
+        from PIL import Image
+        from io import BytesIO
+
+        source = job.get("source", "usgs-topo")
+        url_template = job.get("urlTemplate") or SOURCES.get(source, {}).get("url_template", "")
+        cache_key = (source, tile.z, tile.x, tile.y)
+        cached = self.preview_tile_cache.get(cache_key)
+        if cached is not None:
+            return cached.copy()
+
+        url = url_template.format(z=tile.z, x=tile.x, y=tile.y)
+        try:
+            data = cli.fetch_bytes(url, cli.DEFAULT_USER_AGENT, timeout=12, retries=2)
+            image = Image.open(BytesIO(data)).convert("RGBA")
+        except Exception:
+            image = Image.new("RGBA", (256, 256), (255, 255, 255, 255))
+
+        self.preview_tile_cache[cache_key] = image.copy()
+        return image
+
     def convert_preview_tile(self, image, job: dict[str, Any]):
         from PIL import Image, ImageEnhance
 
@@ -1615,15 +1696,21 @@ class DesktopApp(tk.Tk):
     def validate_export(self, job: dict[str, Any]) -> None:
         if not bool(self.vars["permission"].get()):
             raise ValueError("Confirm that exported tiles will keep required attribution.")
+        source = self.vars["source"].get()
         max_zoom = max(job["zooms"])
-        if not cli.supports_vector_overzoom(job["style"]) and max_zoom > cli.OPENFREEMAP_MAX_DETAIL_ZOOM:
-            raise ValueError(
-                "OpenFreeMap map detail currently stops at zoom 14. "
-                "Use osm-eink for crisp generalized map overzoom, "
-                "or osm-eink-topo for terrain-focused exports."
-            )
-        if cli.supports_vector_overzoom(job["style"]) and max_zoom > MAX_PREVIEW_ZOOM:
-            raise ValueError(f"Overzoom exports are supported up to zoom {cli.OVERZOOM_MAX_DETAIL_ZOOM}.")
+        if source == "openfreemap-vector":
+            if not cli.supports_vector_overzoom(job["style"]) and max_zoom > cli.OPENFREEMAP_MAX_DETAIL_ZOOM:
+                raise ValueError(
+                    "OpenFreeMap map detail currently stops at zoom 14. "
+                    "Use osm-eink for crisp generalized map overzoom, "
+                    "or osm-eink-topo for terrain-focused exports."
+                )
+            if cli.supports_vector_overzoom(job["style"]) and max_zoom > MAX_PREVIEW_ZOOM:
+                raise ValueError(f"Overzoom exports are supported up to zoom {cli.OVERZOOM_MAX_DETAIL_ZOOM}.")
+        else:
+            source_max = SOURCES.get(source, {}).get("max_zoom", MAX_PREVIEW_ZOOM)
+            if max_zoom > source_max:
+                raise ValueError(f"{SOURCES[source]['label']} supports up to zoom {source_max}.")
 
     def run_export(self, job: dict[str, Any], output: Path, cancel_event: threading.Event) -> None:
         try:

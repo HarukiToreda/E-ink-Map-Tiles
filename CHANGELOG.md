@@ -13,6 +13,8 @@
 - Fixed InkHUD export bounding box to correctly span the full 4×4 tile grid (was previously spanning only 3 tiles wide/tall due to off-by-one in the west/north boundary calculation).
 - Fixed export button crash in InkHUD mode caused by an undefined variable when the grid size setting was introduced.
 - Fixed scroll wheel zoom to re-center the map on the cursor position, so zooming in navigates to the area under the mouse.
+- **Added USGS National Map Topo as a map source.** Select "USGS National Map Topo (US only)" in the Map Source dropdown to preview and export pre-rendered USGS topo tiles. Public domain, no API key required, supports up to zoom 16. Tiles use the USGS National Map REST endpoint and display the same style as USGS 7.5-minute quad maps with detailed contour lines, hillshade, and elevation labels.
+- Removed the CLI entry point (`eink-map-tiles` command). All functionality is now exclusively through the desktop app. The shared rendering and download logic was moved from `cli.py` into `core.py`.
 
 ## 1.1.0 - 2026-06-17
 
