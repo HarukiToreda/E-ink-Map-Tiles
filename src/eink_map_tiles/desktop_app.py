@@ -60,14 +60,6 @@ DEFAULT_SOURCE_NAME = SOURCES["openfreemap-vector"]["label"]
 DEFAULT_SOURCE_HELP = SOURCES["openfreemap-vector"]["help"]
 
 
-def _set_widget_state(widget: tk.Widget, state: str) -> None:
-    try:
-        widget.configure(state=state)
-    except tk.TclError:
-        pass
-    for child in widget.winfo_children():
-        _set_widget_state(child, state)
-
 
 class QueueWriter(io.TextIOBase):
     def __init__(self, messages: queue.Queue[str]) -> None:
@@ -398,8 +390,8 @@ class DesktopApp(tk.Tk):
         self.build_source(controls).grid(row=1, column=0, sticky="ew", pady=(0, 6))
         self.build_area(controls).grid(row=2, column=0, sticky="ew", pady=(0, 6))
         self.build_settings(controls).grid(row=3, column=0, sticky="ew", pady=(0, 6))
-        elements_outer, self.elements_content = self.build_elements(controls)
-        elements_outer.grid(row=4, column=0, sticky="ew", pady=(0, 6))
+        self.elements_outer, self.elements_content = self.build_elements(controls)
+        self.elements_outer.grid(row=4, column=0, sticky="ew", pady=(0, 6))
 
     def bind_live_controls(self) -> None:
         preview_keys = ("mode", "brightness", "contrast", "threshold", "source", "url", "style")
@@ -897,8 +889,10 @@ class DesktopApp(tk.Tk):
 
     def update_elements_state(self) -> None:
         source = self.vars["source"].get()
-        state = "normal" if source == "openfreemap-vector" else "disabled"
-        _set_widget_state(self.elements_content, state)
+        if source == "openfreemap-vector":
+            self.elements_outer.grid(row=4, column=0, sticky="ew", pady=(0, 6))
+        else:
+            self.elements_outer.grid_remove()
 
     def show_about_licenses(self) -> None:
         messagebox.showinfo(
@@ -2009,6 +2003,7 @@ class DesktopApp(tk.Tk):
         clat = self.map_center_lat
         clng = self.map_center_lon
         g = int(self.vars["inkhud_grid"].get()[0])
+        half = g // 2
         cols, rows = g, g
         style = job["style"]
         min_zoom = zoom_specs[0]["zoom"]
