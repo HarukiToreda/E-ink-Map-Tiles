@@ -4,221 +4,191 @@ Version 1.1.0
 
 Local-only Windows desktop app for generating e-paper-friendly offline map tiles for InkHUD in the Meshtastic firmware repo.
 
-This project is focused on the tile asset pipeline, not firmware integration. It exports normal XYZ tile folders, attribution files, a manifest, and a zip bundle, as well as InkHUD firmware headers (`map_tile.h`) with LZ4-compressed tiles.
+Exports normal XYZ tile folders with attribution and a manifest, and InkHUD firmware headers (`map_tile.h`) with LZ4-compressed column-major tiles ready for ESP32-S3 and nRF52840 targets.
 
 ## What It Does
 
-- Runs as a native Windows desktop app.
-- Lets you pan and zoom an interactive map preview with cursor-anchored scroll wheel zoom.
-- Lets you choose an export area from the current visible map.
-- Downloads OpenFreeMap vector tiles for that selected area and renders e-paper-ready PNG tiles locally.
-- Exports a folder and zip bundle with `manifest.json` and `ATTRIBUTION.txt`.
-- Exports InkHUD firmware headers (`map_tile.h`) with LZ4-compressed column-major tiles for ESP32-S3 and nRF52840 targets.
-- Supports configurable InkHUD grid sizes (2×2, 3×3, 4×4) to fit flash budgets.
-- Supports InkHUD2 mode for sparse per-tile selection across multiple zoom levels.
-- Supports map element toggles, including land, water, roads, highways, paths, buildings, boundaries, labels, POI, and transit.
-- Supports grayscale, mono, palette, and original output modes.
-- Includes regular map overzoom and an alternate topo style for crisp closer inspection without raster blur.
-- Shows flash usage bars, export estimates, progress, tile counts, and an export log.
+- Pan and zoom an interactive map preview with cursor-anchored scroll wheel zoom.
+- Export the visible map area as e-paper-ready PNG tiles rendered locally from OpenFreeMap vector data.
+- Export InkHUD firmware headers (`map_tile.h`) with LZ4-compressed tiles for direct inclusion in Meshtastic firmware.
+- Configurable InkHUD grid sizes (2×2, 3×3, 4×4) to fit flash budgets on nRF52840.
+- InkHUD2 mode for sparse per-tile selection across multiple zoom levels.
+- Coverage overlay showing the exact tile footprint per zoom level before export.
+- Flash usage bars showing how much of the available firmware flash the tiles will consume on ESP32-S3 and nRF52840.
+- Map element toggles: land, water, roads, highways, paths, buildings, boundaries, labels, POI, transit.
+- Grayscale, mono, palette, and original output modes.
+- Regular map overzoom and a topo style with hillshade and contour lines.
 
 The workflow is fully local and does not require a separate tile server.
 
-## Use The App
-
-Run the executable:
-
-```powershell
-.\dist\EinkMapTiles.exe
-```
-
-Basic flow:
+## Basic Flow
 
 1. Run `EinkMapTiles.exe`.
-2. Pan and zoom the map preview.
-3. Leave **Map Source** on **OpenFreeMap open vector tiles**.
-4. Choose zoom levels and e-paper settings.
-5. Click **Estimate** to check tile count.
-6. Click **Export Tiles**.
-7. Click **Open Folder** when export finishes.
-
-The default source downloads OpenFreeMap vector tiles and renders the final PNG tiles locally. No map URL entry or extra setup is needed for normal use.
+2. Pan and zoom the map preview to your area of interest.
+3. Check the attribution checkbox in **Map Source**.
+4. In **Export Settings**, choose zoom range, mode, style, and grid size.
+5. Click **Estimate** to see tile count and flash usage.
+6. Click **Export Tiles** for a normal PNG tile bundle, or **⬡ Export for InkHUD** for a firmware header.
+7. Click **Folder** when done to open the output directory.
 
 ## Map Preview
 
-The preview uses the same local renderer and e-paper conversion path as exports. What you see in the export preview is intended to match the downloaded tiles.
+The preview uses the same local vector renderer and e-paper conversion as exports — what you see matches the exported tiles.
 
-Map controls:
+Controls:
 
-- Drag to pan.
-- Mouse wheel zooms in or out around the current cursor location.
-- `+` and `-` zoom around the map center.
-- The center marker shows the current center latitude/longitude.
-- **Refresh** redraws the export preview.
+- **Drag** to pan.
+- **Scroll wheel** zooms in or out, re-centering on the cursor position.
+- **Refresh** re-renders the preview at the current view.
+- The bullseye marker shows the current map center, which is used as the InkHUD export anchor.
 
-The visible map is the export area. The preview keeps the current map visible while a new export preview is rendering, then swaps in the updated render when it is ready.
-
-The standard `osm-eink` map uses OpenFreeMap vector detail through zoom 14, then can preview/export deeper through zoom 16 by redrawing zoom-14 OpenFreeMap vectors into deeper child tiles. Labels, water, land shapes, roads, and trails stay crisp without raster blur. The `osm-eink-topo` style also adds deeper terrain data.
-
-## Export Panel
-
-The export panel shows:
-
-- Estimated tile count.
-- Current status.
-- Export progress bar.
-- Completed/exported tile log.
-- Buttons for **Estimate**, **Export Tiles**, and **Open Folder**.
-- **About / Licenses** for bundled license and attribution notes.
-
-Large areas and high zoom ranges can create many tiles. Start with a small area and zoom range, then increase as needed.
-
-## Area
-
-The **Area** section controls the export bounding box.
-
-You can either:
-
-- Pan/zoom the map directly.
-- Enter center latitude, center longitude, and radius in kilometers, then click **Fit Center Area**.
-- Read the west, south, east, and north bounds from **Visible BBox**.
+The visible map area is the export area for normal tile exports. For InkHUD exports, the center marker position and the configured grid size determine which tiles are exported.
 
 ## Map Source
 
-The default source is **OpenFreeMap open vector tiles**:
+The only built-in source is **OpenFreeMap open vector tiles**. The app downloads those vector tiles and renders local e-paper PNG output — no raster tile server or separate download tool needed.
 
-```text
-https://tiles.openfreemap.org/planet/latest/{z}/{x}/{y}.pbf
-```
-
-The app downloads those vector tiles for the selected area and renders local e-paper PNG output.
-
-The app includes a permission checkbox to make the attribution/legal step explicit. Keep the generated attribution files with exported tile bundles.
+Check **I will keep required map attribution with exported tiles** before exporting. The generated `ATTRIBUTION.txt` and `manifest.json` must travel with any shared tile bundle.
 
 ## Export Settings
 
-Default desktop settings:
+| Setting | Default | Notes |
+|---|---|---|
+| Min zoom | 4 | |
+| Max zoom | 8 | |
+| Mode | `grayscale` | |
+| Style | `osm-eink` | |
+| Grid | `4×4` | InkHUD/InkHUD2 only |
+| Brightness | 0.99 | InkHUD defaults to 1.03 |
+| Contrast | 1.15 | InkHUD defaults to 2.41 |
+| Mono threshold | 120 | `mono` mode only, hidden otherwise |
 
-```text
-min zoom: 4
-max zoom: 8
-mode: grayscale
-style: osm-eink
-brightness: 0.99
-contrast: 1.15
-mono threshold: 120
-```
+**Output modes:**
 
-`Mono threshold` only affects `mono` mode. The desktop app hides that control for grayscale, palette, and original exports.
+- `grayscale` — 8-bit grayscale PNGs.
+- `mono` — 1-bit black/white PNGs.
+- `inkhud` — Bayer-dithered 1-bit processing matching the InkHUD firmware pipeline. Brightness and contrast default to InkHUD values when sliders are unchanged. Use **⬡ Export for InkHUD** to generate `map_tile.h`.
+- `inkhud2` — Same pipeline as `inkhud`, but tiles are selected individually by clicking on the map instead of using a fixed grid. Use **⬡ Export for InkHUD** to export the selected set.
+- `palette` — Indexed-color PNGs.
+- `original` — Rendered PNGs with no e-paper conversion.
 
-Output modes:
+**Map styles:**
 
-- `grayscale`: 8-bit grayscale PNGs tuned for detailed e-paper map viewing.
-- `mono`: true 1-bit black/white PNGs for devices or tests that require binary output.
-- `inkhud`: Bayer-dithered 1-bit processing that mirrors the InkHUD firmware pipeline. When selected, unchanged sliders default to brightness `1.03` and contrast `2.41`. Use **Export for InkHUD** to generate a `map_tile.h` firmware header.
-- `inkhud2`: same pipeline as `inkhud`, but lets you click individual tiles on the map to build a sparse non-contiguous coverage area across multiple zoom levels.
-- `palette`: indexed-color PNGs.
-- `original`: rendered/source PNGs with no e-paper conversion.
-
-Map styles:
-
-- `osm-eink`: default clean e-paper map. It can export zooms 15-16 by clipping and redrawing zoom-14 OpenFreeMap vector data into deeper child tiles. This stays sharp, but it does not add new source detail beyond zoom 14.
-- `osm-eink-topo`: alternate e-paper topo map with land, water, labels, trails/paths, hillshade, and contour lines from Mapzen Terrain Tiles on AWS Open Data. Regular roads, highways, buildings, boundaries, POI, and transit are disabled by default for this style, though boundaries can be enabled in **Map Elements**.
-
-Zoom guidance:
-
-- Use `osm-eink` for regular map exports up to zoom 16 when crisp generalized detail is acceptable.
-- Use `osm-eink-topo` for terrain-focused topo exports up to zoom 16.
-- At zooms above 14, the app keeps vector content sharp by clipping and redrawing zoom-14 OpenFreeMap vector data into the deeper child tiles. This avoids blurry scaling, but it does not add brand-new road/building/label detail beyond what exists at zoom 14.
+- `osm-eink` — Clean e-paper map. Exports through zoom 16 by clipping and redrawing zoom-14 vector data into deeper tiles — stays sharp but adds no new detail beyond zoom 14.
+- `osm-eink-topo` — Topo map with hillshade and contour lines from Mapzen Terrain Tiles on AWS Open Data. Roads, buildings, POI, and transit are off by default; boundaries can be re-enabled in **Map Elements**.
 
 ## Map Elements
 
-The app can include or exclude these map layers:
+Toggle which layers appear in the preview and exported tiles:
 
-- Land
-- Water
-- Roads
-- Highways
-- Paths
-- Buildings
-- Boundaries
-- Labels
-- POI
-- Transit
+| Element | Default |
+|---|---|
+| Land | On |
+| Water | On |
+| Roads | On |
+| Highways | On |
+| Paths | On |
+| Buildings | **Off** |
+| Boundaries | On |
+| Labels | On |
+| POI | **Off** |
+| Transit | On |
 
-Buildings and POI are disabled by default to reduce visual clutter on e-paper. Labels, boundaries, water, land, roads, highways, paths, and transit are enabled by default.
+Buildings and POI are off by default to reduce clutter on e-paper.
 
-Element choices affect both preview and exported OpenFreeMap tiles.
+## Export Panel
+
+The **Export** section contains:
+
+- Tile count and flash estimate label (updates live in InkHUD mode).
+- Flash usage bars for ESP32-S3 and nRF52840 targets. Bars turn yellow above 60% and red above 85%.
+- **Estimate** — updates tile count and flash bars on demand (non-InkHUD modes).
+- **Export Tiles** — downloads and renders the tile bundle to the output folder.
+- **Folder** — opens the output folder.
+- **About** — license and attribution summary.
+- **⬡ Export for InkHUD** — generates `map_tile.h` for firmware inclusion.
+- **Coverage** checkbox — draws dashed per-zoom bounding boxes on the map preview showing the exact InkHUD tile footprint.
+- Progress bar and **Cancel** button (appear during export).
+- Export log showing downloaded tile paths and progress.
+
+## Area
+
+The **Area** section lets you navigate to a specific location:
+
+- Enter **Center lat**, **Center lon**, and **Radius km**, then click **Fit Center Area** to jump the map to that location.
+- **Visible BBox** shows the current west/south/east/north bounds of the map view (read-only).
+
+For InkHUD exports, only the center lat/lon matters — the grid of tiles is always centered on the bullseye.
 
 ## Output
 
-Exports are saved under:
+Normal exports are saved to:
 
-```text
-%USERPROFILE%\Downloads\EinkMapTiles\
+```
+%USERPROFILE%\Downloads\EinkMapTiles\{export-name}\
 ```
 
-Each export writes:
+Each normal export produces:
 
-```text
+```
 tiles/{style}/{z}/{x}/{y}.png
 manifest.json
 ATTRIBUTION.txt
 {export-name}.zip
 ```
 
-Keep `manifest.json` and `ATTRIBUTION.txt` with any shared tile bundle.
+InkHUD exports save a single file to the chosen path:
 
-The desktop app always writes normal tile bundles as:
-
-```text
-tiles/{style}/{z}/{x}/{y}.png
 ```
-
-Use **Export for InkHUD** when you need a `map_tile.h` firmware header instead of a normal tile bundle. **Export for InkHUD** also applies the InkHUD brightness and contrast defaults when the sliders are still unchanged.
+map_tile.h
+```
 
 ## InkHUD Firmware Export
 
-**Export for InkHUD** generates a `map_tile.h` C header for direct inclusion in the Meshtastic firmware. Each 256×256 tile is stored as a raw LZ4 block using column-major byte layout (`[bx][y]` instead of row-major), which makes vertical map features (roads, building edges) contiguous in memory so LZ4 compresses them ~30% better.
+**⬡ Export for InkHUD** generates a `map_tile.h` C header for direct inclusion in the Meshtastic firmware. Each 256×256 tile is stored as a raw LZ4 block using column-major byte layout (`[bx][y]` instead of row-major), which makes vertical map features (roads, building edges) contiguous in memory — LZ4 compresses these ~30% better than row-major layout.
 
-Typical compression on dense urban areas: 128 KB per 4×4 zoom level uncompressed → 53–57 KB after column-major LZ4.
+Typical compression on dense urban areas: 128 KB per 4×4 zoom uncompressed → 53–57 KB after column-major LZ4.
 
-The header contains parallel arrays:
+The header uses parallel arrays:
 
 ```c
-map_tile_count      // number of tiles
-map_tile_zooms[]    // zoom level per tile
+map_tile_count      // total number of tiles
+map_tile_zooms[]    // zoom level for each tile
 map_tile_tx[]       // tile X index
 map_tile_ty[]       // tile Y index
-map_tile_sizes[]    // compressed byte count per tile
+map_tile_sizes[]    // compressed byte count for each tile
 map_tile_data[]     // pointers to per-tile LZ4 byte arrays
 ```
 
-The firmware decompresses tiles on demand into a 2-entry LRU cache. Pixel read from a decompressed tile: `tile[(px/8)*256 + py] & (1 << (px%8))`.
+The firmware decompresses tiles on demand into a 2-entry LRU cache using an inline LZ4 decompressor (~25 lines, no external dependencies). Pixel read from a decompressed buffer: `buf[(px/8)*256 + py] & (1 << (px%8))`.
 
-**Grid size** controls how many tiles are exported per zoom level:
+**Grid size** controls how many tiles are exported per zoom level, centered on the map bullseye:
 
 | Grid | Tiles/zoom | Uncompressed | Typical LZ4 |
-|------|-----------|-------------|-------------|
-| 2×2  | 4         | 32 KB       | ~15 KB      |
-| 3×3  | 9         | 72 KB       | ~32 KB      |
-| 4×4  | 16        | 128 KB      | ~56 KB      |
+|---|---|---|---|
+| 2×2 | 4 | 32 KB | ~15 KB |
+| 3×3 | 9 | 72 KB | ~32 KB |
+| 4×4 | 16 | 128 KB | ~56 KB |
 
-nRF52840 has approximately 85 KB available for tile data. Combinations like z12 2×2 + z13 2×2 + z14 4×4 fit in ~81 KB.
+nRF52840 has approximately 85 KB available for tile data. Example combinations that fit:
 
-**Coverage overlay**: enable the **Coverage** checkbox to see dashed per-zoom bounding boxes on the preview showing the exact tile footprint that will be exported.
+- z12 2×2 + z13 2×2 + z14 4×4 ≈ 81 KB (3 zoom levels)
+- z13 4×4 + z14 4×4 ≈ 112 KB (fits ESP32-S3, tight for nRF)
 
-**InkHUD2 mode** lets you click individual tiles to build a sparse, non-contiguous coverage area across multiple zoom levels, useful when you want specific areas at different zoom levels without a fixed grid.
+**Coverage overlay** — enable the **Coverage** checkbox to see dashed per-zoom bounding boxes on the map preview showing the exact tile footprint before exporting.
+
+**InkHUD2 mode** — instead of a fixed grid, click individual tiles on the map to build a sparse, non-contiguous tile set across any combination of zoom levels. Useful when you want detailed coverage of specific areas without a uniform grid.
 
 ## Legal Map Sources
 
-A local executable does not make every map source legal. The source still has to allow offline export, bulk tile generation, and redistribution if you share the resulting tiles.
+A local tool does not make every map source legal. The source must allow offline export, bulk tile generation, and redistribution if you share the output.
 
-Good directions:
+Good:
 
-- Built-in OpenFreeMap vector tiles, used with required attribution.
-- OpenFreeMap or OpenMapTiles data used according to their license and attribution terms.
-- Protomaps PMTiles extracts used according to their license and attribution terms.
-- A provider API only when the provider explicitly allows offline or bulk export.
+- OpenFreeMap vector tiles with required attribution.
+- OpenMapTiles data under their license and attribution terms.
+- Protomaps PMTiles extracts under their license.
+- A provider API only when the provider explicitly permits bulk/offline use.
 
 Avoid:
 
@@ -230,16 +200,12 @@ This is a practical checklist, not legal advice.
 
 ## Attribution
 
-Generated bundles include attribution guidance in `manifest.json` and `ATTRIBUTION.txt`.
+Generated bundles include `manifest.json` and `ATTRIBUTION.txt` with attribution guidance.
 
-Recommended baseline attribution for OSM-derived sources:
+Baseline attribution for OSM-derived sources:
 
-```text
-(c) OpenStreetMap contributors
-OpenStreetMap data is available under the Open Database License (ODbL) 1.0.
-(c) OpenMapTiles, if using OpenMapTiles schema/data.
-Terrain Tiles were accessed from https://registry.opendata.aws/terrain-tiles/, if using topo style.
-Additional attribution may be required by the tile source or renderer.
 ```
-
-
+(c) OpenStreetMap contributors — ODbL 1.0
+(c) OpenMapTiles, if using OpenMapTiles schema/data
+Terrain Tiles from https://registry.opendata.aws/terrain-tiles/ — if using topo style
+```
