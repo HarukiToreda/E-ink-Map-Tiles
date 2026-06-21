@@ -1500,7 +1500,7 @@ class DesktopApp(tk.Tk):
             color = colors[i % len(colors)]
             self.map_canvas.create_rectangle(
                 x0, y0, x1, y1,
-                fill="", outline=color, width=3, dash=(8, 4),
+                fill="", outline=color, width=2,
                 tags=("inkhud-coverage",)
             )
             label_x = max(x0 + 4, 2)

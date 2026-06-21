@@ -815,8 +815,26 @@ your tile source, local renderer, or downstream use case.
     (output_root / "ATTRIBUTION.txt").write_text(text, encoding="utf-8")
 
 
+def inkhud_quantize(rgb_image, contrast: float, brightness: float):
+    """InkHUD 3-level quantize WITHOUT Bayer dither. Returns grayscale image with values {0, 128, 255}.
+    Used for tile export so firmware can downsample in grayscale then dither on-device."""
+    import numpy as np
+    from PIL import Image as _Image, ImageEnhance, ImageFilter
+
+    arr_rgb = np.array(rgb_image.convert("RGB"), dtype=np.int16)
+    water_mask = (arr_rgb[:, :, 2] - arr_rgb[:, :, 0]) > 25
+    gray = rgb_image.convert("L")
+    gray = ImageEnhance.Contrast(gray).enhance(contrast)
+    gray = ImageEnhance.Brightness(gray).enhance(brightness)
+    sharp = gray.filter(ImageFilter.UnsharpMask(radius=1, percent=150, threshold=2))
+    arr = np.array(sharp, dtype=np.float32)
+    quantized = np.where(arr <= 175, 0, np.where(arr <= 215, 128, 255)).astype(np.uint8)
+    quantized[water_mask] = 0
+    return _Image.fromarray(quantized, mode="L")
+
+
 def inkhud_process(rgb_image, contrast: float, brightness: float):
-    """Shared InkHUD 1-bit pipeline: water detection, contrast/brightness, unsharp mask, Bayer dither."""
+    """InkHUD 1-bit pipeline with Bayer dither. Used for preview only."""
     import numpy as np
     from PIL import Image as _Image, ImageEnhance, ImageFilter
 

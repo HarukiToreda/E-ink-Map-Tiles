@@ -121,7 +121,7 @@ The **Export** section contains:
 - **Folder** — opens the output folder.
 - **About** — license and attribution summary.
 - **⬡ Export for InkHUD** — generates `map_tile.h` for firmware inclusion.
-- **Coverage** checkbox — draws dashed per-zoom bounding boxes on the map preview showing the exact InkHUD tile footprint.
+- **Coverage** checkbox — draws solid per-zoom bounding boxes on the map preview showing the exact InkHUD tile footprint.
 - Progress bar and **Cancel** button (appear during export).
 - Export log showing downloaded tile paths and progress.
 
@@ -231,7 +231,7 @@ Both modes use the same image pipeline and the same `map_tile.h` output format. 
 - **InkHUD** — fixed grid centered on the map bullseye. Every zoom level exports the same grid size (e.g. 4×4) in a square around the center. Simple and predictable.
 - **InkHUD2** — click individual tiles on the map to build a sparse, non-contiguous set across any combination of zoom levels. Useful when you want dense coverage of a specific corridor or route at one zoom level and broader context tiles at another, without paying for a full uniform grid.
 
-**Coverage overlay** — enable the **Coverage** checkbox to see dashed per-zoom bounding boxes on the preview showing the exact InkHUD tile footprint before exporting.
+**Coverage overlay** — enable the **Coverage** checkbox to see solid per-zoom bounding boxes on the preview showing the exact InkHUD tile footprint before exporting.
 
 ## Legal Map Sources
 
