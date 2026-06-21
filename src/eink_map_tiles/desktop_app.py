@@ -513,6 +513,8 @@ class DesktopApp(tk.Tk):
         if mode in ("inkhud", "inkhud2"):
             self.apply_inkhud_defaults_if_unchanged()
             self.vars["element_land"].set(False)
+            self.vars["min_zoom"].set("8")
+            self.vars["max_zoom"].set("13")
         # InkHUD2: hide min/max zoom fields, show zoom checkboxes instead
         is_inkhud2 = mode == "inkhud2"
         for widget in getattr(self, "zoom_range_widgets", []):
