@@ -66,8 +66,8 @@ Check **I will keep required map attribution with exported tiles** before export
 
 | Setting | Default | Notes |
 |---|---|---|
-| Min zoom | 4 | |
-| Max zoom | 8 | |
+| Min zoom | 4 (8 in InkHUD/InkHUD2 mode) | |
+| Max zoom | 8 (13 in InkHUD/InkHUD2 mode) | |
 | Mode | `grayscale` | |
 | Style | `osm-eink` | |
 | Grid | `4×4` | InkHUD/InkHUD2 only. Options: 2×2, 3×3, 4×4, 5×5, 6×6, 8×8 |
