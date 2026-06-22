@@ -1,6 +1,6 @@
 # E-ink Map Tiles
 
-Version 1.1.0
+Version 1.2.0
 
 Local-only Windows desktop app for generating e-paper-friendly offline map tiles for InkHUD in the Meshtastic firmware repo.
 
@@ -206,7 +206,7 @@ The firmware decompresses tiles on demand into a 2-entry LRU cache using an inli
 
 ### Grid size and flash budget
 
-**Grid size** controls how many tiles are exported per zoom level, centered on the map bullseye:
+**Grid size** controls how many tiles are exported per zoom level, centered on the map bullseye. The grid is positioned so the tile containing the bullseye is always inside the exported area. For even-sized grids (2×2, 4×4, etc.) the boxes at different zoom levels are concentric to within one sub-tile width — a fundamental property of the doubling tile coordinate system.
 
 | Grid | Tiles/zoom | Uncompressed | Typical LZ4 |
 |---|---|---|---|
@@ -231,7 +231,7 @@ Both modes use the same image pipeline and the same `map_tile.h` output format. 
 - **InkHUD** — fixed grid centered on the map bullseye. Every zoom level exports the same grid size (e.g. 4×4) in a square around the center. Simple and predictable.
 - **InkHUD2** — click individual tiles on the map to build a sparse, non-contiguous set across any combination of zoom levels. Useful when you want dense coverage of a specific corridor or route at one zoom level and broader context tiles at another, without paying for a full uniform grid.
 
-**Coverage overlay** — enable the **Coverage** checkbox to see solid per-zoom bounding boxes on the preview showing the exact InkHUD tile footprint before exporting.
+**Coverage overlay** — enable the **Coverage** checkbox to see solid per-zoom bounding boxes on the preview showing the exact InkHUD tile footprint before exporting. The exported tiles match the overlay boxes exactly — what the overlay shows at each zoom level is what will be in `map_tile.h`.
 
 ## Legal Map Sources
 

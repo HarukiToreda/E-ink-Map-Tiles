@@ -544,16 +544,17 @@ class DesktopApp(tk.Tk):
 
         total = sum(len(v) for v in self.inkhud2_selected_tiles.values())
         zoom_count = sum(1 for v in self.inkhud2_selected_tiles.values() if v)
-        kb = total * 256 * 256 // 8 // 1024
+        kb = total * 1500 // 1024  # ~1.5 KB/tile after LZ4 compression (est.)
 
         ttk.Label(frame, text="Click tiles on the map to select areas for export.", style="Hint.TLabel").grid(
             row=0, column=0, columnspan=2, sticky="w"
         )
-        summary = f"{total} tile(s) across {zoom_count} zoom(s) — {kb} KB" if total else "No tiles selected."
+        summary = f"{total} tile(s) across {zoom_count} zoom(s) — ~{kb} KB" if total else "No tiles selected."
         ttk.Label(frame, text=summary, style="Hint.TLabel").grid(
             row=1, column=0, columnspan=2, sticky="w", pady=(1, 4)
         )
-        self.flat_button(frame, "Add 3×3 here", self._add_3x3_tiles).grid(row=2, column=0, sticky="ew", padx=(0, 3))
+        grid_label = f"Add {self.vars['inkhud_grid'].get()} here"
+        self.flat_button(frame, grid_label, self._add_grid_tiles).grid(row=2, column=0, sticky="ew", padx=(0, 3))
         self.flat_button(frame, "Clear all", self._clear_inkhud2_tiles).grid(row=2, column=1, sticky="ew", padx=(3, 0))
 
     def build_scrollable_controls(self, parent: ttk.Frame) -> ttk.Frame:
@@ -1145,7 +1146,7 @@ class DesktopApp(tk.Tk):
             self.vars["tile_count"].set(f"InkHUD: {num_zooms} zoom(s) {g}×{g} — ≈{estimated // 1024} KB (LZ4 est.)")
         elif mode == "inkhud2":
             total = sum(len(v) for v in self.inkhud2_selected_tiles.values())
-            estimated = int(total * 256 * 256 // 8 * 0.45)
+            estimated = total * 1500
             zoom_count = sum(1 for v in self.inkhud2_selected_tiles.values() if v)
             self.draw_flash_bars(estimated, upper_bound=True)
             self.vars["tile_count"].set(f"InkHUD2: {total} tile(s) across {zoom_count} zoom(s) — ≈{estimated // 1024} KB (LZ4 est.)")
@@ -1308,8 +1309,8 @@ class DesktopApp(tk.Tk):
         width = max(self.map_canvas.winfo_width(), 320)
         height = max(self.map_canvas.winfo_height(), 260)
         cx_world, cy_world = self.lon_lat_to_world_pixel(self.map_center_lon, self.map_center_lat, zoom)
-        tx = int((cx_world - width / 2 + cx) / 256)
-        ty = int((cy_world - height / 2 + cy) / 256)
+        tx = int(math.floor((cx_world - width / 2 + cx) / 256))
+        ty = int(math.floor((cy_world - height / 2 + cy) / 256))
         tiles = self.inkhud2_selected_tiles.setdefault(zoom, set())
         tile = (tx, ty)
         if tile in tiles:
@@ -1323,13 +1324,23 @@ class DesktopApp(tk.Tk):
         self.update_inkhud_flash_bars()
         self.update_inkhud2_info()
 
-    def _add_3x3_tiles(self) -> None:
+    def _add_grid_tiles(self) -> None:
         z = self.map_zoom
-        tx, ty = cli.lonlat_to_tile(self.map_center_lon, self.map_center_lat, z)
+        try:
+            n = int(self.vars["inkhud_grid"].get().split("x")[0])
+        except (ValueError, AttributeError):
+            n = 3
+        # Compute fractional tile position and round to nearest boundary so the
+        # NxN grid is centered on the map center regardless of zoom level.
+        wx, wy = self.lon_lat_to_world_pixel(self.map_center_lon, self.map_center_lat, z)
+        ftx = wx / 256.0
+        fty = wy / 256.0
+        start_tx = round(ftx) - n // 2
+        start_ty = round(fty) - n // 2
         tiles = self.inkhud2_selected_tiles.setdefault(z, set())
-        for ddx in range(-1, 2):
-            for ddy in range(-1, 2):
-                tiles.add((tx + ddx, ty + ddy))
+        for ddx in range(n):
+            for ddy in range(n):
+                tiles.add((start_tx + ddx, start_ty + ddy))
         self.draw_tile_selection_overlay()
         self.draw_tile_grid_overlay()
         self.update_inkhud_flash_bars()
@@ -1409,9 +1420,9 @@ class DesktopApp(tk.Tk):
 
         total_bytes = sum(len(c) for c in compressed)
 
-        zoom_arr = ", ".join(str(t[0]) for t in tile_data)
-        tx_arr   = ", ".join(str(t[1]) for t in tile_data)
-        ty_arr   = ", ".join(str(t[2]) for t in tile_data)
+        zoom_arr = ", ".join(str(int(t[0])) for t in tile_data)
+        tx_arr   = ", ".join(str(int(t[1])) for t in tile_data)
+        ty_arr   = ", ".join(str(int(t[2])) for t in tile_data)
         size_arr = ", ".join(str(len(c)) for c in compressed)
 
         lines = [
@@ -1448,19 +1459,20 @@ class DesktopApp(tk.Tk):
         return "\n".join(lines), total_bytes
 
     @staticmethod
-    def _inkhud_grid_origin(lon: float, lat: float, z: int) -> tuple[int, int]:
-        """Return (gx0, gy0) — top-left tile of the 4×4 export grid at zoom z.
+    def _inkhud_grid_origin(lon: float, lat: float, z: int, g: int = 4, anchor_z: int | None = None) -> tuple[int, int]:
+        """Return (gx0, gy0) — top-left tile of the gxg export grid at zoom z.
 
-        The grid center is snapped to the nearest tile boundary so the map
-        center falls within ±128 world-pixels of the visual center of the box.
-        This is the same logic used by both the export and the overlay.
+        Uses floor(ftx - g/2 + 0.5) so the tile containing the center point is
+        always inside the grid and the grid is as symmetric as possible around it.
+        anchor_z is accepted for API compatibility but ignored — per-zoom computation
+        avoids cross-zoom integer truncation errors that cause coverage gaps.
         """
         n = 2 ** z
         cx = (lon + 180.0) / 360.0 * n
         cy = (1.0 - math.log(math.tan(math.radians(lat)) + 1.0 / math.cos(math.radians(lat))) / math.pi) / 2.0 * n
-        gx_center = round(cx)
-        gy_center = round(cy)
-        return gx_center - 2, gy_center - 2
+        gx0 = int(math.floor(cx - g / 2.0 + 0.5))
+        gy0 = int(math.floor(cy - g / 2.0 + 0.5))
+        return gx0, gy0
 
     def draw_inkhud_coverage_overlay(self) -> None:
         self.map_canvas.delete("inkhud-coverage")
@@ -1484,11 +1496,10 @@ class DesktopApp(tk.Tk):
         colors = ["#e63946", "#f4a261", "#2a9d8f", "#457b9d", "#6a4c93", "#e9c46a"]
 
         g = int(self.vars["inkhud_grid"].get()[0])
-        half = g // 2
 
+        # Anchor to max_zoom: snapping error is 0.5 tiles at max_zoom = tiny at coarser views.
         for i, z in enumerate(range(min_zoom, max_zoom + 1)):
-            tx, ty = cli.lonlat_to_tile(self.map_center_lon, self.map_center_lat, z)
-            gx0, gy0 = tx - half, ty - half
+            gx0, gy0 = self._inkhud_grid_origin(self.map_center_lon, self.map_center_lat, z, g, anchor_z=max_zoom)
             gx1, gy1 = gx0 + g, gy0 + g
 
             scale = 2 ** (view_zoom - z)
@@ -1773,16 +1784,16 @@ class DesktopApp(tk.Tk):
 
         # Compute per-zoom tile origins and bboxes (gxg grid centered on map center)
         g = int(self.vars["inkhud_grid"].get()[0])
-        half = g // 2
         zoom_specs = []
         eps = 1e-6
         for z in range(min_zoom, max_zoom + 1):
-            tx, ty = cli.lonlat_to_tile(clng, clat, z)
+            tx, ty = self._inkhud_grid_origin(clng, clat, z, g, anchor_z=max_zoom)
+            tx, ty = int(tx), int(ty)
             n = 2**z
-            west  = (tx - half) / n * 360 - 180
-            east  = (tx - half + g) / n * 360 - 180 - eps
-            north = math.degrees(math.atan(math.sinh(math.pi * (1 - 2 * (ty - half) / n))))
-            south = math.degrees(math.atan(math.sinh(math.pi * (1 - 2 * (ty - half + g) / n)))) + eps
+            west  = tx / n * 360 - 180
+            east  = (tx + g) / n * 360 - 180 - eps
+            north = math.degrees(math.atan(math.sinh(math.pi * (1 - 2 * ty / n))))
+            south = math.degrees(math.atan(math.sinh(math.pi * (1 - 2 * (ty + g) / n)))) + eps
             zoom_specs.append({"zoom": z, "tx": tx, "ty": ty,
                                 "bbox": {"west": west, "south": south, "east": east, "north": north}})
 
@@ -2030,7 +2041,7 @@ class DesktopApp(tk.Tk):
                 tile_data: list[tuple[int, int, int, list[int]]] = []  # (zoom, tx, ty, raw)
                 for spec in zoom_specs:
                     z = spec["zoom"]
-                    x0, y0 = spec["tx"] - half, spec["ty"] - half
+                    x0, y0 = spec["tx"], spec["ty"]
                     for dy in range(rows):
                         for dx in range(cols):
                             tx, ty = x0 + dx, y0 + dy

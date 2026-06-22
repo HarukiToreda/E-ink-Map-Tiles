@@ -263,6 +263,8 @@ def render_openfreemap_image(
         draw_transportation(draw, data, tile.z, selected, topo=topo)
     if "labels" in selected:
         draw_labels(draw, data, tile.z, load_label_font(tile.z))
+        if "paths" in selected:
+            draw_transportation_names(image, draw, data, tile.z, load_label_font(tile.z, small=True))
     if "pois" in selected:
         draw_pois(draw, data, tile.z, load_label_font(tile.z, small=True))
     return image
@@ -644,6 +646,109 @@ def draw_pois(draw, data: dict, z: int, font) -> None:
         labels_drawn += 1
 
 
+def _geometry_angle(geometry: dict, frac: float = 0.5) -> float:
+    """Return the angle in degrees of a line geometry at the given fractional position. Range [-90, 90]."""
+    geo_type = geometry.get("type")
+    coords = geometry.get("coordinates", [])
+    if geo_type == "LineString" and len(coords) >= 2:
+        pts = coords
+    elif geo_type == "MultiLineString" and coords and len(coords[0]) >= 2:
+        pts = coords[0]
+    else:
+        return 0.0
+    mid = int(round(frac * (len(pts) - 1)))
+    mid = max(0, min(mid, len(pts) - 1))
+    p1 = pts[max(0, mid - 1)]
+    p2 = pts[min(len(pts) - 1, mid + 1)]
+    x1, y1 = scale_point(p1)
+    x2, y2 = scale_point(p2)
+    dx, dy = x2 - x1, y2 - y1
+    if dx == 0 and dy == 0:
+        return 0.0
+    angle = math.degrees(math.atan2(dy, dx))
+    # Normalise to [-90, 90] so text is never rendered upside-down
+    if angle > 90:
+        angle -= 180
+    elif angle < -90:
+        angle += 180
+    return angle
+
+
+def draw_transportation_names(image, draw, data: dict, z: int, font) -> None:
+    """Draw named trail/path labels rotated along the trail direction (z == 16 only)."""
+    if z < 15:
+        return
+    from PIL import Image, ImageDraw
+
+    path_classes = {"path", "track", "footway", "cycleway", "bridleway", "steps"}
+    # All placed label centers — used to prevent visual overlap between different trails
+    placed_all: list[tuple[int, int]] = []
+    overlap_spacing = 50  # minimum px to avoid drawing two labels on top of each other
+    # Minimum px between repeated labels of the same trail
+    repeat_spacing = 130 if z >= 16 else 100
+
+    # Sample many evenly-spaced positions so long trails get multiple repeats
+    candidate_fracs = [i / 20 for i in range(1, 20)]  # 0.05, 0.10, … 0.95
+
+    for feature in data.get("transportation_name", {}).get("features", []):
+        properties = feature.get("properties", {})
+        if properties.get("class", "") not in path_classes:
+            continue
+        name = label_text(properties)
+        if not name:
+            continue
+        geometry = feature.get("geometry", {})
+
+        try:
+            bbox = font.getbbox(name)
+            text_w = bbox[2] - bbox[0]
+            text_h = bbox[3] - bbox[1]
+        except AttributeError:
+            text_w, text_h = len(name) * 6, 10
+
+        pad = 4
+        placed_this_trail: list[tuple[int, int]] = []
+
+        for frac in candidate_fracs:
+            pt = _line_point_at(geometry, frac)
+            if pt is None:
+                continue
+            cx, cy = scale_point(pt)
+            if not (0 <= cx <= 256 and 0 <= cy <= 256):
+                continue
+            # Skip sharp bends
+            angle = _geometry_angle(geometry, frac)
+            angle_before = _geometry_angle(geometry, max(0.0, frac - 0.15))
+            angle_after = _geometry_angle(geometry, min(1.0, frac + 0.15))
+            bend = abs(angle_after - angle_before)
+            if bend > 180:
+                bend = 360 - bend
+            if bend > 30:
+                continue
+            # Don't repeat same trail too close
+            if any(abs(cx - ex) + abs(cy - ey) < repeat_spacing for ex, ey in placed_this_trail):
+                continue
+            # Don't overlap any other trail's label
+            if any(abs(cx - ex) + abs(cy - ey) < overlap_spacing for ex, ey in placed_all):
+                continue
+            scratch = Image.new("RGBA", (text_w + pad * 2, text_h + pad * 2), (0, 0, 0, 0))
+            sd = ImageDraw.Draw(scratch)
+            for ddx in (-1, 0, 1):
+                for ddy in (-1, 0, 1):
+                    if ddx or ddy:
+                        sd.text((pad + ddx, pad + ddy), name, font=font, fill=(255, 255, 255, 220))
+            sd.text((pad, pad), name, font=font, fill=(17, 17, 17, 255))
+            rotated = scratch.rotate(-angle, expand=True, resample=Image.BICUBIC)
+            rw, rh = rotated.size
+            px_ = cx - rw // 2
+            py_ = cy - rh // 2
+            if px_ < 0 or py_ < 0 or px_ + rw > 256 or py_ + rh > 256:
+                continue
+            image.paste(rotated, (px_, py_), rotated)
+            placed_this_trail.append((cx, cy))
+            placed_all.append((cx, cy))
+
+
 def load_label_font(z: int, small: bool = False):
     from PIL import ImageFont
 
@@ -652,6 +757,8 @@ def load_label_font(z: int, small: bool = False):
         size += 1
     if z >= 14:
         size += 1
+    if small and z < 16:
+        size -= 2
     for font_name in ("arial.ttf", "segoeui.ttf", "DejaVuSans.ttf"):
         try:
             return ImageFont.truetype(font_name, size=size)
@@ -670,6 +777,20 @@ def draw_readable_text(draw, xy: tuple[int, int], text: str, font, fill: str, st
                 if dx or dy:
                     draw.text((x + dx, y + dy), text, fill="#ffffff", font=font)
         draw.text(xy, text, fill=fill, font=font)
+
+
+def _line_point_at(geometry: dict, frac: float) -> list[float] | None:
+    """Return the point at fractional position along a line geometry."""
+    geo_type = geometry.get("type")
+    coords = geometry.get("coordinates", [])
+    if geo_type == "LineString" and coords:
+        pts = coords
+    elif geo_type == "MultiLineString" and coords and coords[0]:
+        pts = coords[0]
+    else:
+        return None
+    idx = int(round(frac * (len(pts) - 1)))
+    return pts[max(0, min(idx, len(pts) - 1))]
 
 
 def representative_point(geometry: dict) -> list[float] | None:
