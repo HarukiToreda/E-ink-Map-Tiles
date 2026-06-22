@@ -15,6 +15,8 @@ Exports normal XYZ tile folders with attribution and a manifest, and InkHUD firm
 - InkHUD2 mode for sparse per-tile selection across multiple zoom levels.
 - Coverage overlay showing the exact tile footprint per zoom level before export.
 - Flash usage bars showing how much of the available firmware flash the tiles will consume on ESP32-S3 and nRF52840.
+- Custom map markers — place icons on the map that get baked into exported tiles. No firmware changes required.
+- Session save/load — save and restore the full tool state (map position, settings, markers, tile selection) to a JSON file.
 - Map element toggles: land, water, roads, highways, paths, buildings, boundaries, labels, POI, transit.
 - Grayscale, mono, palette, and original output modes.
 - Regular map overzoom and a topo style with hillshade and contour lines.
@@ -27,9 +29,10 @@ The workflow is fully local and does not require a separate tile server.
 2. Pan and zoom the map preview to your area of interest.
 3. Check the attribution checkbox in **Map Source**.
 4. In **Export Settings**, choose zoom range, mode, style, and grid size.
-5. Click **Estimate** to see tile count and flash usage.
-6. Click **Export Tiles** for a normal PNG tile bundle, or **⬡ Export for InkHUD** for a firmware header.
-7. Click **Folder** when done to open the output directory.
+5. Click **Export Tiles** for a normal PNG tile bundle, or **⬡ Export for InkHUD** for a firmware header.
+6. Click **Folder** when done to open the output directory.
+
+Tile count and flash estimates update automatically as you change settings.
 
 ## Map Preview
 
@@ -114,16 +117,16 @@ Buildings and POI are off by default to reduce clutter on e-paper.
 
 The **Export** section contains:
 
-- Tile count and flash estimate label (updates live in InkHUD mode).
-- Flash usage bars for ESP32-S3 and nRF52840 targets. Bars turn yellow above 60% and red above 85%.
-- **Estimate** — updates tile count and flash bars on demand (non-InkHUD modes).
+- Tile count and flash estimate label (updates automatically as settings change).
+- Flash usage bars for ESP32-S3 and nRF52840 targets (shown in InkHUD/InkHUD2 mode). Bars turn yellow above 60% and red above 85%.
 - **Export Tiles** — downloads and renders the tile bundle to the output folder.
 - **Folder** — opens the output folder.
 - **About** — license and attribution summary.
 - **⬡ Export for InkHUD** — generates `map_tile.h` for firmware inclusion.
 - **Coverage** checkbox — draws solid per-zoom bounding boxes on the map preview showing the exact InkHUD tile footprint.
-- Progress bar and **Cancel** button (appear during export).
+- Progress bar and **Cancel** button (appear only while an export is running).
 - Export log showing downloaded tile paths and progress.
+- **Save Session** / **Load Session** — save and restore the full tool state to a JSON file.
 
 ## Area
 
@@ -232,6 +235,34 @@ Both modes use the same image pipeline and the same `map_tile.h` output format. 
 - **InkHUD2** — click individual tiles on the map to build a sparse, non-contiguous set across any combination of zoom levels. Useful when you want dense coverage of a specific corridor or route at one zoom level and broader context tiles at another, without paying for a full uniform grid.
 
 **Coverage overlay** — enable the **Coverage** checkbox to see solid per-zoom bounding boxes on the preview showing the exact InkHUD tile footprint before exporting. The exported tiles match the overlay boxes exactly — what the overlay shows at each zoom level is what will be in `map_tile.h`.
+
+## Markers
+
+The **Markers** section lets you place custom icons on the map that are baked directly into the exported tile images. No firmware changes are needed — the firmware sees them as normal tile pixels.
+
+**Available icons:** Parking, Sun, Star, Home, Fish, Bridge, Picnic, Bathroom, Binoculars, Hunting
+
+**How to place a marker:**
+1. Set the zoom range — the icon will only appear in tiles at those zoom levels.
+2. Click an icon button to select it. The cursor changes to a crosshair and the button highlights.
+3. Click anywhere on the map to drop the marker. Placement mode exits automatically.
+4. Click the same icon button again to cancel without placing.
+
+Placed markers appear in the list below the icon picker with their icon, zoom range, and coordinates. Click **×** to remove one.
+
+Icons are drawn as white symbols on a black square — the same sign-board style used on trail maps. Size scales with zoom: half the pixel size per zoom level out, so a marker that fills a reasonable area at z16 is much smaller at z15.
+
+## Session
+
+**Save Session** and **Load Session** (in the Export panel) save and restore the complete tool state to a JSON file:
+
+- Map center position and zoom level
+- All Export Settings (mode, style, zoom range, grid, brightness, contrast)
+- Map Elements toggle states
+- All placed markers (icon, position, zoom range)
+- InkHUD2 selected tile set
+
+Use sessions to switch between different areas or projects without re-configuring everything from scratch.
 
 ## Legal Map Sources
 

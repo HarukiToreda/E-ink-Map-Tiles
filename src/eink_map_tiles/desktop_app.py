@@ -217,6 +217,10 @@ class DesktopApp(tk.Tk):
         self.brightness_user_changed = False
         self.contrast_user_changed = False
         self.inkhud2_selected_tiles: dict[int, set[tuple[int, int]]] = {}
+        self.markers: list[dict] = []  # [{"lat", "lon", "icon", "min_zoom", "max_zoom"}]
+        self.marker_placing = False
+        self._icon_cache: dict[str, Any] = {}
+        self._marker_photo_refs: list[Any] = []
 
         self.vars = self.make_vars()
         self.configure_styles()
@@ -266,6 +270,10 @@ class DesktopApp(tk.Tk):
             "collapse_map_elements": tk.BooleanVar(value=True),
             "show_inkhud_coverage": tk.BooleanVar(value=False),
             "inkhud_grid": tk.StringVar(value="4x4"),
+            "marker_icon": tk.StringVar(value="parking"),
+            "marker_min_zoom": tk.StringVar(value="14"),
+            "marker_max_zoom": tk.StringVar(value="16"),
+            "collapse_markers": tk.BooleanVar(value=True),
         }
         for element in cli.MAP_ELEMENTS:
             variables[f"element_{element}"] = tk.BooleanVar(value=element in cli.DEFAULT_INCLUDE_ELEMENTS)
@@ -359,20 +367,10 @@ class DesktopApp(tk.Tk):
         root = ttk.Frame(self, padding=10)
         root.grid(row=0, column=0, sticky="nsew")
         root.columnconfigure(0, weight=1)
-        root.rowconfigure(1, weight=1)
-
-        header = ttk.Frame(root)
-        header.grid(row=0, column=0, sticky="ew")
-        header.columnconfigure(1, weight=1)
-        ttk.Label(header, text="E-ink Map Tiles", style="Title.TLabel").grid(row=0, column=0, sticky="w")
-        ttk.Label(
-            header,
-            text="Select an area, preview e-paper map tiles, then export an offline bundle.",
-            style="Shell.TLabel",
-        ).grid(row=0, column=1, sticky="e", padx=(16, 2))
+        root.rowconfigure(0, weight=1)
 
         body = ttk.Frame(root)
-        body.grid(row=1, column=0, sticky="nsew", pady=(8, 0))
+        body.grid(row=0, column=0, sticky="nsew")
         body.columnconfigure(0, weight=3)
         body.columnconfigure(1, weight=0)
         body.rowconfigure(0, weight=1)
@@ -392,6 +390,7 @@ class DesktopApp(tk.Tk):
         self.build_settings(controls).grid(row=3, column=0, sticky="ew", pady=(0, 6))
         self.elements_outer, self.elements_content = self.build_elements(controls)
         self.elements_outer.grid(row=4, column=0, sticky="ew", pady=(0, 6))
+        self.build_markers_section(controls).grid(row=5, column=0, sticky="ew", pady=(0, 6))
 
     def bind_live_controls(self) -> None:
         preview_keys = ("mode", "brightness", "contrast", "threshold", "source", "url", "style")
@@ -533,6 +532,11 @@ class DesktopApp(tk.Tk):
         if hasattr(self, "inkhud_button"):
             label = "⬡ Export for InkHUD2" if is_inkhud2 else "⬡ Export for InkHUD"
             self.inkhud_button.configure(text=label)
+        if hasattr(self, "flash_bars_canvas"):
+            if mode in ("inkhud", "inkhud2"):
+                self.flash_bars_canvas.grid()
+            else:
+                self.flash_bars_canvas.grid_remove()
         self.update_slider_labels()
 
     def update_inkhud2_info(self) -> None:
@@ -849,11 +853,11 @@ class DesktopApp(tk.Tk):
         ttk.Label(content, textvariable=self.vars["tile_count"], style="Hint.TLabel").grid(row=0, column=0, columnspan=4, sticky="ew", pady=(0, 2))
         self.flash_bars_canvas = tk.Canvas(content, height=44, background="#ffffff", highlightthickness=0)
         self.flash_bars_canvas.grid(row=1, column=0, columnspan=4, sticky="ew", pady=(0, 4))
+        self.flash_bars_canvas.grid_remove()
         self.flash_bars_canvas.bind("<Configure>", lambda _e: self.draw_flash_bars(None))
         ttk.Label(content, textvariable=self.vars["status"], style="Hint.TLabel").grid(row=2, column=0, columnspan=4, sticky="ew", pady=(0, 6))
-        self.flat_button(content, "Estimate", lambda: self.estimate_tiles(update_bars=True)).grid(row=2, column=0, sticky="ew", padx=(0, 5))
         self.export_button = self.flat_button(content, "Export Tiles", self.export_tiles, primary=True)
-        self.export_button.grid(row=2, column=1, sticky="ew", padx=5)
+        self.export_button.grid(row=2, column=0, columnspan=2, sticky="ew", padx=(0, 5))
         self.flat_button(content, "Folder", self.open_output_folder).grid(row=2, column=2, sticky="ew", padx=5)
         self.flat_button(content, "About", self.show_about_licenses).grid(row=2, column=3, sticky="ew", padx=(5, 0))
         self.inkhud_button = self.flat_button(content, "⬡ Export for InkHUD", self.export_for_inkhud)
@@ -865,6 +869,7 @@ class DesktopApp(tk.Tk):
         self.coverage_toggle.grid(row=3, column=3, sticky="ew", padx=(5, 0), pady=(6, 0))
         self.progress_bar = ttk.Progressbar(content, variable=self.vars["progress_value"], maximum=1, mode="determinate")
         self.progress_bar.grid(row=4, column=0, columnspan=3, sticky="ew", pady=(8, 2))
+        self.progress_bar.grid_remove()
         self.cancel_button = self.flat_button(content, "Cancel", self.cancel_export)
         self.cancel_button.grid(row=4, column=3, sticky="ew", padx=(5, 0), pady=(8, 2))
         self.cancel_button.grid_remove()
@@ -880,6 +885,12 @@ class DesktopApp(tk.Tk):
         )
         self.log.grid(row=6, column=0, columnspan=4, sticky="ew", pady=(6, 0))
         self.log.grid_remove()
+        session_row = ttk.Frame(content, style="Card.TFrame")
+        session_row.grid(row=7, column=0, columnspan=4, sticky="ew", pady=(6, 0))
+        session_row.columnconfigure(0, weight=1)
+        session_row.columnconfigure(1, weight=1)
+        self.flat_button(session_row, "Save Session", self.save_session).grid(row=0, column=0, sticky="ew", padx=(0, 3))
+        self.flat_button(session_row, "Load Session", self.load_session).grid(row=0, column=1, sticky="ew", padx=(3, 0))
         return frame
 
     def selected_elements(self) -> list[str]:
@@ -1018,6 +1029,9 @@ class DesktopApp(tk.Tk):
             moved = (dx * dx + dy * dy) ** 0.5
             self.map_drag_start = None
             self.map_drag_center = None
+            if moved < 5 and self.marker_placing:
+                self.add_marker_at_canvas(event.x, event.y)
+                return
             if moved < 5 and self.vars["mode"].get() == "inkhud2":
                 self.toggle_inkhud2_tile(event.x, event.y)
                 return
@@ -1653,6 +1667,7 @@ class DesktopApp(tk.Tk):
         self.draw_tile_grid_overlay()
         self.draw_tile_selection_overlay()
         self.draw_inkhud_coverage_overlay()
+        self.draw_markers_overlay()
         self.set_preview_status(f"Export preview z{self.map_zoom}: matches downloaded tile rendering.")
 
     def preview_failed(self, error: str) -> None:
@@ -1688,6 +1703,7 @@ class DesktopApp(tk.Tk):
         self.reset_export_progress(job)
         self._cancel_event = threading.Event()
         self.export_button.configure(state="disabled")
+        self.progress_bar.grid()
         self.cancel_button.grid()
         self.vars["status"].set("Exporting...")
         self.export_thread = threading.Thread(target=self.run_export, args=(job, output, self._cancel_event), daemon=True)
@@ -1742,6 +1758,7 @@ class DesktopApp(tk.Tk):
         finally:
             self.after(0, lambda: self.export_button.configure(state="normal"))
             self.after(0, self.cancel_button.grid_remove)
+            self.after(0, self.progress_bar.grid_remove)
 
     def finish_export_success(self) -> None:
         self.vars["status"].set("Export complete")
@@ -1830,6 +1847,7 @@ class DesktopApp(tk.Tk):
         self._cancel_event = threading.Event()
         self.inkhud_button.configure(state="disabled")
         self.export_button.configure(state="disabled")
+        self.progress_bar.grid()
         self.cancel_button.grid()
         self.vars["status"].set("Exporting for InkHUD...")
         self._last_zoom_specs = zoom_specs
@@ -1896,6 +1914,7 @@ class DesktopApp(tk.Tk):
         self._cancel_event = threading.Event()
         self.inkhud_button.configure(state="disabled")
         self.export_button.configure(state="disabled")
+        self.progress_bar.grid()
         self.cancel_button.grid()
         self.vars["status"].set("Exporting for InkHUD2...")
         selected_snapshot = {z: set(tiles) for z, tiles in self.inkhud2_selected_tiles.items()}
@@ -1936,6 +1955,7 @@ class DesktopApp(tk.Tk):
                         return
                     tile_path = temp_out / "tiles" / style / str(z) / str(tx) / f"{ty}.png"
                     rgb = Image.open(tile_path).convert("RGB") if tile_path.exists() else Image.new("RGB", (256, 256), (255, 255, 255))
+                    self._draw_markers_on_tile(rgb, z, tx, ty)
                     bw = cli.inkhud_process(rgb, float(job["contrast"]), float(job["brightness"]))
                     raw: list[int] = []
                     for bx in range(32):
@@ -1968,6 +1988,7 @@ class DesktopApp(tk.Tk):
             self.after(0, lambda: self.inkhud_button.configure(state="normal"))
             self.after(0, lambda: self.export_button.configure(state="normal"))
             self.after(0, self.cancel_button.grid_remove)
+            self.after(0, self.progress_bar.grid_remove)
 
     def _inkhud_process(self, rgb_image: "Image.Image", contrast: float, brightness: float) -> "Image.Image":
         """Shared inkhud pipeline used by both preview and export — always identical."""
@@ -2047,6 +2068,7 @@ class DesktopApp(tk.Tk):
                             tx, ty = x0 + dx, y0 + dy
                             tile_path = temp_out / "tiles" / style / str(z) / str(tx) / f"{ty}.png"
                             rgb = Image.open(tile_path).convert("RGB") if tile_path.exists() else Image.new("RGB", (256, 256), (255, 255, 255))
+                            self._draw_markers_on_tile(rgb, z, tx, ty)
                             bw = cli.inkhud_process(rgb, float(job["contrast"]), float(job["brightness"]))
                             raw: list[int] = []
                             for bx in range(32):
@@ -2082,6 +2104,334 @@ class DesktopApp(tk.Tk):
             self.after(0, lambda: self.inkhud_button.configure(state="normal"))
             self.after(0, lambda: self.export_button.configure(state="normal"))
             self.after(0, self.cancel_button.grid_remove)
+            self.after(0, self.progress_bar.grid_remove)
+
+    # ── Markers ──────────────────────────────────────────────────────────────
+
+    MARKER_ICONS = ["parking", "sun", "star", "home", "fish", "bridge", "picnic", "bathroom", "binoculars", "hunting"]
+
+    def build_markers_section(self, parent: ttk.Frame) -> ttk.Frame:
+        from PIL import Image as _Image, ImageTk
+        frame, content = self.collapsible_section(parent, "Markers", "collapse_markers")
+        content.columnconfigure(0, weight=1)
+
+        # Icon picker grid — click to select & enter placement mode
+        picker = ttk.Frame(content, style="Card.TFrame")
+        picker.grid(row=0, column=0, sticky="ew", pady=(0, 4))
+        self._icon_button_photos: dict[str, Any] = {}
+        self._icon_buttons: dict[str, tk.Button] = {}
+        icons_per_row = 5
+        for i, icon_name in enumerate(self.MARKER_ICONS):
+            icon_pil = self._get_icon_image(icon_name)
+            photo = ImageTk.PhotoImage(icon_pil.resize((24, 24), _Image.NEAREST))
+            self._icon_button_photos[icon_name] = photo
+            btn = tk.Button(
+                picker, image=photo, relief="flat", bd=2, cursor="hand2",
+                command=lambda n=icon_name: self.select_icon_and_place(n),
+            )
+            btn.grid(row=i // icons_per_row, column=i % icons_per_row, padx=2, pady=2)
+            self._icon_buttons[icon_name] = btn
+
+        # Zoom range
+        zoom_row = ttk.Frame(content, style="Card.TFrame")
+        zoom_row.grid(row=1, column=0, sticky="ew", pady=(0, 4))
+        ttk.Label(zoom_row, text="Show at zoom:").grid(row=0, column=0, sticky="w", padx=(0, 6))
+        ttk.Spinbox(zoom_row, textvariable=self.vars["marker_min_zoom"], from_=0, to=20, width=4).grid(row=0, column=1)
+        ttk.Label(zoom_row, text="–").grid(row=0, column=2, padx=4)
+        ttk.Spinbox(zoom_row, textvariable=self.vars["marker_max_zoom"], from_=0, to=20, width=4).grid(row=0, column=3)
+
+        self.marker_status_label = ttk.Label(content, text="Click an icon, then click the map to place it.", style="Hint.TLabel")
+        self.marker_status_label.grid(row=2, column=0, sticky="w", pady=(0, 4))
+
+        self.marker_list_frame = ttk.Frame(content, style="Card.TFrame")
+        self.marker_list_frame.grid(row=3, column=0, sticky="ew")
+        self.marker_list_frame.columnconfigure(0, weight=1)
+        self.refresh_marker_list()
+        return frame
+
+    def select_icon_and_place(self, icon_name: str) -> None:
+        # If already placing this icon, cancel
+        if self.marker_placing and self.vars["marker_icon"].get() == icon_name:
+            self._exit_marker_placing()
+            return
+        self.vars["marker_icon"].set(icon_name)
+        self.marker_placing = True
+        self.map_canvas.configure(cursor="crosshair")
+        for name, btn in self._icon_buttons.items():
+            btn.configure(relief="sunken" if name == icon_name else "flat")
+        if hasattr(self, "marker_status_label"):
+            self.marker_status_label.configure(text=f"Click map to place {icon_name.title()}  (click icon again to cancel)")
+
+    def _exit_marker_placing(self) -> None:
+        self.marker_placing = False
+        self.map_canvas.configure(cursor="")
+        if hasattr(self, "_icon_buttons"):
+            for btn in self._icon_buttons.values():
+                btn.configure(relief="flat")
+        if hasattr(self, "marker_status_label"):
+            self.marker_status_label.configure(text="Click an icon, then click the map to place it.")
+
+    def toggle_marker_placing(self) -> None:
+        if self.marker_placing:
+            self._exit_marker_placing()
+        else:
+            self.marker_placing = True
+            self.map_canvas.configure(cursor="crosshair")
+
+    def add_marker_at_canvas(self, x: int, y: int) -> None:
+        canvas_w = max(self.preview_rendered_width, 1)
+        canvas_h = max(self.preview_rendered_height, 1)
+        cx_view, cy_view = self.lon_lat_to_world_pixel(self.map_center_lon, self.map_center_lat, self.map_zoom)
+        world_x = cx_view + x - canvas_w / 2
+        world_y = cy_view + y - canvas_h / 2
+        lon, lat = self.world_pixel_to_lon_lat(world_x, world_y, self.map_zoom)
+        try:
+            min_zoom = int(self.vars["marker_min_zoom"].get())
+            max_zoom = int(self.vars["marker_max_zoom"].get())
+        except ValueError:
+            min_zoom = max_zoom = self.map_zoom
+        self.markers.append({
+            "lat": round(lat, 7),
+            "lon": round(lon, 7),
+            "icon": self.vars["marker_icon"].get(),
+            "min_zoom": min_zoom,
+            "max_zoom": max_zoom,
+        })
+        self._exit_marker_placing()
+        self.refresh_marker_list()
+        self.draw_markers_overlay()
+
+    def delete_marker(self, index: int) -> None:
+        if 0 <= index < len(self.markers):
+            self.markers.pop(index)
+        self.refresh_marker_list()
+        self.draw_markers_overlay()
+
+    def refresh_marker_list(self) -> None:
+        if not hasattr(self, "marker_list_frame"):
+            return
+        for w in self.marker_list_frame.winfo_children():
+            w.destroy()
+        if not self.markers:
+            ttk.Label(self.marker_list_frame, text="No markers placed.", style="Hint.TLabel").grid(
+                row=0, column=0, sticky="w", padx=4, pady=2)
+            return
+        for i, m in enumerate(self.markers):
+            row = ttk.Frame(self.marker_list_frame, style="Card.TFrame")
+            row.grid(row=i, column=0, sticky="ew", pady=1)
+            row.columnconfigure(0, weight=1)
+            label = f"{m['icon'].title()}  z{m['min_zoom']}–{m['max_zoom']}  ({m['lat']:.5f}, {m['lon']:.5f})"
+            ttk.Label(row, text=label, style="Hint.TLabel").grid(row=0, column=0, sticky="w", padx=4)
+            self.flat_button(row, "×", lambda idx=i: self.delete_marker(idx), width=2).grid(row=0, column=1, padx=(0, 2))
+
+    def draw_markers_overlay(self) -> None:
+        from PIL import Image as _Image, ImageTk
+        self.map_canvas.delete("marker-overlay")
+        self._marker_photo_refs.clear()
+        if not self.markers:
+            return
+        z = self.map_zoom
+        size = max(6, int(20 * 2 ** (z - 16)))
+        half = size // 2
+        canvas_w = max(self.preview_rendered_width, 1)
+        canvas_h = max(self.preview_rendered_height, 1)
+        cx_view, cy_view = self.lon_lat_to_world_pixel(self.map_center_lon, self.map_center_lat, z)
+        for marker in self.markers:
+            if not (marker["min_zoom"] <= z <= marker["max_zoom"]):
+                continue
+            mx, my = self.lon_lat_to_world_pixel(marker["lon"], marker["lat"], z)
+            px = int(mx - cx_view + canvas_w / 2)
+            py = int(my - cy_view + canvas_h / 2)
+            icon_pil = self._get_icon_image(marker["icon"])
+            icon_display = icon_pil.resize((size, size), _Image.NEAREST)
+            photo = ImageTk.PhotoImage(icon_display)
+            self._marker_photo_refs.append(photo)
+            self.map_canvas.create_image(px - half, py - half, image=photo, anchor="nw", tags=("marker-overlay",))
+
+    def _get_icon_image(self, name: str):
+        from PIL import Image as _Image, ImageDraw, ImageFont
+        if name in self._icon_cache:
+            return self._icon_cache[name]
+        # All icons: white symbol on black square (sign-board style)
+        img = _Image.new("RGB", (16, 16), (0, 0, 0))
+        d = ImageDraw.Draw(img)
+        W = (255, 255, 255)
+        B = (0, 0, 0)
+        if name == "parking":
+            # Bold white P on black
+            d.rectangle([3, 2, 5, 13], fill=W)   # stem
+            d.rectangle([5, 2, 10, 4], fill=W)   # top of bowl
+            d.rectangle([5, 7, 10, 9], fill=W)   # bottom of bowl
+            d.rectangle([10, 2, 12, 9], fill=W)  # right of bowl
+        elif name == "sun":
+            cx, cy = 7, 7
+            d.ellipse([cx - 2, cy - 2, cx + 2, cy + 2], fill=W)
+            for deg in range(0, 360, 45):
+                rad = math.radians(deg)
+                x1 = int(cx + 4 * math.cos(rad))
+                y1 = int(cy + 4 * math.sin(rad))
+                x2 = int(cx + 6 * math.cos(rad))
+                y2 = int(cy + 6 * math.sin(rad))
+                d.line([x1, y1, x2, y2], fill=W, width=1)
+        elif name == "star":
+            cx, cy = 7, 7
+            pts = []
+            for i in range(10):
+                a = math.radians(-90 + i * 36)
+                r = 7 if i % 2 == 0 else 3
+                pts.append((cx + r * math.cos(a), cy + r * math.sin(a)))
+            d.polygon(pts, fill=W)
+        elif name == "home":
+            d.polygon([(7, 2), (1, 7), (13, 7)], fill=W)   # roof
+            d.rectangle([3, 7, 11, 13], fill=W)             # walls
+            d.rectangle([5, 9, 9, 13], fill=B)              # door
+        elif name == "fish":
+            d.ellipse([4, 5, 14, 11], fill=W)
+            d.polygon([(4, 8), (0, 5), (0, 11)], fill=W)   # tail
+            d.ellipse([10, 6, 12, 8], fill=B)              # eye
+        elif name == "bridge":
+            # Deck
+            d.rectangle([0, 8, 15, 10], fill=W)
+            # Arch above deck
+            d.arc([1, 3, 14, 11], start=180, end=0, fill=W, width=2)
+            # Pillars below deck
+            d.rectangle([2, 10, 4, 14], fill=W)
+            d.rectangle([11, 10, 13, 14], fill=W)
+        elif name == "picnic":
+            # Table top
+            d.rectangle([2, 5, 13, 7], fill=W)
+            # Crossed legs
+            d.line([(4, 7), (3, 12)], fill=W, width=1)
+            d.line([(11, 7), (12, 12)], fill=W, width=1)
+            # Benches
+            d.rectangle([0, 9, 5, 11], fill=W)
+            d.rectangle([10, 9, 15, 11], fill=W)
+        elif name == "bathroom":
+            # Two stick figures side by side
+            d.ellipse([2, 2, 5, 5], fill=W)
+            d.line([(3, 5), (3, 9)], fill=W, width=1)
+            d.line([(1, 7), (5, 7)], fill=W, width=1)
+            d.line([(3, 9), (1, 13)], fill=W, width=1)
+            d.line([(3, 9), (5, 13)], fill=W, width=1)
+            d.ellipse([10, 2, 13, 5], fill=W)
+            d.line([(11, 5), (11, 9)], fill=W, width=1)
+            d.line([(9, 7), (13, 7)], fill=W, width=1)
+            d.line([(11, 9), (9, 13)], fill=W, width=1)
+            d.line([(11, 9), (13, 13)], fill=W, width=1)
+        elif name == "binoculars":
+            d.ellipse([1, 4, 7, 12], fill=W)
+            d.ellipse([2, 5, 6, 11], fill=B)
+            d.ellipse([8, 4, 14, 12], fill=W)
+            d.ellipse([9, 5, 13, 11], fill=B)
+            d.rectangle([6, 7, 9, 9], fill=W)
+        elif name == "hunting":
+            cx, cy = 7, 7
+            d.ellipse([cx - 5, cy - 5, cx + 5, cy + 5], outline=W, width=1)
+            d.line([cx, 0, cx, cy - 6], fill=W, width=1)
+            d.line([cx, cy + 6, cx, 15], fill=W, width=1)
+            d.line([0, cy, cx - 6, cy], fill=W, width=1)
+            d.line([cx + 6, cy, 15, cy], fill=W, width=1)
+        self._icon_cache[name] = img
+        return img
+
+    def _draw_markers_on_tile(self, rgb_image, z: int, tx: int, ty: int) -> None:
+        n = 2 ** z
+        for marker in self.markers:
+            if not (marker["min_zoom"] <= z <= marker["max_zoom"]):
+                continue
+            fx = (marker["lon"] + 180.0) / 360.0 * n
+            lat_rad = math.radians(marker["lat"])
+            fy = (1.0 - math.log(math.tan(lat_rad) + 1.0 / math.cos(lat_rad)) / math.pi) / 2.0 * n
+            px = int((fx - tx) * 256)
+            py = int((fy - ty) * 256)
+            if px < -16 or px > 271 or py < -16 or py > 271:
+                continue
+            icon = self._get_icon_image(marker["icon"])
+            paste_x, paste_y = px - 8, py - 8
+            x0 = max(paste_x, 0)
+            y0 = max(paste_y, 0)
+            x1 = min(paste_x + 16, 256)
+            y1 = min(paste_y + 16, 256)
+            if x1 <= x0 or y1 <= y0:
+                continue
+            crop = icon.crop((x0 - paste_x, y0 - paste_y, x1 - paste_x, y1 - paste_y))
+            rgb_image.paste(crop, (x0, y0))
+
+    # ── Session save / load ───────────────────────────────────────────────────
+
+    def save_session(self) -> None:
+        import json
+        path = filedialog.asksaveasfilename(
+            title="Save session",
+            defaultextension=".json",
+            filetypes=[("Session files", "*.json"), ("All files", "*.*")],
+        )
+        if not path:
+            return
+        session = {
+            "version": 1,
+            "map_center_lat": self.map_center_lat,
+            "map_center_lon": self.map_center_lon,
+            "map_zoom": self.map_zoom,
+            "settings": {
+                k: self.vars[k].get()
+                for k in [
+                    "source", "min_zoom", "max_zoom", "mode", "style", "inkhud_grid",
+                    "brightness", "contrast", "threshold",
+                    "marker_icon", "marker_min_zoom", "marker_max_zoom",
+                    "show_inkhud_coverage", "permission",
+                ]
+            },
+            "elements": {e: bool(self.vars[f"element_{e}"].get()) for e in cli.MAP_ELEMENTS},
+            "markers": self.markers,
+            "inkhud2_selected_tiles": {
+                str(z): [[tx, ty] for tx, ty in sorted(tiles)]
+                for z, tiles in self.inkhud2_selected_tiles.items()
+            },
+        }
+        Path(path).write_text(json.dumps(session, indent=2), encoding="utf-8")
+        self.vars["status"].set(f"Session saved.")
+
+    def load_session(self) -> None:
+        import json
+        path = filedialog.askopenfilename(
+            title="Load session",
+            filetypes=[("Session files", "*.json"), ("All files", "*.*")],
+        )
+        if not path:
+            return
+        try:
+            data = json.loads(Path(path).read_text(encoding="utf-8"))
+        except Exception as exc:  # noqa: BLE001
+            messagebox.showerror("Load failed", str(exc))
+            return
+        self.map_center_lat = float(data.get("map_center_lat", self.map_center_lat))
+        self.map_center_lon = float(data.get("map_center_lon", self.map_center_lon))
+        self.map_zoom = int(data.get("map_zoom", self.map_zoom))
+        settings = data.get("settings", {})
+        for k in ["source", "min_zoom", "max_zoom", "mode", "style", "inkhud_grid",
+                  "marker_icon", "marker_min_zoom", "marker_max_zoom"]:
+            if k in settings and k in self.vars:
+                self.vars[k].set(str(settings[k]))
+        for k in ["brightness", "contrast", "threshold"]:
+            if k in settings and k in self.vars:
+                self.vars[k].set(float(settings[k]))
+        for k in ["show_inkhud_coverage", "permission"]:
+            if k in settings and k in self.vars:
+                self.vars[k].set(bool(settings[k]))
+        for e in cli.MAP_ELEMENTS:
+            elems = data.get("elements", {})
+            if e in elems:
+                self.vars[f"element_{e}"].set(bool(elems[e]))
+        self.markers = data.get("markers", [])
+        raw = data.get("inkhud2_selected_tiles", {})
+        self.inkhud2_selected_tiles = {int(z): {(tx, ty) for tx, ty in tiles} for z, tiles in raw.items()}
+        if self.marker_placing:
+            self._exit_marker_placing()
+        self.refresh_marker_list()
+        self.sync_view_area()
+        self.schedule_preview(delay_ms=250)
+        self.vars["status"].set("Session loaded.")
 
     def poll_messages(self) -> None:
         while True:
