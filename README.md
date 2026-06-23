@@ -240,17 +240,30 @@ Both modes use the same image pipeline and the same `map_tile.h` output format. 
 
 The **Markers** section lets you place custom icons on the map that are baked directly into the exported tile images. No firmware changes are needed — the firmware sees them as normal tile pixels.
 
-**Available icons:** Parking, Sun, Star, Home, Fish, Bridge, Picnic, Bathroom, Binoculars, Hunting
+**Available icons:** Parking, Sun, Star, Home, Fish, Bridge, Picnic, Bathroom, Binoculars, Hunting, Tent, RV, Tree, Group, Car, Campfire
 
-**How to place a marker:**
-1. Set the zoom range — the icon will only appear in tiles at those zoom levels.
+**How to place an icon marker:**
+1. Set the zoom range — the marker will only appear in tiles at those zoom levels.
 2. Click an icon button to select it. The cursor changes to a crosshair and the button highlights.
 3. Click anywhere on the map to drop the marker. Placement mode exits automatically.
 4. Click the same icon button again to cancel without placing.
 
-Placed markers appear in the list below the icon picker with their icon, zoom range, and coordinates. Click **×** to remove one.
+**Custom text labels:**
+1. Type the label text in the **Label text** field and set the font size in **pt** (default 12).
+2. Set the zoom range.
+3. Click **Place Label**, then click the map to drop it.
 
-Icons are drawn as white symbols on a black square — the same sign-board style used on trail maps. Size scales with zoom: half the pixel size per zoom level out, so a marker that fills a reasonable area at z16 is much smaller at z15.
+Labels render as white text on a black background rectangle. Font size scales with zoom the same way icons do — half the pixel size per zoom level out.
+
+**Moving and editing markers:**
+- Click any row in the marker list to select it. A blue highlight appears around it on the map and the cursor changes to a move cursor.
+- Drag the marker on the map to reposition it in real time.
+- Click the same row again to deselect.
+- For labels, the controls above populate with the label's current text, font size, and zoom range — edit them and place again to update.
+
+Placed markers appear in the list below the icon picker with their type, zoom range, and coordinates. Click **×** to remove one.
+
+Icons and labels are drawn as white symbols on a black square — the same sign-board style used on trail maps. Size scales with zoom: half the pixel size per zoom level out.
 
 ## Session
 
@@ -259,7 +272,7 @@ Icons are drawn as white symbols on a black square — the same sign-board style
 - Map center position and zoom level
 - All Export Settings (mode, style, zoom range, grid, brightness, contrast)
 - Map Elements toggle states
-- All placed markers (icon, position, zoom range)
+- All placed markers and labels (icon/text, font size, position, zoom range)
 - InkHUD2 selected tile set
 
 Use sessions to switch between different areas or projects without re-configuring everything from scratch.

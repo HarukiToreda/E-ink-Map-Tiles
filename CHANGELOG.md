@@ -10,15 +10,22 @@ Unreleased changes since v1.2.0 — staged here for the next release.
 
 **Custom markers**
 - Place icons on the map that get baked directly into exported tiles. No firmware changes required.
-- 10 icon types: Parking, Sun, Star, Home, Fish, Bridge, Picnic, Bathroom, Binoculars, Hunting.
+- 16 icon types: Parking, Sun, Star, Home, Fish, Bridge, Picnic, Bathroom, Binoculars, Hunting, Tent, RV, Tree, Group, Car, Campfire.
 - Icons are white symbols on a black square (sign-board style).
 - Each marker has a min/max zoom range — only appears in tiles at those zoom levels.
 - Click an icon button to select it and enter placement mode, then click the map to drop it. Click the same icon again to cancel.
-- Marker list shows all placed markers with icon name, zoom range, coordinates, and a delete button.
+- Marker list shows all placed markers with type, zoom range, coordinates, and a delete button.
+- Click any row to select it — a blue highlight appears on the map and the marker can be dragged to a new position in real time.
 - Icon size in the preview scales with zoom — half the pixel size per zoom level out, matching map scale.
 
+**Custom text labels**
+- Type any text in the Label text field, set a font size (pt), set zoom range, click Place Label, then click the map.
+- Labels render as white text on a black background rectangle, same sign-board style as icons.
+- Font size scales with zoom the same way icons do.
+- Labels appear in the marker list and support the same drag-to-move and delete as icons.
+
 **Session save/load**
-- Save and restore the full tool state to a JSON file: map center, zoom, all export settings, map elements, markers, and InkHUD2 tile selection.
+- Save and restore the full tool state to a JSON file: map center, zoom, all export settings, map elements, markers (including labels with text and font size), and InkHUD2 tile selection.
 - Save Session / Load Session buttons in the Export panel.
 
 ### Fixes

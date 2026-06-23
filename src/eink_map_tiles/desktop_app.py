@@ -219,6 +219,8 @@ class DesktopApp(tk.Tk):
         self.inkhud2_selected_tiles: dict[int, set[tuple[int, int]]] = {}
         self.markers: list[dict] = []  # [{"lat", "lon", "icon", "min_zoom", "max_zoom"}]
         self.marker_placing = False
+        self._editing_marker_index: int | None = None
+        self._dragging_marker: bool = False
         self._icon_cache: dict[str, Any] = {}
         self._marker_photo_refs: list[Any] = []
 
@@ -273,6 +275,8 @@ class DesktopApp(tk.Tk):
             "marker_icon": tk.StringVar(value="parking"),
             "marker_min_zoom": tk.StringVar(value="14"),
             "marker_max_zoom": tk.StringVar(value="16"),
+            "marker_label_text": tk.StringVar(value=""),
+            "marker_label_font_size": tk.StringVar(value="12"),
             "collapse_markers": tk.BooleanVar(value=True),
         }
         for element in cli.MAP_ELEMENTS:
@@ -1010,9 +1014,25 @@ class DesktopApp(tk.Tk):
     def start_map_drag(self, event) -> None:
         self.map_drag_start = (event.x, event.y)
         self.map_drag_center = (self.map_center_lon, self.map_center_lat)
+        # Check if click is near selected marker → start marker drag
+        self._dragging_marker = False
+        idx = self._editing_marker_index
+        if idx is not None and 0 <= idx < len(self.markers):
+            mx, my = self._canvas_marker_screen_pos(idx)
+            if abs(event.x - mx) < 30 and abs(event.y - my) < 30:
+                self._dragging_marker = True
 
     def drag_map(self, event) -> None:
-        if not self.map_drag_start or not self.map_drag_center:
+        if not self.map_drag_start:
+            return
+        if self._dragging_marker and self._editing_marker_index is not None:
+            # Move the selected marker to cursor position
+            lon, lat = self._canvas_pixel_to_lon_lat(event.x, event.y)
+            m = self.markers[self._editing_marker_index]
+            m["lat"] = round(lat, 7)
+            m["lon"] = round(lon, 7)
+            self.draw_markers_overlay()
+            self._update_marker_list_display()
             return
         start_x, start_y = self.map_drag_start
         center_lon, center_lat = self.map_drag_center
@@ -1023,6 +1043,13 @@ class DesktopApp(tk.Tk):
         self.shift_current_preview(event.x - start_x, event.y - start_y)
 
     def end_map_drag(self, event) -> None:
+        if self._dragging_marker:
+            self._dragging_marker = False
+            self.map_drag_start = None
+            self.map_drag_center = None
+            self.refresh_marker_list()
+            self.draw_markers_overlay()
+            return
         if self.map_drag_start is not None:
             dx = event.x - self.map_drag_start[0]
             dy = event.y - self.map_drag_start[1]
@@ -1040,6 +1067,14 @@ class DesktopApp(tk.Tk):
             self.map_drag_center = None
         self.sync_view_area()
         self.schedule_preview(delay_ms=250)
+
+    def _canvas_pixel_to_lon_lat(self, x: int, y: int):
+        canvas_w = max(self.preview_rendered_width, 1)
+        canvas_h = max(self.preview_rendered_height, 1)
+        cx_view, cy_view = self.lon_lat_to_world_pixel(self.map_center_lon, self.map_center_lat, self.map_zoom)
+        world_x = cx_view + x - canvas_w / 2
+        world_y = cy_view + y - canvas_h / 2
+        return self.world_pixel_to_lon_lat(world_x, world_y, self.map_zoom)
 
     def on_mouse_wheel(self, event) -> None:
         self.zoom_map(1 if event.delta > 0 else -1, anchor=(event.x, event.y))
@@ -2108,7 +2143,8 @@ class DesktopApp(tk.Tk):
 
     # ── Markers ──────────────────────────────────────────────────────────────
 
-    MARKER_ICONS = ["parking", "sun", "star", "home", "fish", "bridge", "picnic", "bathroom", "binoculars", "hunting"]
+    MARKER_ICONS = ["parking", "sun", "star", "home", "fish", "bridge", "picnic", "bathroom", "binoculars", "hunting",
+                    "tent", "rv", "tree", "group", "car", "campfire"]
 
     def build_markers_section(self, parent: ttk.Frame) -> ttk.Frame:
         from PIL import Image as _Image, ImageTk
@@ -2132,22 +2168,48 @@ class DesktopApp(tk.Tk):
             btn.grid(row=i // icons_per_row, column=i % icons_per_row, padx=2, pady=2)
             self._icon_buttons[icon_name] = btn
 
+        # Label text row
+        label_row = ttk.Frame(content, style="Card.TFrame")
+        label_row.grid(row=1, column=0, sticky="ew", pady=(0, 4))
+        ttk.Label(label_row, text="Label text:").grid(row=0, column=0, sticky="w", padx=(0, 6))
+        ttk.Entry(label_row, textvariable=self.vars["marker_label_text"], width=14).grid(row=0, column=1, sticky="ew")
+        ttk.Label(label_row, text="pt:").grid(row=0, column=2, padx=(6, 2))
+        ttk.Spinbox(label_row, textvariable=self.vars["marker_label_font_size"], from_=6, to=72, width=4).grid(row=0, column=3)
+        self.flat_button(label_row, "Place Label", self._place_label_marker).grid(row=0, column=4, padx=(6, 0))
+        label_row.columnconfigure(1, weight=1)
+
         # Zoom range
         zoom_row = ttk.Frame(content, style="Card.TFrame")
-        zoom_row.grid(row=1, column=0, sticky="ew", pady=(0, 4))
+        zoom_row.grid(row=2, column=0, sticky="ew", pady=(0, 4))
         ttk.Label(zoom_row, text="Show at zoom:").grid(row=0, column=0, sticky="w", padx=(0, 6))
         ttk.Spinbox(zoom_row, textvariable=self.vars["marker_min_zoom"], from_=0, to=20, width=4).grid(row=0, column=1)
         ttk.Label(zoom_row, text="–").grid(row=0, column=2, padx=4)
         ttk.Spinbox(zoom_row, textvariable=self.vars["marker_max_zoom"], from_=0, to=20, width=4).grid(row=0, column=3)
 
-        self.marker_status_label = ttk.Label(content, text="Click an icon, then click the map to place it.", style="Hint.TLabel")
-        self.marker_status_label.grid(row=2, column=0, sticky="w", pady=(0, 4))
+        self.marker_status_label = ttk.Label(content, text="Click an icon or Place Label, then click the map.", style="Hint.TLabel")
+        self.marker_status_label.grid(row=3, column=0, sticky="w", pady=(0, 4))
 
         self.marker_list_frame = ttk.Frame(content, style="Card.TFrame")
-        self.marker_list_frame.grid(row=3, column=0, sticky="ew")
+        self.marker_list_frame.grid(row=4, column=0, sticky="ew")
         self.marker_list_frame.columnconfigure(0, weight=1)
         self.refresh_marker_list()
         return frame
+
+    def _place_label_marker(self) -> None:
+        text = self.vars["marker_label_text"].get().strip()
+        if not text:
+            return
+        if self.marker_placing and self.vars["marker_icon"].get() == "__label__":
+            self._exit_marker_placing()
+            return
+        self.vars["marker_icon"].set("__label__")
+        self.marker_placing = True
+        self.map_canvas.configure(cursor="crosshair")
+        if hasattr(self, "_icon_buttons"):
+            for btn in self._icon_buttons.values():
+                btn.configure(relief="flat")
+        if hasattr(self, "marker_status_label"):
+            self.marker_status_label.configure(text=f"Click map to place label \"{text}\"  (click Place Label again to cancel)")
 
     def select_icon_and_place(self, icon_name: str) -> None:
         # If already placing this icon, cancel
@@ -2164,12 +2226,13 @@ class DesktopApp(tk.Tk):
 
     def _exit_marker_placing(self) -> None:
         self.marker_placing = False
+        self._editing_marker_index = None
         self.map_canvas.configure(cursor="")
         if hasattr(self, "_icon_buttons"):
             for btn in self._icon_buttons.values():
                 btn.configure(relief="flat")
         if hasattr(self, "marker_status_label"):
-            self.marker_status_label.configure(text="Click an icon, then click the map to place it.")
+            self.marker_status_label.configure(text="Click an icon or Place Label, then click the map.")
 
     def toggle_marker_placing(self) -> None:
         if self.marker_placing:
@@ -2190,13 +2253,35 @@ class DesktopApp(tk.Tk):
             max_zoom = int(self.vars["marker_max_zoom"].get())
         except ValueError:
             min_zoom = max_zoom = self.map_zoom
-        self.markers.append({
+        icon = self.vars["marker_icon"].get()
+        entry = {
             "lat": round(lat, 7),
             "lon": round(lon, 7),
-            "icon": self.vars["marker_icon"].get(),
+            "icon": icon,
             "min_zoom": min_zoom,
             "max_zoom": max_zoom,
-        })
+        }
+        if icon == "__label__":
+            entry["label_text"] = self.vars["marker_label_text"].get().strip()
+            try:
+                entry["font_size"] = max(6, int(self.vars["marker_label_font_size"].get()))
+            except ValueError:
+                entry["font_size"] = 12
+        editing_idx = getattr(self, "_editing_marker_index", None)
+        if editing_idx is not None and 0 <= editing_idx < len(self.markers):
+            # Preserve icon/label_text/font_size from existing marker if not a label placement
+            existing = self.markers[editing_idx]
+            entry["icon"] = existing["icon"]
+            if existing["icon"] == "__label__":
+                entry["label_text"] = self.vars["marker_label_text"].get().strip() or existing.get("label_text", "")
+                try:
+                    entry["font_size"] = max(6, int(self.vars["marker_label_font_size"].get()))
+                except ValueError:
+                    entry["font_size"] = existing.get("font_size", 12)
+            self.markers[editing_idx] = entry
+            self._editing_marker_index = None
+        else:
+            self.markers.append(entry)
         self._exit_marker_placing()
         self.refresh_marker_list()
         self.draw_markers_overlay()
@@ -2207,6 +2292,37 @@ class DesktopApp(tk.Tk):
         self.refresh_marker_list()
         self.draw_markers_overlay()
 
+    def _update_marker_list_display(self) -> None:
+        """Update marker row labels in-place without rebuilding — preserves scroll position."""
+        if not hasattr(self, "marker_list_frame"):
+            return
+        rows = self.marker_list_frame.winfo_children()
+        editing_idx = getattr(self, "_editing_marker_index", None)
+        for i, m in enumerate(self.markers):
+            if i >= len(rows):
+                break
+            row = rows[i]
+            children = row.winfo_children()
+            if not children:
+                continue
+            lbl = children[0]
+            if m["icon"] == "__label__":
+                display = f"\"{m.get('label_text', '')}\"  {m.get('font_size', 12)}pt  z{m['min_zoom']}–{m['max_zoom']}  ({m['lat']:.5f}, {m['lon']:.5f})"
+            else:
+                display = f"{m['icon'].title()}  z{m['min_zoom']}–{m['max_zoom']}  ({m['lat']:.5f}, {m['lon']:.5f})"
+            try:
+                lbl.configure(text=display,
+                              style="TLabel" if i == editing_idx else "Hint.TLabel")
+            except Exception:
+                pass
+
+    def _preserve_scroll(self, fn):
+        """Call fn(), then restore the sidebar scroll position after layout settles."""
+        scroll_pos = self.controls_canvas.yview()[0] if hasattr(self, "controls_canvas") else 0
+        fn()
+        if hasattr(self, "controls_canvas"):
+            self.after(50, lambda: self.controls_canvas.yview_moveto(scroll_pos))
+
     def refresh_marker_list(self) -> None:
         if not hasattr(self, "marker_list_frame"):
             return
@@ -2216,13 +2332,62 @@ class DesktopApp(tk.Tk):
             ttk.Label(self.marker_list_frame, text="No markers placed.", style="Hint.TLabel").grid(
                 row=0, column=0, sticky="w", padx=4, pady=2)
             return
+        editing_idx = getattr(self, "_editing_marker_index", None)
         for i, m in enumerate(self.markers):
-            row = ttk.Frame(self.marker_list_frame, style="Card.TFrame")
+            is_editing = (i == editing_idx)
+            row = ttk.Frame(self.marker_list_frame,
+                            style="Card.TFrame" if not is_editing else "TFrame")
             row.grid(row=i, column=0, sticky="ew", pady=1)
             row.columnconfigure(0, weight=1)
-            label = f"{m['icon'].title()}  z{m['min_zoom']}–{m['max_zoom']}  ({m['lat']:.5f}, {m['lon']:.5f})"
-            ttk.Label(row, text=label, style="Hint.TLabel").grid(row=0, column=0, sticky="w", padx=4)
+            if m["icon"] == "__label__":
+                display = f"\"{m.get('label_text', '')}\"  {m.get('font_size', 12)}pt  z{m['min_zoom']}–{m['max_zoom']}  ({m['lat']:.5f}, {m['lon']:.5f})"
+            else:
+                display = f"{m['icon'].title()}  z{m['min_zoom']}–{m['max_zoom']}  ({m['lat']:.5f}, {m['lon']:.5f})"
+            lbl = ttk.Label(row, text=display,
+                            style="Hint.TLabel" if not is_editing else "TLabel",
+                            cursor="hand2")
+            lbl.grid(row=0, column=0, sticky="w", padx=4)
+            lbl.bind("<Button-1>", lambda e, idx=i: self._select_edit_marker(idx))
+            row.bind("<Button-1>", lambda e, idx=i: self._select_edit_marker(idx))
             self.flat_button(row, "×", lambda idx=i: self.delete_marker(idx), width=2).grid(row=0, column=1, padx=(0, 2))
+
+    def _select_edit_marker(self, index: int) -> None:
+        # Toggle off if already selected
+        if self._editing_marker_index == index:
+            self._editing_marker_index = None
+            self._dragging_marker = False
+            self.map_canvas.configure(cursor="")
+            if hasattr(self, "marker_status_label"):
+                self.marker_status_label.configure(text="Click an icon or Place Label, then click the map.")
+            self._update_marker_list_display()
+            self.draw_markers_overlay()
+            return
+        m = self.markers[index]
+        self._editing_marker_index = index
+        self._dragging_marker = False
+        # Populate label controls from the marker
+        if m["icon"] == "__label__":
+            self.vars["marker_label_text"].set(m.get("label_text", ""))
+            self.vars["marker_label_font_size"].set(str(m.get("font_size", 12)))
+        self.vars["marker_min_zoom"].set(str(m["min_zoom"]))
+        self.vars["marker_max_zoom"].set(str(m["max_zoom"]))
+        self.vars["marker_icon"].set(m["icon"])
+        self.map_canvas.configure(cursor="fleur")
+        if hasattr(self, "marker_status_label"):
+            name = f"\"{m.get('label_text', '')}\"" if m["icon"] == "__label__" else m["icon"].title()
+            self.marker_status_label.configure(text=f"Drag {name} on the map to move it. Click row again to deselect.")
+        self._update_marker_list_display()
+        self.draw_markers_overlay()
+
+    def _canvas_marker_screen_pos(self, index: int):
+        """Return (px, py) canvas pixel of marker[index] at current zoom."""
+        m = self.markers[index]
+        z = self.map_zoom
+        canvas_w = max(self.preview_rendered_width, 1)
+        canvas_h = max(self.preview_rendered_height, 1)
+        cx_view, cy_view = self.lon_lat_to_world_pixel(self.map_center_lon, self.map_center_lat, z)
+        mx, my = self.lon_lat_to_world_pixel(m["lon"], m["lat"], z)
+        return int(mx - cx_view + canvas_w / 2), int(my - cy_view + canvas_h / 2)
 
     def draw_markers_overlay(self) -> None:
         from PIL import Image as _Image, ImageTk
@@ -2236,17 +2401,31 @@ class DesktopApp(tk.Tk):
         canvas_w = max(self.preview_rendered_width, 1)
         canvas_h = max(self.preview_rendered_height, 1)
         cx_view, cy_view = self.lon_lat_to_world_pixel(self.map_center_lon, self.map_center_lat, z)
-        for marker in self.markers:
+        editing_idx = self._editing_marker_index
+        for i, marker in enumerate(self.markers):
             if not (marker["min_zoom"] <= z <= marker["max_zoom"]):
                 continue
             mx, my = self.lon_lat_to_world_pixel(marker["lon"], marker["lat"], z)
             px = int(mx - cx_view + canvas_w / 2)
             py = int(my - cy_view + canvas_h / 2)
-            icon_pil = self._get_icon_image(marker["icon"])
-            icon_display = icon_pil.resize((size, size), _Image.NEAREST)
-            photo = ImageTk.PhotoImage(icon_display)
+            if marker["icon"] == "__label__":
+                base_fs = marker.get("font_size", 12)
+                scaled_fs = max(6, int(base_fs * 2 ** (z - 16)))
+                icon_pil = self._get_label_image(marker.get("label_text", "?"), scaled_fs)
+            else:
+                icon_pil = self._get_icon_image(marker["icon"])
+                icon_pil = icon_pil.resize((size, size), _Image.NEAREST)
+            photo = ImageTk.PhotoImage(icon_pil)
             self._marker_photo_refs.append(photo)
-            self.map_canvas.create_image(px - half, py - half, image=photo, anchor="nw", tags=("marker-overlay",))
+            w, h = icon_pil.size
+            x0, y0 = px - w // 2, py - h // 2
+            self.map_canvas.create_image(x0, y0, image=photo, anchor="nw", tags=("marker-overlay",))
+            if i == editing_idx:
+                pad = 3
+                self.map_canvas.create_rectangle(
+                    x0 - pad, y0 - pad, x0 + w + pad, y0 + h + pad,
+                    outline="#00AAFF", width=2, tags=("marker-overlay",)
+                )
 
     def _get_icon_image(self, name: str):
         from PIL import Image as _Image, ImageDraw, ImageFont
@@ -2331,11 +2510,78 @@ class DesktopApp(tk.Tk):
             d.line([cx, cy + 6, cx, 15], fill=W, width=1)
             d.line([0, cy, cx - 6, cy], fill=W, width=1)
             d.line([cx + 6, cy, 15, cy], fill=W, width=1)
+        elif name == "tent":
+            # Triangle tent with ground line
+            d.polygon([(7, 2), (0, 13), (14, 13)], fill=W)
+            d.rectangle([0, 13, 15, 14], fill=W)   # ground
+            d.polygon([(7, 6), (4, 13), (10, 13)], fill=B)  # door opening
+        elif name == "rv":
+            # Boxy camper/RV profile
+            d.rectangle([1, 5, 14, 11], fill=W)    # body
+            d.rectangle([1, 3, 6, 5], fill=W)      # cab roof
+            d.rectangle([1, 5, 4, 11], fill=W)     # cab front
+            d.rectangle([2, 6, 3, 10], fill=B)     # cab window
+            d.rectangle([7, 6, 13, 10], fill=B)    # RV window
+            d.ellipse([2, 10, 6, 14], fill=W)      # rear wheel
+            d.ellipse([3, 11, 5, 13], fill=B)
+            d.ellipse([9, 10, 13, 14], fill=W)     # front wheel
+            d.ellipse([10, 11, 12, 13], fill=B)
+        elif name == "tree":
+            # Pine tree — three stacked triangles
+            d.polygon([(7, 1), (2, 6), (12, 6)], fill=W)
+            d.polygon([(7, 4), (1, 10), (13, 10)], fill=W)
+            d.polygon([(7, 7), (1, 14), (13, 14)], fill=W)
+            d.rectangle([5, 13, 9, 15], fill=W)   # trunk
+        elif name == "group":
+            # Three figures — left, center (slightly taller), right
+            for cx in [3, 8, 12]:
+                d.ellipse([cx - 1, 2, cx + 1, 4], fill=W)
+                d.line([cx, 4, cx, 9], fill=W, width=1)
+                d.line([cx - 2, 6, cx + 2, 6], fill=W, width=1)
+                d.line([cx, 9, cx - 2, 13], fill=W, width=1)
+                d.line([cx, 9, cx + 2, 13], fill=W, width=1)
+        elif name == "car":
+            # Simple car side profile
+            d.rectangle([1, 8, 14, 12], fill=W)    # body
+            d.polygon([(3, 8), (4, 4), (11, 4), (13, 8)], fill=W)  # roof
+            d.rectangle([5, 5, 8, 8], fill=B)      # front window
+            d.rectangle([9, 5, 12, 8], fill=B)     # rear window
+            d.ellipse([2, 11, 6, 14], fill=W)      # rear wheel
+            d.ellipse([3, 12, 5, 14], fill=B)
+            d.ellipse([9, 11, 13, 14], fill=W)     # front wheel
+            d.ellipse([10, 12, 12, 14], fill=B)
+        elif name == "campfire":
+            # Logs at base, flame above
+            d.rectangle([2, 11, 13, 13], fill=W)   # log 1
+            d.line([4, 9, 11, 13], fill=W, width=1)  # log 2 diagonal
+            d.line([11, 9, 4, 13], fill=W, width=1)  # log 3 diagonal
+            # Flame: teardrop polygon
+            d.polygon([(7, 2), (4, 7), (5, 10), (9, 10), (10, 7)], fill=W)
+            d.polygon([(7, 5), (6, 8), (8, 8)], fill=B)  # inner dark core
         self._icon_cache[name] = img
+        return img
+
+    def _get_label_image(self, text: str, font_size: int):
+        from PIL import Image as _Image, ImageDraw, ImageFont
+        font_size = max(6, font_size)
+        try:
+            font = ImageFont.truetype("arial.ttf", font_size)
+        except Exception:
+            font = ImageFont.load_default()
+        tmp = _Image.new("RGB", (1, 1))
+        td = ImageDraw.Draw(tmp)
+        bbox = td.textbbox((0, 0), text, font=font)
+        tw = bbox[2] - bbox[0]
+        th = bbox[3] - bbox[1]
+        pad = max(2, font_size // 6)
+        img = _Image.new("RGB", (tw + pad * 2, th + pad * 2), (0, 0, 0))
+        d = ImageDraw.Draw(img)
+        d.text((pad - bbox[0], pad - bbox[1]), text, fill=(255, 255, 255), font=font)
         return img
 
     def _draw_markers_on_tile(self, rgb_image, z: int, tx: int, ty: int) -> None:
         n = 2 ** z
+        size = max(6, int(20 * 2 ** (z - 16)))
         for marker in self.markers:
             if not (marker["min_zoom"] <= z <= marker["max_zoom"]):
                 continue
@@ -2344,14 +2590,20 @@ class DesktopApp(tk.Tk):
             fy = (1.0 - math.log(math.tan(lat_rad) + 1.0 / math.cos(lat_rad)) / math.pi) / 2.0 * n
             px = int((fx - tx) * 256)
             py = int((fy - ty) * 256)
-            if px < -16 or px > 271 or py < -16 or py > 271:
+            if marker["icon"] == "__label__":
+                base_fs = marker.get("font_size", 12)
+                scaled_fs = max(6, int(base_fs * 2 ** (z - 16)))
+                icon = self._get_label_image(marker.get("label_text", "?"), scaled_fs)
+            else:
+                icon = self._get_icon_image(marker["icon"]).resize((size, size))
+            iw, ih = icon.size
+            if px < -iw or px > 256 + iw or py < -ih or py > 256 + ih:
                 continue
-            icon = self._get_icon_image(marker["icon"])
-            paste_x, paste_y = px - 8, py - 8
+            paste_x, paste_y = px - iw // 2, py - ih // 2
             x0 = max(paste_x, 0)
             y0 = max(paste_y, 0)
-            x1 = min(paste_x + 16, 256)
-            y1 = min(paste_y + 16, 256)
+            x1 = min(paste_x + iw, 256)
+            y1 = min(paste_y + ih, 256)
             if x1 <= x0 or y1 <= y0:
                 continue
             crop = icon.crop((x0 - paste_x, y0 - paste_y, x1 - paste_x, y1 - paste_y))
@@ -2378,7 +2630,7 @@ class DesktopApp(tk.Tk):
                 for k in [
                     "source", "min_zoom", "max_zoom", "mode", "style", "inkhud_grid",
                     "brightness", "contrast", "threshold",
-                    "marker_icon", "marker_min_zoom", "marker_max_zoom",
+                    "marker_icon", "marker_min_zoom", "marker_max_zoom", "marker_label_text", "marker_label_font_size",
                     "show_inkhud_coverage", "permission",
                 ]
             },
@@ -2410,7 +2662,7 @@ class DesktopApp(tk.Tk):
         self.map_zoom = int(data.get("map_zoom", self.map_zoom))
         settings = data.get("settings", {})
         for k in ["source", "min_zoom", "max_zoom", "mode", "style", "inkhud_grid",
-                  "marker_icon", "marker_min_zoom", "marker_max_zoom"]:
+                  "marker_icon", "marker_min_zoom", "marker_max_zoom", "marker_label_text", "marker_label_font_size"]:
             if k in settings and k in self.vars:
                 self.vars[k].set(str(settings[k]))
         for k in ["brightness", "contrast", "threshold"]:
