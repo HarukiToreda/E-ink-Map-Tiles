@@ -1,0 +1,101 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            artifact_name: EinkMapTiles.exe
+            asset_name: EinkMapTiles-windows.exe
+          - os: ubuntu-latest
+            artifact_name: EinkMapTiles
+            asset_name: EinkMapTiles-linux
+          - os: macos-latest
+            artifact_name: EinkMapTiles
+            asset_name: EinkMapTiles-mac
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install system dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-tk python3-dev libglib2.0-0
+
+      - name: Install Python dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: Build (Windows)
+        if: runner.os == 'Windows'
+        run: pyinstaller EinkMapTiles.spec --noconfirm
+
+      - name: Build (Linux/macOS)
+        if: runner.os != 'Windows'
+        run: pyinstaller EinkMapTiles-linux.spec --noconfirm
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset_name }}
+          path: dist/${{ matrix.artifact_name }}
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Get tag name
+        id: tag
+        run: echo "tag=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+
+      - name: Extract changelog for this version
+        id: changelog
+        run: |
+          python3 - <<'EOF'
+          import re, os
+          with open("CHANGELOG.md") as f:
+              content = f.read()
+          tag = os.environ.get("TAG", "").lstrip("v")
+          pattern = rf"## v{re.escape(tag)}\n(.*?)(?=\n## |\Z)"
+          m = re.search(pattern, content, re.DOTALL)
+          notes = m.group(1).strip() if m else "See CHANGELOG.md for details."
+          with open(os.environ["GITHUB_OUTPUT"], "a") as out:
+              out.write(f"notes<<EOF_NOTES\n{notes}\nEOF_NOTES\n")
+          EOF
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          name: E-ink Map Tiles ${{ steps.tag.outputs.tag }}
+          body: ${{ steps.changelog.outputs.notes }}
+          files: |
+            artifacts/EinkMapTiles-windows.exe/EinkMapTiles.exe
+            artifacts/EinkMapTiles-linux/EinkMapTiles
+            artifacts/EinkMapTiles-mac/EinkMapTiles

@@ -2,7 +2,7 @@
 
 Version 1.3.0
 
-Local-only Windows desktop app for generating e-paper-friendly offline map tiles for InkHUD in the Meshtastic firmware repo.
+Local-only desktop app for generating e-paper-friendly offline map tiles for InkHUD in the Meshtastic firmware repo. Runs on Windows (pre-built `.exe`) and Linux/macOS (from source).
 
 Exports normal XYZ tile folders with attribution and a manifest, and InkHUD firmware headers (`map_tile.h`) with LZ4-compressed column-major tiles ready for ESP32-S3 and nRF52840 targets.
 
@@ -23,9 +23,38 @@ Exports normal XYZ tile folders with attribution and a manifest, and InkHUD firm
 
 The workflow is fully local and does not require a separate tile server.
 
+## Running on Linux / macOS
+
+No pre-built binary is provided for Linux or macOS. Run from source:
+
+```bash
+# Install dependencies (Python 3.10+ required)
+pip install -r requirements.txt
+
+# Also install tkinter if not present (Linux)
+# Debian/Ubuntu: sudo apt install python3-tk
+# Arch:          sudo pacman -S tk
+# Fedora:        sudo dnf install python3-tkinter
+
+./run.sh
+# or: python3 launch.py
+```
+
+To build your own binary on Linux:
+
+```bash
+pip install pyinstaller
+pyinstaller EinkMapTiles-linux.spec
+# Output: dist/EinkMapTiles
+```
+
+**Notes:**
+- The Windows-style dark title bar is skipped on Linux/macOS — the system theme applies instead.
+- Label font falls back to DejaVu Sans if Arial is not installed.
+
 ## Basic Flow
 
-1. Run `EinkMapTiles.exe`.
+1. Run `EinkMapTiles.exe` (Windows) or `./run.sh` (Linux/macOS).
 2. Pan and zoom the map preview to your area of interest.
 3. Check the attribution checkbox in **Map Source**.
 4. In **Export Settings**, choose zoom range, mode, style, and grid size.

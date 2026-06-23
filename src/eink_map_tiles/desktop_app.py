@@ -2751,9 +2751,21 @@ class DesktopApp(tk.Tk):
     def _get_label_image(self, text: str, font_size: int):
         from PIL import Image as _Image, ImageDraw, ImageFont
         font_size = max(6, font_size)
-        try:
-            font = ImageFont.truetype("arial.ttf", font_size)
-        except Exception:
+        font = None
+        candidates = [
+            "arial.ttf",  # Windows
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",  # Debian/Ubuntu
+            "/usr/share/fonts/TTF/DejaVuSans.ttf",  # Arch
+            "/usr/share/fonts/dejavu/DejaVuSans.ttf",  # Fedora
+            "/System/Library/Fonts/Helvetica.ttc",  # macOS
+        ]
+        for candidate in candidates:
+            try:
+                font = ImageFont.truetype(candidate, font_size)
+                break
+            except Exception:
+                continue
+        if font is None:
             font = ImageFont.load_default()
         tmp = _Image.new("RGB", (1, 1))
         td = ImageDraw.Draw(tmp)
