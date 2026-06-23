@@ -44,6 +44,10 @@ Unreleased changes since v1.2.0 — staged here for the next release.
 
 ### UI
 
+- Full dark UI redesign: navy sidebar, teal accents, dark Windows title bar.
+- Checkboxes replaced with animated toggle switches.
+- Sliders replaced with pill-style sliders with teal fill.
+- Rounded buttons with hover states throughout.
 - Removed top header bar to reclaim vertical space.
 - Flash usage bars now hidden in non-InkHUD modes (still visible in InkHUD/InkHUD2 for estimates).
 - Progress bar and Cancel button only appear while an export is running.

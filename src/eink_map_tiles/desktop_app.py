@@ -74,6 +74,130 @@ class QueueWriter(io.TextIOBase):
         return None
 
 
+def _hex_to_rgb(h: str) -> tuple:
+    h = h.lstrip("#")
+    return tuple(int(h[i:i+2], 16) for i in (0, 2, 4))
+
+
+class ToggleSwitch(tk.Canvas):
+    """Pill-shaped on/off toggle — PIL-rendered at 3× for smooth anti-aliased edges."""
+    W, H, S = 42, 24, 3   # display size and supersampling scale
+
+    def __init__(self, parent, variable: tk.BooleanVar, command=None, bg: str = "#1e293b"):
+        super().__init__(parent, width=self.W, height=self.H,
+                         background=bg, highlightthickness=0, borderwidth=0, cursor="hand2")
+        self._var = variable
+        self._cmd = command
+        self._bg = bg
+        self._photo = None
+        self._var.trace_add("write", lambda *_: self.redraw())
+        self.bind("<ButtonRelease-1>", self._toggle)
+        self.redraw()
+
+    def _toggle(self, _e=None):
+        self._var.set(not self._var.get())
+        if self._cmd:
+            self._cmd()
+
+    def redraw(self):
+        from PIL import Image as _Image, ImageDraw, ImageTk
+        s = self.S
+        W, H = self.W * s, self.H * s
+        on = bool(self._var.get())
+        track = "#14b8a6" if on else "#334155"
+        img = _Image.new("RGBA", (W, H), (0, 0, 0, 0))
+        d = ImageDraw.Draw(img)
+        r = H // 2
+        d.ellipse([0, 0, H - 1, H - 1], fill=track)
+        d.ellipse([W - H, 0, W - 1, H - 1], fill=track)
+        d.rectangle([r, 0, W - r, H], fill=track)
+        pad = 4 * s
+        tx = W - H + pad if on else pad
+        d.ellipse([tx, pad, tx + H - pad * 2 - 1, H - pad - 1], fill="white")
+        out = img.resize((self.W, self.H), _Image.LANCZOS)
+        bg_img = _Image.new("RGBA", (self.W, self.H), _hex_to_rgb(self._bg) + (255,))
+        final = _Image.alpha_composite(bg_img, out)
+        self._photo = ImageTk.PhotoImage(final)
+        self.delete("all")
+        self.create_image(0, 0, image=self._photo, anchor="nw")
+
+
+class PillSlider(tk.Canvas):
+    """Pill-track slider — PIL-rendered at 3× for smooth anti-aliased edges."""
+    H = 24
+    TH = 6   # track thickness
+    S = 3    # supersampling scale
+
+    def __init__(self, parent, variable: tk.DoubleVar, from_: float, to: float,
+                 command=None, bg: str = "#1e293b"):
+        super().__init__(parent, height=self.H, background=bg,
+                         highlightthickness=0, borderwidth=0, cursor="hand2")
+        self._var = variable
+        self._from = from_
+        self._to = to
+        self._cmd = command
+        self._bg = bg
+        self._photo = None
+        self._dragging = False
+        self._var.trace_add("write", lambda *_: self.redraw())
+        self.bind("<Configure>", lambda _e: self.redraw())
+        self.bind("<ButtonPress-1>", self._on_press)
+        self.bind("<B1-Motion>", self._on_drag)
+        self.bind("<ButtonRelease-1>", self._on_release)
+
+    def _frac(self):
+        span = self._to - self._from
+        return max(0.0, min(1.0, (self._var.get() - self._from) / span)) if span else 0.0
+
+    def _set_from_x(self, x):
+        w = max(self.winfo_width(), 1)
+        pad = self.H // 2
+        frac = max(0.0, min(1.0, (x - pad) / max(1, w - pad * 2)))
+        self._var.set(round(self._from + frac * (self._to - self._from), 4))
+        if self._cmd:
+            self._cmd(self._var.get())
+
+    def _on_press(self, e): self._dragging = True; self._set_from_x(e.x)
+    def _on_drag(self, e):
+        if self._dragging: self._set_from_x(e.x)
+    def _on_release(self, e): self._dragging = False
+
+    def redraw(self):
+        from PIL import Image as _Image, ImageDraw, ImageTk
+        s = self.S
+        w = max(self.winfo_width(), 100)
+        W, H = w * s, self.H * s
+        th = self.TH * s
+        pad = (self.H // 2) * s
+        ty = H // 2
+        frac = self._frac()
+        fill_x = int(pad + frac * (W - pad * 2))
+
+        img = _Image.new("RGBA", (W, H), (0, 0, 0, 0))
+        d = ImageDraw.Draw(img)
+        # background track
+        r = th // 2
+        d.ellipse([pad - r, ty - r, pad + r, ty + r], fill="#334155")
+        d.ellipse([W - pad - r, ty - r, W - pad + r, ty + r], fill="#334155")
+        d.rectangle([pad, ty - r, W - pad, ty + r], fill="#334155")
+        # filled track
+        if fill_x > pad:
+            d.ellipse([pad - r, ty - r, pad + r, ty + r], fill="#14b8a6")
+            d.ellipse([fill_x - r, ty - r, fill_x + r, ty + r], fill="#14b8a6")
+            d.rectangle([pad, ty - r, fill_x, ty + r], fill="#14b8a6")
+        # thumb
+        tr = (self.H // 2 - 2) * s
+        d.ellipse([fill_x - tr, ty - tr, fill_x + tr, ty + tr], fill="white", outline="#14b8a6", width=s * 2)
+
+        out = img.resize((w, self.H), _Image.LANCZOS)
+        bg_rgb = _hex_to_rgb(self._bg) + (255,)
+        bg_img = _Image.new("RGBA", (w, self.H), bg_rgb)
+        final = _Image.alpha_composite(bg_img, out)
+        self._photo = ImageTk.PhotoImage(final)
+        self.delete("all")
+        self.create_image(0, 0, image=self._photo, anchor="nw")
+
+
 class RoundedButton(tk.Canvas):
     def __init__(
         self,
@@ -147,9 +271,9 @@ class RoundedButton(tk.Canvas):
         height = max(self.winfo_height(), self.button_height)
         radius = min(8, height // 2)
         fill = self.active_fill if self.is_hovered and self.state != "disabled" else self.fill
-        text_fill = self.foreground if self.state != "disabled" else "#8a948d"
+        text_fill = self.foreground if self.state != "disabled" else "#475569"
         if self.state == "disabled":
-            fill = "#eef2ef"
+            fill = "#1e293b"
         self.round_rect(1, 1, width - 2, height - 2, radius, fill=fill, outline=self.border)
         self.create_text(width / 2, height / 2, text=self.button_text, fill=text_fill, font=self.button_font)
 
@@ -189,6 +313,7 @@ class DesktopApp(tk.Tk):
         self.title("E-ink Map Tiles")
         self.geometry("1220x760")
         self.minsize(900, 560)
+        self._apply_dark_titlebar()
 
         self.messages: queue.Queue[str] = queue.Queue()
         self.export_thread: threading.Thread | None = None
@@ -283,48 +408,102 @@ class DesktopApp(tk.Tk):
             variables[f"element_{element}"] = tk.BooleanVar(value=element in cli.DEFAULT_INCLUDE_ELEMENTS)
         return variables
 
+    def _apply_dark_titlebar(self) -> None:
+        try:
+            import ctypes
+            hwnd = self.winfo_id()
+            # DWMWA_USE_IMMERSIVE_DARK_MODE = 20 (Windows 10 20H1+)
+            ctypes.windll.dwmapi.DwmSetWindowAttribute(hwnd, 20, ctypes.byref(ctypes.c_int(1)), 4)
+        except Exception:
+            pass
+
+    # ── Design tokens ─────────────────────────────────────────────────────────
+    C_BG        = "#0f172a"   # sidebar dark navy
+    C_PANEL     = "#1e293b"   # sidebar card / section bg
+    C_CARD      = "#1e293b"   # inner card bg
+    C_BORDER    = "#334155"   # subtle border
+    C_TEXT      = "#f1f5f9"   # primary text on dark
+    C_MUTED     = "#94a3b8"   # secondary/hint text on dark
+    C_ACCENT    = "#14b8a6"   # teal primary
+    C_ACCENT_HV = "#0d9488"   # teal hover
+    C_BTN       = "#334155"   # default button bg
+    C_BTN_HV    = "#475569"   # default button hover
+    C_DANGER    = "#ef4444"   # delete / warning
+    C_MAP_BG    = "#f8fafc"   # map panel background
+
     def configure_styles(self) -> None:
         self.columnconfigure(0, weight=1)
         self.rowconfigure(0, weight=1)
-        self.configure(background="#edf2ee")
+        self.configure(background=self.C_BG)
         style = ttk.Style(self)
-        for theme in ("vista", "xpnative", "clam"):
-            if theme in style.theme_names():
-                style.theme_use(theme)
-                break
-        style.configure(".", font=("Segoe UI", 9))
-        style.configure("TFrame", background="#edf2ee")
-        style.configure("Panel.TFrame", background="#ffffff", relief="flat")
-        style.configure("Card.TFrame", background="#ffffff", relief="flat")
-        style.configure("TLabelframe", background="#ffffff", bordercolor="#d3ddd5", relief="solid")
-        style.configure("TLabelframe.Label", background="#edf2ee", foreground="#102019", font=("Segoe UI", 10, "bold"))
-        style.configure("TLabel", background="#ffffff", foreground="#102019", font=("Segoe UI", 9))
-        style.configure("Shell.TLabel", background="#edf2ee", foreground="#334139")
-        style.configure("Title.TLabel", background="#edf2ee", foreground="#06130f", font=("Segoe UI", 19, "bold"))
-        style.configure("Section.TLabel", background="#ffffff", foreground="#06130f", font=("Segoe UI", 9, "bold"))
-        style.configure("Hint.TLabel", background="#ffffff", foreground="#536158", wraplength=330)
-        style.configure("MapHint.TLabel", background="#ffffff", foreground="#536158", wraplength=620)
+        style.theme_use("clam")
+        style.configure(".", font=("Segoe UI", 9), background=self.C_BG, foreground=self.C_TEXT)
+        style.configure("TFrame", background=self.C_BG)
+        style.configure("Panel.TFrame", background=self.C_BG)
+        style.configure("Card.TFrame", background=self.C_PANEL)
+        style.configure("TLabelframe", background=self.C_PANEL, bordercolor=self.C_BORDER, relief="solid")
+        style.configure("TLabelframe.Label", background=self.C_BG, foreground=self.C_TEXT, font=("Segoe UI", 10, "bold"))
+        style.configure("TLabel", background=self.C_PANEL, foreground=self.C_TEXT, font=("Segoe UI", 9))
+        style.configure("Shell.TLabel", background=self.C_BG, foreground=self.C_MUTED)
+        style.configure("Title.TLabel", background=self.C_BG, foreground=self.C_TEXT, font=("Segoe UI", 15, "bold"))
+        style.configure("Section.TLabel", background=self.C_PANEL, foreground=self.C_TEXT, font=("Segoe UI", 9, "bold"))
+        style.configure("Hint.TLabel", background=self.C_PANEL, foreground=self.C_MUTED, wraplength=330)
+        style.configure("MapHint.TLabel", background=self.C_MAP_BG, foreground="#475569", wraplength=620)
         style.configure("Accent.TButton", font=("Segoe UI", 10, "bold"))
+        # Inputs
+        style.configure("TEntry", fieldbackground=self.C_BG, foreground=self.C_TEXT,
+                        insertcolor=self.C_TEXT, bordercolor=self.C_BORDER, lightcolor=self.C_BORDER,
+                        darkcolor=self.C_BORDER, relief="flat")
+        style.configure("TSpinbox", fieldbackground=self.C_BG, foreground=self.C_TEXT,
+                        bordercolor=self.C_BORDER, arrowcolor=self.C_MUTED,
+                        lightcolor=self.C_BORDER, darkcolor=self.C_BORDER)
+        style.configure("TCombobox", fieldbackground=self.C_BG, foreground=self.C_TEXT,
+                        selectbackground=self.C_ACCENT, selectforeground="#ffffff",
+                        bordercolor=self.C_BORDER, arrowcolor=self.C_MUTED,
+                        lightcolor=self.C_BORDER, darkcolor=self.C_BORDER)
+        style.map("TCombobox", fieldbackground=[("readonly", self.C_BG)])
+        # Checkbutton
+        style.configure("TCheckbutton", background=self.C_PANEL, foreground=self.C_TEXT,
+                        indicatorcolor=self.C_BG, indicatorrelief="flat")
+        style.map("TCheckbutton",
+                  background=[("active", self.C_PANEL)],
+                  indicatorcolor=[("selected", self.C_ACCENT), ("!selected", self.C_BTN)])
+        # Scale
+        style.configure("TScale", background=self.C_PANEL, troughcolor=self.C_BTN,
+                        slidercolor=self.C_ACCENT, bordercolor=self.C_BORDER)
+        # Scrollbar
+        style.configure("TScrollbar", background=self.C_BTN, troughcolor=self.C_PANEL,
+                        bordercolor=self.C_BORDER, arrowcolor=self.C_MUTED)
+        style.map("TScrollbar", background=[("active", self.C_BTN_HV)])
 
     def section_frame(self, parent: tk.Misc, title: str) -> tk.Frame:
-        frame = tk.Frame(parent, background="#ffffff", highlightbackground="#d7e2db", highlightthickness=1, borderwidth=0)
+        frame = tk.Frame(parent, background=self.C_PANEL,
+                         highlightbackground=self.C_BORDER, highlightthickness=1, borderwidth=0)
         frame.columnconfigure(0, weight=1)
-        ttk.Label(frame, text=title, style="Section.TLabel").grid(row=0, column=0, sticky="w", padx=10, pady=(7, 4))
+        hdr = tk.Frame(frame, background=self.C_PANEL)
+        hdr.grid(row=0, column=0, sticky="ew")
+        accent = tk.Frame(hdr, background=self.C_ACCENT, width=3)
+        accent.grid(row=0, column=0, sticky="ns", padx=(0, 8), pady=2)
+        ttk.Label(hdr, text=title, style="Section.TLabel").grid(row=0, column=1, sticky="w", pady=(8, 6))
         return frame
 
     def collapsible_section(self, parent: tk.Misc, title: str, variable_name: str) -> tuple[tk.Frame, ttk.Frame]:
-        frame = tk.Frame(parent, background="#ffffff", highlightbackground="#d7e2db", highlightthickness=1, borderwidth=0)
+        frame = tk.Frame(parent, background=self.C_PANEL,
+                         highlightbackground=self.C_BORDER, highlightthickness=1, borderwidth=0)
         frame.columnconfigure(0, weight=1)
-        header = ttk.Frame(frame, style="Card.TFrame")
-        header.grid(row=0, column=0, sticky="ew", padx=10, pady=(5, 4))
-        header.columnconfigure(1, weight=1)
+        header = tk.Frame(frame, background=self.C_PANEL)
+        header.grid(row=0, column=0, sticky="ew", pady=(2, 2))
+        header.columnconfigure(2, weight=1)
+
+        accent = tk.Frame(header, background=self.C_ACCENT, width=3)
+        accent.grid(row=0, column=0, sticky="ns", padx=(0, 8), pady=2)
 
         expanded = bool(self.vars[variable_name].get())
-        toggle = self.flat_button(header, "v" if expanded else ">", lambda: self.toggle_section(variable_name), width=2)
-        toggle.grid(row=0, column=0, sticky="w", padx=(0, 6))
-        ttk.Label(header, text=title, style="Section.TLabel").grid(row=0, column=1, sticky="w")
+        toggle = self.flat_button(header, "▾" if expanded else "▸", lambda: self.toggle_section(variable_name), width=2)
+        toggle.grid(row=0, column=1, sticky="w", padx=(0, 4))
+        ttk.Label(header, text=title, style="Section.TLabel").grid(row=0, column=2, sticky="w", pady=(7, 5))
 
-        content = ttk.Frame(frame, style="Card.TFrame", padding=(10, 0, 10, 8))
+        content = ttk.Frame(frame, style="Card.TFrame", padding=(12, 2, 12, 10))
         self.collapsible_sections[variable_name] = {"content": content, "toggle": toggle}
         if expanded:
             content.grid(row=1, column=0, sticky="ew")
@@ -348,10 +527,11 @@ class DesktopApp(tk.Tk):
             self.after_idle(lambda: self.controls_canvas.configure(scrollregion=self.controls_canvas.bbox("all")))
 
     def flat_button(self, parent: tk.Misc, text: str, command, primary: bool = False, width: int | None = None) -> tk.Button:
-        bg = "#0f766e" if primary else "#f7faf7"
-        fg = "#ffffff" if primary else "#102019"
-        active = "#0b5f59" if primary else "#e8eee9"
-        min_width = 28 if width else max(74, len(text) * 8 + 22)
+        bg     = self.C_ACCENT   if primary else self.C_BTN
+        fg     = "#ffffff"       if primary else self.C_TEXT
+        active = self.C_ACCENT_HV if primary else self.C_BTN_HV
+        border = self.C_ACCENT   if primary else self.C_BORDER
+        min_width = 28 if width else max(80, len(text) * 8 + 24)
         if width:
             min_width = max(28, width * 13 + 8)
         return RoundedButton(
@@ -361,9 +541,9 @@ class DesktopApp(tk.Tk):
             background=bg,
             foreground=fg,
             activebackground=active,
-            border="#c7d3cb",
+            border=border,
             min_width=min_width,
-            height=28,
+            height=30,
             font=("Segoe UI", 9, "bold" if primary else "normal"),
         )
 
@@ -379,8 +559,8 @@ class DesktopApp(tk.Tk):
         body.columnconfigure(1, weight=0)
         body.rowconfigure(0, weight=1)
 
-        preview_panel = ttk.Frame(body, style="Panel.TFrame", padding=0)
-        preview_panel.grid(row=0, column=0, sticky="nsew", padx=(0, 10))
+        preview_panel = tk.Frame(body, background=self.C_MAP_BG, bd=0)
+        preview_panel.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
         preview_panel.columnconfigure(0, weight=1)
         preview_panel.rowconfigure(0, weight=1)
         self.build_preview(preview_panel).grid(row=0, column=0, sticky="nsew")
@@ -571,13 +751,13 @@ class DesktopApp(tk.Tk):
         shell.columnconfigure(0, weight=1)
         shell.rowconfigure(0, weight=1)
 
-        canvas = tk.Canvas(shell, background="#ffffff", highlightthickness=0, borderwidth=0, width=420)
+        canvas = tk.Canvas(shell, background=self.C_BG, highlightthickness=0, borderwidth=0, width=420)
         scrollbar = ttk.Scrollbar(shell, orient="vertical", command=canvas.yview)
         canvas.configure(yscrollcommand=scrollbar.set)
         canvas.grid(row=0, column=0, sticky="nsew")
         scrollbar.grid(row=0, column=1, sticky="ns")
 
-        controls = ttk.Frame(canvas, style="Panel.TFrame", padding=8)
+        controls = ttk.Frame(canvas, style="Panel.TFrame", padding=(6, 6, 6, 6))
         window_id = canvas.create_window((0, 0), window=controls, anchor="nw")
 
         def resize_controls(_event=None) -> None:
@@ -620,11 +800,10 @@ class DesktopApp(tk.Tk):
 
         ttk.Label(content, textvariable=self.vars["source_help"], style="Hint.TLabel").grid(row=1, column=0, sticky="ew", pady=(0, 4))
 
-        ttk.Checkbutton(
-            content,
-            text="I will keep required map attribution with exported tiles.",
-            variable=self.vars["permission"],
-        ).grid(row=2, column=0, sticky="w", pady=(4, 0))
+        perm_row = ttk.Frame(content, style="Card.TFrame")
+        perm_row.grid(row=2, column=0, sticky="w", pady=(6, 0))
+        ToggleSwitch(perm_row, variable=self.vars["permission"], bg=self.C_PANEL).grid(row=0, column=0, padx=(0, 8))
+        ttk.Label(perm_row, text="I will keep required map attribution.", style="Hint.TLabel").grid(row=0, column=1, sticky="w")
         return frame
 
     def build_area(self, parent: ttk.Frame) -> ttk.LabelFrame:
@@ -714,30 +893,18 @@ class DesktopApp(tk.Tk):
         )
 
         ttk.Label(content, text="Brightness").grid(row=3, column=0, sticky="w", pady=(6, 0))
-        ttk.Scale(content, from_=0.6, to=1.6, variable=self.vars["brightness"], orient="horizontal").grid(
-            row=3,
-            column=1,
-            columnspan=2,
-            sticky="ew",
-            padx=(6, 10),
-            pady=(6, 0),
-        )
+        PillSlider(content, variable=self.vars["brightness"], from_=0.6, to=1.6, bg=self.C_PANEL).grid(
+            row=3, column=1, columnspan=2, sticky="ew", padx=(6, 10), pady=(6, 0))
         ttk.Label(content, textvariable=self.vars["brightness_text"]).grid(row=3, column=3, sticky="w", pady=(6, 0))
 
         ttk.Label(content, text="Contrast").grid(row=4, column=0, sticky="w", pady=(6, 0))
-        ttk.Scale(content, from_=0.6, to=3.0, variable=self.vars["contrast"], orient="horizontal").grid(
-            row=4,
-            column=1,
-            columnspan=2,
-            sticky="ew",
-            padx=(6, 10),
-            pady=(6, 0),
-        )
+        PillSlider(content, variable=self.vars["contrast"], from_=0.6, to=3.0, bg=self.C_PANEL).grid(
+            row=4, column=1, columnspan=2, sticky="ew", padx=(6, 10), pady=(6, 0))
         ttk.Label(content, textvariable=self.vars["contrast_text"]).grid(row=4, column=3, sticky="w", pady=(6, 0))
 
         threshold_label = ttk.Label(content, text="Mono threshold")
         threshold_label.grid(row=5, column=0, sticky="w", pady=(6, 0))
-        threshold_scale = ttk.Scale(content, from_=80, to=230, variable=self.vars["threshold"], orient="horizontal")
+        threshold_scale = PillSlider(content, variable=self.vars["threshold"], from_=80, to=230, bg=self.C_PANEL)
         threshold_scale.grid(
             row=5,
             column=1,
@@ -774,11 +941,12 @@ class DesktopApp(tk.Tk):
             content.columnconfigure(column, weight=1)
 
         for index, element in enumerate(cli.MAP_ELEMENTS):
-            ttk.Checkbutton(
-                content,
-                text=ELEMENT_LABELS.get(element, element.title()),
-                variable=self.vars[f"element_{element}"],
-            ).grid(row=index // element_columns, column=index % element_columns, sticky="w", pady=1)
+            cell = ttk.Frame(content, style="Card.TFrame")
+            cell.grid(row=index // element_columns, column=index % element_columns, sticky="w", pady=3)
+            ToggleSwitch(cell, variable=self.vars[f"element_{element}"],
+                         bg=self.C_PANEL).grid(row=0, column=0, padx=(0, 6))
+            ttk.Label(cell, text=ELEMENT_LABELS.get(element, element.title()),
+                      style="Hint.TLabel").grid(row=0, column=1, sticky="w")
 
         buttons = ttk.Frame(content, style="Card.TFrame")
         buttons.grid(row=math.ceil(len(cli.MAP_ELEMENTS) / element_columns), column=0, columnspan=element_columns, sticky="ew", pady=(4, 0))
@@ -801,29 +969,22 @@ class DesktopApp(tk.Tk):
         return frame
 
     def build_preview(self, parent: ttk.Frame) -> ttk.LabelFrame:
-        frame = self.section_frame(parent, "Map Preview")
+        frame = tk.Frame(parent, background=self.C_PANEL,
+                         highlightbackground=self.C_BORDER, highlightthickness=1, borderwidth=0)
         frame.columnconfigure(0, weight=1)
-        frame.rowconfigure(2, weight=1)
+        frame.rowconfigure(1, weight=1)
 
-        top = ttk.Frame(frame, style="Card.TFrame", padding=(14, 0, 14, 10))
-        top.grid(row=1, column=0, sticky="ew")
-        top.columnconfigure(0, weight=1)
-        self.preview_status_canvas = tk.Canvas(top, height=34, background="#ffffff", highlightthickness=0, borderwidth=0)
-        self.preview_status_canvas.grid(row=0, column=0, sticky="ew")
-        self.preview_status_text = self.preview_status_canvas.create_text(
-            0,
-            4,
-            text=self.vars["preview_status"].get(),
-            fill="#536158",
-            font=("Segoe UI", 9),
-            anchor="nw",
-            width=520,
-        )
-        self.preview_status_canvas.bind("<Configure>", self.resize_preview_status)
-        self.flat_button(top, "-", lambda: self.zoom_map(-1), width=3).grid(row=0, column=1, padx=(8, 3))
-        self.flat_button(top, "+", lambda: self.zoom_map(1), width=3).grid(row=0, column=2, padx=3)
-        self.preview_button = self.flat_button(top, "Refresh", self.refresh_preview)
-        self.preview_button.grid(row=0, column=3, padx=(3, 0))
+        # Single compact header row: accent bar + title + zoom buttons
+        hdr = tk.Frame(frame, background=self.C_PANEL)
+        hdr.grid(row=0, column=0, sticky="ew", padx=0)
+        hdr.columnconfigure(1, weight=1)
+        accent = tk.Frame(hdr, background=self.C_ACCENT, width=3)
+        accent.grid(row=0, column=0, sticky="ns", padx=(0, 8), pady=2)
+        ttk.Label(hdr, text="Map Preview", style="Section.TLabel").grid(row=0, column=1, sticky="w", pady=(6, 4))
+        self.flat_button(hdr, "-", lambda: self.zoom_map(-1), width=3).grid(row=0, column=2, padx=(0, 3), pady=(4, 2))
+        self.flat_button(hdr, "+", lambda: self.zoom_map(1), width=3).grid(row=0, column=3, padx=3, pady=(4, 2))
+        self.preview_button = self.flat_button(hdr, "Refresh", self.refresh_preview)
+        self.preview_button.grid(row=0, column=4, padx=(3, 10), pady=(4, 2))
 
         self.map_canvas = tk.Canvas(
             frame,
@@ -831,7 +992,7 @@ class DesktopApp(tk.Tk):
             highlightthickness=0,
             borderwidth=0,
         )
-        self.map_canvas.grid(row=2, column=0, sticky="nsew", padx=14, pady=(0, 14))
+        self.map_canvas.grid(row=1, column=0, sticky="nsew", padx=14, pady=(0, 14))
         self.map_canvas.create_text(360, 260, text="Loading OpenFreeMap preview...", fill="#17211b", tags=("loading",))
         self.map_canvas.bind("<ButtonPress-1>", self.start_map_drag)
         self.map_canvas.bind("<B1-Motion>", self.drag_map)
@@ -841,12 +1002,10 @@ class DesktopApp(tk.Tk):
         return frame
 
     def resize_preview_status(self, event) -> None:
-        self.preview_status_canvas.itemconfigure(self.preview_status_text, width=max(event.width - 4, 120))
+        pass
 
     def set_preview_status(self, text: str) -> None:
         self.vars["preview_status"].set(text)
-        if hasattr(self, "preview_status_canvas"):
-            self.preview_status_canvas.itemconfigure(self.preview_status_text, text=text)
 
     def build_actions(self, parent: ttk.Frame) -> ttk.Frame:
         frame = self.section_frame(parent, "Export")
@@ -855,7 +1014,7 @@ class DesktopApp(tk.Tk):
         for column in range(4):
             content.columnconfigure(column, weight=1)
         ttk.Label(content, textvariable=self.vars["tile_count"], style="Hint.TLabel").grid(row=0, column=0, columnspan=4, sticky="ew", pady=(0, 2))
-        self.flash_bars_canvas = tk.Canvas(content, height=44, background="#ffffff", highlightthickness=0)
+        self.flash_bars_canvas = tk.Canvas(content, height=44, background=self.C_PANEL, highlightthickness=0)
         self.flash_bars_canvas.grid(row=1, column=0, columnspan=4, sticky="ew", pady=(0, 4))
         self.flash_bars_canvas.grid_remove()
         self.flash_bars_canvas.bind("<Configure>", lambda _e: self.draw_flash_bars(None))
@@ -866,11 +1025,12 @@ class DesktopApp(tk.Tk):
         self.flat_button(content, "About", self.show_about_licenses).grid(row=2, column=3, sticky="ew", padx=(5, 0))
         self.inkhud_button = self.flat_button(content, "⬡ Export for InkHUD", self.export_for_inkhud)
         self.inkhud_button.grid(row=3, column=0, columnspan=3, sticky="ew", pady=(6, 0))
-        self.coverage_toggle = ttk.Checkbutton(
-            content, text="Coverage", variable=self.vars["show_inkhud_coverage"],
-            command=self.draw_inkhud_coverage_overlay,
-        )
-        self.coverage_toggle.grid(row=3, column=3, sticky="ew", padx=(5, 0), pady=(6, 0))
+        cov_frame = ttk.Frame(content, style="Card.TFrame")
+        cov_frame.grid(row=3, column=3, sticky="ew", padx=(5, 0), pady=(6, 0))
+        self.coverage_toggle = ToggleSwitch(cov_frame, variable=self.vars["show_inkhud_coverage"],
+                                            command=self.draw_inkhud_coverage_overlay, bg=self.C_PANEL)
+        self.coverage_toggle.grid(row=0, column=0, padx=(0, 4))
+        ttk.Label(cov_frame, text="Coverage", style="Hint.TLabel").grid(row=0, column=1, sticky="w")
         self.progress_bar = ttk.Progressbar(content, variable=self.vars["progress_value"], maximum=1, mode="determinate")
         self.progress_bar.grid(row=4, column=0, columnspan=3, sticky="ew", pady=(8, 2))
         self.progress_bar.grid_remove()
