@@ -1,6 +1,6 @@
 # E-ink Map Tiles
 
-Version 1.2.0
+Version 1.3.0
 
 Local-only Windows desktop app for generating e-paper-friendly offline map tiles for InkHUD in the Meshtastic firmware repo.
 
