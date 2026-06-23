@@ -2,7 +2,11 @@
 
 ---
 
-## Unreleased (since v1.3.0)
+## Unreleased (since v1.3.1)
+
+---
+
+## v1.3.1
 
 ### New Features
 
@@ -21,6 +25,11 @@
 - Flash usage bars now hidden in non-InkHUD modes (still visible in InkHUD/InkHUD2 for estimates).
 - Progress bar and Cancel button only appear while an export is running.
 - Removed Estimate button — tile count and flash estimates update automatically as settings change.
+
+### Platform
+
+- Linux and macOS support: run from source with `run.sh` or build with `EinkMapTiles-linux.spec`.
+- Multi-platform GitHub Actions workflow — Windows, Linux, and macOS binaries built and attached automatically on each release tag.
 
 ---
 
