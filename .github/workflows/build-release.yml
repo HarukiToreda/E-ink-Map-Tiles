@@ -62,11 +62,17 @@ jobs:
           fi
         shell: bash
 
+      - name: Rename artifact for platform clarity
+        run: |
+          mkdir -p upload
+          cp dist/${{ matrix.artifact_name }} upload/${{ matrix.asset_name }}
+        shell: bash
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.asset_name }}
-          path: dist/${{ matrix.artifact_name }}
+          path: upload/${{ matrix.asset_name }}
 
   release:
     needs: build
@@ -79,6 +85,10 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: artifacts
+          merge-multiple: true
+
+      - name: List artifacts
+        run: ls -la artifacts/
 
       - name: Get tag name
         id: tag
@@ -92,9 +102,16 @@ jobs:
           with open("CHANGELOG.md") as f:
               content = f.read()
           tag = os.environ.get("TAG", "").lstrip("v")
+          # Try exact version match first
           pattern = rf"## v{re.escape(tag)}\n(.*?)(?=\n## |\Z)"
           m = re.search(pattern, content, re.DOTALL)
-          notes = m.group(1).strip() if m else "See CHANGELOG.md for details."
+          if m:
+              notes = m.group(1).strip()
+          else:
+              # Fall back to Unreleased section
+              pattern = r"## Unreleased[^\n]*\n(.*?)(?=\n## |\Z)"
+              m = re.search(pattern, content, re.DOTALL)
+              notes = m.group(1).strip() if m else "See CHANGELOG.md for details."
           with open(os.environ["GITHUB_OUTPUT"], "a") as out:
               out.write(f"notes<<EOF_NOTES\n{notes}\nEOF_NOTES\n")
           EOF
@@ -108,6 +125,6 @@ jobs:
           name: E-ink Map Tiles ${{ steps.tag.outputs.tag }}
           body: ${{ steps.changelog.outputs.notes }}
           files: |
-            artifacts/EinkMapTiles-windows.exe/EinkMapTiles.exe
-            artifacts/EinkMapTiles-linux/EinkMapTiles
-            artifacts/EinkMapTiles-mac/EinkMapTiles
+            artifacts/EinkMapTiles-windows.exe
+            artifacts/EinkMapTiles-linux
+            artifacts/EinkMapTiles-mac
