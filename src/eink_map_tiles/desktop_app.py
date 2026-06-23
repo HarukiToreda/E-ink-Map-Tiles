@@ -130,7 +130,7 @@ class PillSlider(tk.Canvas):
 
     def __init__(self, parent, variable: tk.DoubleVar, from_: float, to: float,
                  command=None, bg: str = "#1e293b"):
-        super().__init__(parent, height=self.H, background=bg,
+        super().__init__(parent, height=self.H, width=80, background=bg,
                          highlightthickness=0, borderwidth=0, cursor="hand2")
         self._var = variable
         self._from = from_
@@ -372,6 +372,8 @@ class DesktopApp(tk.Tk):
             "south": tk.StringVar(value="24.000000"),
             "east": tk.StringVar(value="-66.000000"),
             "north": tk.StringVar(value="50.000000"),
+            "search_query": tk.StringVar(value=""),
+            "search_status": tk.StringVar(value=""),
             "center_lat": tk.StringVar(value="39.500000"),
             "center_lon": tk.StringVar(value="-98.350000"),
             "radius_km": tk.StringVar(value="1500"),
@@ -451,17 +453,21 @@ class DesktopApp(tk.Tk):
         style.configure("MapHint.TLabel", background=self.C_MAP_BG, foreground="#475569", wraplength=620)
         style.configure("Accent.TButton", font=("Segoe UI", 10, "bold"))
         # Inputs
-        style.configure("TEntry", fieldbackground=self.C_BG, foreground=self.C_TEXT,
+        style.configure("TEntry", fieldbackground=self.C_BTN, foreground=self.C_TEXT,
                         insertcolor=self.C_TEXT, bordercolor=self.C_BORDER, lightcolor=self.C_BORDER,
-                        darkcolor=self.C_BORDER, relief="flat")
-        style.configure("TSpinbox", fieldbackground=self.C_BG, foreground=self.C_TEXT,
+                        darkcolor=self.C_BORDER, relief="flat", padding=(6, 4))
+        style.map("TEntry", fieldbackground=[("focus", self.C_BTN)],
+                  bordercolor=[("focus", self.C_ACCENT)])
+        style.configure("TSpinbox", fieldbackground=self.C_BTN, foreground=self.C_TEXT,
                         bordercolor=self.C_BORDER, arrowcolor=self.C_MUTED,
-                        lightcolor=self.C_BORDER, darkcolor=self.C_BORDER)
-        style.configure("TCombobox", fieldbackground=self.C_BG, foreground=self.C_TEXT,
-                        selectbackground=self.C_ACCENT, selectforeground="#ffffff",
+                        lightcolor=self.C_BORDER, darkcolor=self.C_BORDER, padding=(4, 3))
+        style.configure("TCombobox", fieldbackground=self.C_BTN, foreground=self.C_TEXT,
+                        selectbackground=self.C_BTN, selectforeground=self.C_TEXT,
                         bordercolor=self.C_BORDER, arrowcolor=self.C_MUTED,
-                        lightcolor=self.C_BORDER, darkcolor=self.C_BORDER)
-        style.map("TCombobox", fieldbackground=[("readonly", self.C_BG)])
+                        lightcolor=self.C_BORDER, darkcolor=self.C_BORDER, padding=(6, 4))
+        style.map("TCombobox",
+                  fieldbackground=[("readonly", self.C_BTN), ("focus", self.C_BTN)],
+                  bordercolor=[("focus", self.C_ACCENT)])
         # Checkbutton
         style.configure("TCheckbutton", background=self.C_PANEL, foreground=self.C_TEXT,
                         indicatorcolor=self.C_BG, indicatorrelief="flat")
@@ -806,25 +812,55 @@ class DesktopApp(tk.Tk):
         ttk.Label(perm_row, text="I will keep required map attribution.", style="Hint.TLabel").grid(row=0, column=1, sticky="w")
         return frame
 
+    def search_location(self) -> None:
+        query = self.vars["search_query"].get().strip()
+        if not query:
+            return
+        import urllib.request, urllib.parse, json as _json
+        url = "https://nominatim.openstreetmap.org/search?" + urllib.parse.urlencode({
+            "q": query, "format": "json", "limit": 1
+        })
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "EinkMapTiles/1.3"})
+            with urllib.request.urlopen(req, timeout=8) as resp:
+                results = _json.loads(resp.read())
+            if not results:
+                self.vars["search_status"].set("No results found.")
+                return
+            r = results[0]
+            lat, lon = float(r["lat"]), float(r["lon"])
+            self.map_center_lat = lat
+            self.map_center_lon = lon
+            self.vars["center_lat"].set(f"{lat:.6f}")
+            self.vars["center_lon"].set(f"{lon:.6f}")
+            # Fit zoom to the bounding box returned by Nominatim
+            bb = r.get("boundingbox")  # [south, north, west, east]
+            if bb:
+                import math as _math
+                lat_span = abs(float(bb[1]) - float(bb[0]))
+                lon_span = abs(float(bb[3]) - float(bb[2]))
+                span = max(lat_span, lon_span)
+                zoom = max(4, min(14, int(_math.log2(360 / span)) - 1))
+                self.map_zoom = zoom
+            self.vars["search_status"].set(r.get("display_name", "").split(",")[0])
+            self.schedule_preview()
+        except Exception as e:
+            self.vars["search_status"].set(f"Error: {e}")
+
     def build_area(self, parent: ttk.Frame) -> ttk.LabelFrame:
         frame, content = self.collapsible_section(parent, "Area", "collapse_area")
-        content.columnconfigure(1, weight=1)
-        content.columnconfigure(3, weight=1)
+        content.columnconfigure(1, weight=1, uniform="halves")
+        content.columnconfigure(3, weight=1, uniform="halves")
 
         ttk.Label(content, text="Center lat").grid(row=0, column=0, sticky="w")
-        ttk.Entry(content, textvariable=self.vars["center_lat"], width=12).grid(row=0, column=1, sticky="ew", padx=(6, 10))
+        ttk.Entry(content, textvariable=self.vars["center_lat"]).grid(row=0, column=1, sticky="ew", padx=(6, 10))
         ttk.Label(content, text="Center lon").grid(row=0, column=2, sticky="w")
-        ttk.Entry(content, textvariable=self.vars["center_lon"], width=12).grid(row=0, column=3, sticky="ew", padx=(6, 0))
+        ttk.Entry(content, textvariable=self.vars["center_lon"]).grid(row=0, column=3, sticky="ew", padx=(6, 0))
 
         ttk.Label(content, text="Radius km").grid(row=1, column=0, sticky="w", pady=(4, 0))
-        ttk.Entry(content, textvariable=self.vars["radius_km"], width=12).grid(row=1, column=1, sticky="ew", padx=(6, 10), pady=(4, 0))
+        ttk.Entry(content, textvariable=self.vars["radius_km"]).grid(row=1, column=1, sticky="ew", padx=(6, 10), pady=(4, 0))
         self.flat_button(content, "Fit Center Area", self.set_bbox_from_center).grid(
-            row=1,
-            column=2,
-            columnspan=2,
-            sticky="ew",
-            pady=(4, 0),
-        )
+            row=1, column=2, columnspan=2, sticky="ew", pady=(4, 0))
 
         ttk.Label(content, text="Visible BBox").grid(row=2, column=0, sticky="w", pady=(6, 0))
         bbox_grid = ttk.Frame(content, style="Card.TFrame")
@@ -843,16 +879,16 @@ class DesktopApp(tk.Tk):
 
     def build_settings(self, parent: ttk.Frame) -> ttk.LabelFrame:
         frame, content = self.collapsible_section(parent, "Export Settings", "collapse_export_settings")
-        content.columnconfigure(1, weight=1)
-        content.columnconfigure(3, weight=1)
+        content.columnconfigure(1, weight=1, uniform="halves")
+        content.columnconfigure(3, weight=1, uniform="halves")
 
         self.zoom_range_label_min = ttk.Label(content, text="Min zoom")
         self.zoom_range_label_min.grid(row=0, column=0, sticky="w")
-        self.zoom_range_entry_min = ttk.Entry(content, textvariable=self.vars["min_zoom"], width=8)
+        self.zoom_range_entry_min = ttk.Entry(content, textvariable=self.vars["min_zoom"])
         self.zoom_range_entry_min.grid(row=0, column=1, sticky="ew", padx=(6, 10))
         self.zoom_range_label_max = ttk.Label(content, text="Max zoom")
         self.zoom_range_label_max.grid(row=0, column=2, sticky="w")
-        self.zoom_range_entry_max = ttk.Entry(content, textvariable=self.vars["max_zoom"], width=8)
+        self.zoom_range_entry_max = ttk.Entry(content, textvariable=self.vars["max_zoom"])
         self.zoom_range_entry_max.grid(row=0, column=3, sticky="ew", padx=(6, 0))
         self.zoom_range_widgets = [
             self.zoom_range_label_min, self.zoom_range_entry_min,
@@ -870,7 +906,6 @@ class DesktopApp(tk.Tk):
             textvariable=self.vars["mode"],
             values=["mono", "grayscale", "inkhud", "inkhud2", "palette", "original"],
             state="readonly",
-            width=12,
         ).grid(row=1, column=1, sticky="ew", padx=(6, 10), pady=(4, 0))
 
         ttk.Label(content, text="Style").grid(row=1, column=2, sticky="w", pady=(4, 0))
@@ -879,16 +914,15 @@ class DesktopApp(tk.Tk):
             textvariable=self.vars["style"],
             values=["osm-eink", "osm-eink-topo"],
             state="readonly",
-            width=16,
         ).grid(row=1, column=3, sticky="ew", padx=(6, 0), pady=(4, 0))
 
         ttk.Label(content, text="Grid").grid(row=2, column=0, sticky="w", pady=(4, 0))
         self.grid_combo = ttk.Combobox(
             content, textvariable=self.vars["inkhud_grid"],
-            values=["8x8", "6x6", "5x5", "4x4", "3x3", "2x2"], state="readonly", width=6,
+            values=["8x8", "6x6", "5x5", "4x4", "3x3", "2x2"], state="readonly",
         )
         self.grid_combo.grid(row=2, column=1, sticky="w", padx=(6, 10), pady=(4, 0))
-        ttk.Label(content, text="Tiles per zoom level", style="Hint.TLabel").grid(
+        ttk.Label(content, text="tiles/zoom", style="Hint.TLabel").grid(
             row=2, column=2, columnspan=2, sticky="w", pady=(4, 0)
         )
 
@@ -905,33 +939,22 @@ class DesktopApp(tk.Tk):
         threshold_label = ttk.Label(content, text="Mono threshold")
         threshold_label.grid(row=5, column=0, sticky="w", pady=(6, 0))
         threshold_scale = PillSlider(content, variable=self.vars["threshold"], from_=80, to=230, bg=self.C_PANEL)
-        threshold_scale.grid(
-            row=5,
-            column=1,
-            columnspan=2,
-            sticky="ew",
-            padx=(6, 10),
-            pady=(6, 0),
-        )
+        threshold_scale.grid(row=5, column=1, columnspan=2, sticky="ew", padx=(6, 10), pady=(6, 0))
         threshold_value = ttk.Label(content, textvariable=self.vars["threshold_text"])
         threshold_value.grid(row=5, column=3, sticky="w", pady=(6, 0))
         self.threshold_widgets = [threshold_label, threshold_scale, threshold_value]
         self.threshold_grid_options = {
             threshold_label: {"row": 5, "column": 0, "sticky": "w", "pady": (6, 0)},
-            threshold_scale: {
-                "row": 5,
-                "column": 1,
-                "columnspan": 2,
-                "sticky": "ew",
-                "padx": (6, 10),
-                "pady": (6, 0),
-            },
+            threshold_scale: {"row": 5, "column": 1, "columnspan": 2, "sticky": "ew", "padx": (6, 10), "pady": (6, 0)},
             threshold_value: {"row": 5, "column": 3, "sticky": "w", "pady": (6, 0)},
         }
 
         ttk.Label(content, text="Output").grid(row=6, column=0, sticky="w", pady=(6, 0))
-        ttk.Entry(content, textvariable=self.vars["output"]).grid(row=6, column=1, columnspan=2, sticky="ew", padx=(6, 8), pady=(6, 0))
-        self.flat_button(content, "Browse", self.choose_output).grid(row=6, column=3, sticky="ew", pady=(6, 0))
+        output_row = tk.Frame(content, background=self.C_PANEL)
+        output_row.grid(row=6, column=1, columnspan=3, sticky="ew", padx=(6, 0), pady=(6, 0))
+        output_row.columnconfigure(0, weight=1)
+        ttk.Entry(output_row, textvariable=self.vars["output"]).grid(row=0, column=0, sticky="ew", padx=(0, 6))
+        self.flat_button(output_row, "Browse", self.choose_output).grid(row=0, column=1, sticky="ew")
         return frame
 
     def build_elements(self, parent: ttk.Frame) -> tuple[tk.Frame, ttk.Frame]:
@@ -977,14 +1000,18 @@ class DesktopApp(tk.Tk):
         # Single compact header row: accent bar + title + zoom buttons
         hdr = tk.Frame(frame, background=self.C_PANEL)
         hdr.grid(row=0, column=0, sticky="ew", padx=0)
-        hdr.columnconfigure(1, weight=1)
+        hdr.columnconfigure(2, weight=1)  # search entry expands
         accent = tk.Frame(hdr, background=self.C_ACCENT, width=3)
         accent.grid(row=0, column=0, sticky="ns", padx=(0, 8), pady=2)
-        ttk.Label(hdr, text="Map Preview", style="Section.TLabel").grid(row=0, column=1, sticky="w", pady=(6, 4))
-        self.flat_button(hdr, "-", lambda: self.zoom_map(-1), width=3).grid(row=0, column=2, padx=(0, 3), pady=(4, 2))
-        self.flat_button(hdr, "+", lambda: self.zoom_map(1), width=3).grid(row=0, column=3, padx=3, pady=(4, 2))
+        ttk.Label(hdr, text="Map Preview", style="Section.TLabel").grid(row=0, column=1, sticky="w", pady=(6, 4), padx=(0, 10))
+        search_entry = ttk.Entry(hdr, textvariable=self.vars["search_query"])
+        search_entry.grid(row=0, column=2, sticky="ew", pady=(4, 2), padx=(0, 4))
+        search_entry.bind("<Return>", lambda _e: self.search_location())
+        self.flat_button(hdr, "Search", self.search_location).grid(row=0, column=3, pady=(4, 2), padx=(0, 4))
+        self.flat_button(hdr, "-", lambda: self.zoom_map(-1), width=3).grid(row=0, column=4, padx=(0, 3), pady=(4, 2))
+        self.flat_button(hdr, "+", lambda: self.zoom_map(1), width=3).grid(row=0, column=5, padx=3, pady=(4, 2))
         self.preview_button = self.flat_button(hdr, "Refresh", self.refresh_preview)
-        self.preview_button.grid(row=0, column=4, padx=(3, 10), pady=(4, 2))
+        self.preview_button.grid(row=0, column=6, padx=(3, 10), pady=(4, 2))
 
         self.map_canvas = tk.Canvas(
             frame,

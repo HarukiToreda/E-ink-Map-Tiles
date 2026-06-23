@@ -40,6 +40,7 @@ The preview uses the same local vector renderer and e-paper conversion as export
 
 Controls:
 
+- **Search** — type any place name in the search bar and press Enter or click Search to jump the map there. Accepts city names, addresses, landmarks, national parks, mountains, lakes, zip codes, or any location OpenStreetMap recognizes. The map zooms automatically to fit the result.
 - **Drag** to pan.
 - **Scroll wheel** zooms in or out, re-centering on the cursor position.
 - **Refresh** re-renders the preview at the current view.
