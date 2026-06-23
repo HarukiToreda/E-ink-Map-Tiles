@@ -1,10 +1,30 @@
 # Changelog
 
-Unreleased changes since v1.2.0 — staged here for the next release.
+---
+
+## Unreleased (since v1.3.0)
+
+### New Features
+
+**Location search**
+- Search bar in the map preview header. Type any place name and press Enter or click Search to jump the map there.
+- Accepts city names, addresses, landmarks, national parks, mountains, lakes, zip codes, or any location OpenStreetMap recognizes.
+- Map zooms automatically to fit the result using the bounding box returned by Nominatim.
+
+### UI
+
+- Full dark UI redesign: navy sidebar, teal accents, dark Windows title bar.
+- Checkboxes replaced with animated toggle switches.
+- Sliders replaced with pill-style sliders with teal fill.
+- Rounded buttons with hover states throughout.
+- Removed top header bar to reclaim vertical space.
+- Flash usage bars now hidden in non-InkHUD modes (still visible in InkHUD/InkHUD2 for estimates).
+- Progress bar and Cancel button only appear while an export is running.
+- Removed Estimate button — tile count and flash estimates update automatically as settings change.
 
 ---
 
-## Unreleased (since v1.2.0)
+## v1.3.0
 
 ### New Features
 
@@ -41,21 +61,3 @@ Unreleased changes since v1.2.0 — staged here for the next release.
 
 **Coverage overlay rendering fixed**
 - A class name bug silently skipped drawing coverage boxes in some cases.
-
-### New Features
-
-**Location search**
-- Search bar in the map preview header. Type any place name and press Enter or click Search to jump the map there.
-- Accepts city names, addresses, landmarks, national parks, mountains, lakes, zip codes, or any location OpenStreetMap recognizes.
-- Map zooms automatically to fit the result using the bounding box returned by Nominatim.
-
-### UI
-
-- Full dark UI redesign: navy sidebar, teal accents, dark Windows title bar.
-- Checkboxes replaced with animated toggle switches.
-- Sliders replaced with pill-style sliders with teal fill.
-- Rounded buttons with hover states throughout.
-- Removed top header bar to reclaim vertical space.
-- Flash usage bars now hidden in non-InkHUD modes (still visible in InkHUD/InkHUD2 for estimates).
-- Progress bar and Cancel button only appear while an export is running.
-- Removed Estimate button — tile count and flash estimates update automatically as settings change.
