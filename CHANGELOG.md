@@ -11,12 +11,16 @@
 - Default brightness and contrast for InkHUD and InkHUD2 modes changed to 0.96.
 - Building outlines added — buildings now render with a thin black border so they are visible on the map.
 - Land dither protection is now scoped: when the Land layer is enabled, pixels in the 175–215 raw gray range are locked to the dither zone so parks and landcover never crush to solid black at high contrast settings. When Land is off, the pipeline is unchanged — non-land features such as road casings are unaffected.
+<<<<<<< HEAD
 - Minor, service, and primary (z<12) road casing colors darkened to sit below the dither threshold so they always render as solid lines regardless of contrast.
 
 ### Export
 
 **InkHUD flash size estimate**
 - The pre-export flash size estimate now samples one real tile per zoom level at the center of the export area, LZ4 compresses each, and sums the results. This replaces the previous fixed compression factor, giving an accurate size prediction that reflects actual map content and contrast settings. The sample runs automatically in the background about one second after settings change.
+=======
+- Minor and service road casing colors darkened to sit below the dither threshold so they always render as solid lines regardless of contrast.
+>>>>>>> c446aefb60314af208cd6b1d1ee8b17bfcd387af
 
 **Waterways**
 - River, canal, stream, drain, and ditch widths now scale with zoom level based on real-world metres per pixel (rivers widen at z15/z16, streams stay thin).
