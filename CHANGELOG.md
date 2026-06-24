@@ -10,6 +10,8 @@
 - Replaced Bayer dithering with a softer 3-zone approach: pixels ≤175 go solid black, pixels in 175–215 get light Bayer dithering at level 220 (~8% black dots), pixels >215 go solid white. Preview and device output now match exactly.
 - Default brightness and contrast for InkHUD and InkHUD2 modes changed to 0.96.
 - Building outlines added — buildings now render with a thin black border so they are visible on the map.
+- Land dither protection is now scoped: when the Land layer is enabled, pixels in the 175–215 raw gray range are locked to the dither zone so parks and landcover never crush to solid black at high contrast settings. When Land is off, the pipeline is unchanged — non-land features such as road casings are unaffected.
+- Minor and service road casing colors darkened to sit below the dither threshold so they always render as solid lines regardless of contrast.
 
 **Waterways**
 - River, canal, stream, drain, and ditch widths now scale with zoom level based on real-world metres per pixel (rivers widen at z15/z16, streams stay thin).

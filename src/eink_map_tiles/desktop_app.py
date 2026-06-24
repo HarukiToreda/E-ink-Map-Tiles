@@ -1859,7 +1859,8 @@ class DesktopApp(tk.Tk):
         mode = job["mode"]
 
         if mode in ("inkhud", "inkhud2"):
-            return cli.inkhud_process(image, float(job["contrast"]), float(job["brightness"])).convert("RGB")
+            protect_land = "land" in set(job.get("elements", {}).get("include", []))
+            return cli.inkhud_process(image, float(job["contrast"]), float(job["brightness"]), protect_land=protect_land).convert("RGB")
 
         image = ImageEnhance.Brightness(image).enhance(float(job["brightness"]))
         image = ImageEnhance.Contrast(image).enhance(float(job["contrast"]))
@@ -2048,9 +2049,6 @@ class DesktopApp(tk.Tk):
         job["bbox"]   = zoom_specs[0]["bbox"]
         job["zooms"]  = list(range(min_zoom, max_zoom + 1))
         job["layout"] = DESKTOP_TILE_LAYOUT
-        # Remove land layer so water renders through correctly (land sits on top of water)
-        job["elements"]["include"] = [e for e in job["elements"]["include"] if e != "land"]
-        job["elements"]["exclude"] = list(set(job["elements"]["exclude"]) | {"land"})
 
         # Ask where to save map_tile.h
         fw_default = Path(r"C:\firmware\src\graphics\niche\InkHUD\Applets\Bases\Map")
@@ -2113,8 +2111,6 @@ class DesktopApp(tk.Tk):
             messagebox.showerror("Cannot export", str(exc))
             return
         job["layout"] = DESKTOP_TILE_LAYOUT
-        job["elements"]["include"] = [e for e in job["elements"]["include"] if e != "land"]
-        job["elements"]["exclude"] = list(set(job["elements"]["exclude"]) | {"land"})
 
         fw_default = Path(r"C:\firmware\src\graphics\niche\InkHUD\Applets\Bases\Map")
         initial_dir = str(fw_default) if fw_default.exists() else str(Path.home())
@@ -2160,9 +2156,14 @@ class DesktopApp(tk.Tk):
             with tempfile.TemporaryDirectory(prefix="inkhud2-export-") as temp_dir:
                 temp_out = Path(temp_dir)
                 writer = QueueWriter(self.messages)
+                # Download raw RGB tiles; inkhud_process handles all bw conversion itself
+                download_job = dict(job)
+                download_job["mode"] = "original"
+                download_job["brightness"] = 1.0
+                download_job["contrast"] = 1.0
                 with redirect_stdout(writer):
                     exit_code = cli.download_tiles(
-                        job, temp_out, cancel_event=cancel_event,
+                        download_job, temp_out, cancel_event=cancel_event,
                         rate_limit=DESKTOP_RATE_LIMIT_SECONDS, print_fn=lambda s: writer.write(s + "\n"),
                     )
                 if exit_code == 2:
@@ -2180,7 +2181,7 @@ class DesktopApp(tk.Tk):
                     tile_path = temp_out / "tiles" / style / str(z) / str(tx) / f"{ty}.png"
                     rgb = Image.open(tile_path).convert("RGB") if tile_path.exists() else Image.new("RGB", (256, 256), (255, 255, 255))
                     self._draw_markers_on_tile(rgb, z, tx, ty)
-                    bw = cli.inkhud_process(rgb, float(job["contrast"]), float(job["brightness"]))
+                    bw = cli.inkhud_process(rgb, float(job["contrast"]), float(job["brightness"]), protect_land="land" in set(job.get("elements", {}).get("include", [])))
                     raw: list[int] = []
                     for bx in range(32):
                         for y in range(256):
@@ -2234,9 +2235,14 @@ class DesktopApp(tk.Tk):
             with tempfile.TemporaryDirectory(prefix="inkhud-export-") as temp_dir:
                 temp_out = Path(temp_dir)
                 writer = QueueWriter(self.messages)
+                # Download raw RGB tiles; inkhud_process handles all bw conversion itself
+                download_job = dict(job)
+                download_job["mode"] = "original"
+                download_job["brightness"] = 1.0
+                download_job["contrast"] = 1.0
                 with redirect_stdout(writer):
                     exit_code = cli.download_tiles(
-                        job, temp_out, cancel_event=cancel_event,
+                        download_job, temp_out, cancel_event=cancel_event,
                         rate_limit=DESKTOP_RATE_LIMIT_SECONDS, print_fn=lambda s: writer.write(s + "\n"),
                     )
                 if exit_code == 2:
@@ -2256,7 +2262,7 @@ class DesktopApp(tk.Tk):
                             tile_path = temp_out / "tiles" / style / str(z) / str(tx) / f"{ty}.png"
                             rgb = Image.open(tile_path).convert("RGB") if tile_path.exists() else Image.new("RGB", (256, 256), (255, 255, 255))
                             self._draw_markers_on_tile(rgb, z, tx, ty)
-                            bw = cli.inkhud_process(rgb, float(job["contrast"]), float(job["brightness"]))
+                            bw = cli.inkhud_process(rgb, float(job["contrast"]), float(job["brightness"]), protect_land="land" in set(job.get("elements", {}).get("include", [])))
                             raw: list[int] = []
                             for bx in range(32):
                                 for y in range(256):
