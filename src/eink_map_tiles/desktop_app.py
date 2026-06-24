@@ -328,6 +328,9 @@ class DesktopApp(tk.Tk):
         self.map_drag_center: tuple[float, float] | None = None
         self.preview_render_id = 0
         self.preview_after_id: str | None = None
+        self._inkhud_bytes_per_tile: int | None = None
+        self._inkhud_sample_after_id: str | None = None
+        self._inkhud_sample_job_key: tuple | None = None
         self.preview_rendered_width: int = 0
         self.preview_rendered_height: int = 0
         self.live_update_after_id: str | None = None
@@ -1377,15 +1380,90 @@ class DesktopApp(tk.Tk):
                 return
             num_zooms = max(0, max_zoom - min_zoom + 1)
             g = int(self.vars["inkhud_grid"].get()[0])  # "4x4" -> 4
-            estimated = int(num_zooms * g * g * 256 * 256 // 8 * 0.45)
+            total_tiles = num_zooms * g * g
+            if self._inkhud_bytes_per_tile is not None:
+                estimated = self._inkhud_bytes_per_tile
+                label = f"InkHUD: {num_zooms} zoom(s) {g}×{g} — ≈{estimated // 1024} KB"
+            else:
+                estimated = int(total_tiles * 256 * 256 // 8 * 0.90)
+                label = f"InkHUD: {num_zooms} zoom(s) {g}×{g} — ≈{estimated // 1024} KB (sampling…)"
             self.draw_flash_bars(estimated, upper_bound=True)
-            self.vars["tile_count"].set(f"InkHUD: {num_zooms} zoom(s) {g}×{g} — ≈{estimated // 1024} KB (LZ4 est.)")
+            self.vars["tile_count"].set(label)
+            self._schedule_inkhud_sample()
         elif mode == "inkhud2":
             total = sum(len(v) for v in self.inkhud2_selected_tiles.values())
             estimated = total * 1500
             zoom_count = sum(1 for v in self.inkhud2_selected_tiles.values() if v)
             self.draw_flash_bars(estimated, upper_bound=True)
             self.vars["tile_count"].set(f"InkHUD2: {total} tile(s) across {zoom_count} zoom(s) — ≈{estimated // 1024} KB (LZ4 est.)")
+
+    def _schedule_inkhud_sample(self) -> None:
+        """Debounce: wait 900 ms after the last settings change, then sample one tile per zoom."""
+        try:
+            job = self.build_job()
+            key = (tuple(job["zooms"]), self.vars["inkhud_grid"].get(),
+                   job.get("bbox", {}).get("west"), job.get("bbox", {}).get("north"),
+                   job["contrast"], job["brightness"],
+                   str(job.get("elements", {})))
+        except Exception:
+            return
+        if key == self._inkhud_sample_job_key:
+            return  # settings unchanged, sample still valid
+        self._inkhud_bytes_per_tile = None
+        if self._inkhud_sample_after_id:
+            self.after_cancel(self._inkhud_sample_after_id)
+        self._inkhud_sample_after_id = self.after(900, lambda: self._run_inkhud_sample(key, job))
+
+    def _run_inkhud_sample(self, key: tuple, job: dict) -> None:
+        import threading
+        self._inkhud_sample_after_id = None
+
+        def _center_tile(zoom, bbox):
+            import math as _math
+            center_lat = (bbox.north + bbox.south) / 2
+            center_lon = (bbox.west + bbox.east) / 2
+            n = 2 ** zoom
+            tx = int((center_lon + 180) / 360 * n)
+            lat_rad = _math.radians(center_lat)
+            ty = int((1 - _math.log(_math.tan(lat_rad) + 1 / _math.cos(lat_rad)) / _math.pi) / 2 * n)
+            return cli.Tile(z=zoom, x=max(0, min(n - 1, tx)), y=max(0, min(n - 1, ty)))
+
+        def _compress_tile(tile, job):
+            protect_land = "land" in set(job.get("elements", {}).get("include", []))
+            rgb = cli.render_openfreemap_image(tile, cli.DEFAULT_USER_AGENT, 30, 3,
+                                               job.get("elements", {}).get("include", []),
+                                               job.get("style"))
+            bw = cli.inkhud_process(rgb, float(job["contrast"]), float(job["brightness"]),
+                                    protect_land=protect_land)
+            raw = []
+            for bx in range(32):
+                for y in range(256):
+                    byte = 0
+                    for bit in range(8):
+                        if bw.getpixel((bx * 8 + bit, y)) == 0:
+                            byte |= 1 << bit
+                    raw.append(byte)
+            return len(lz4.block.compress(bytes(raw), store_size=False))
+
+        def worker():
+            try:
+                bbox = cli.BBox(**job["bbox"])
+                g = int(self.vars["inkhud_grid"].get()[0])
+                total_bytes = 0
+                for z in job["zooms"]:
+                    tile = _center_tile(z, bbox)
+                    bytes_for_tile = _compress_tile(tile, job)
+                    total_bytes += bytes_for_tile * g * g
+                self.after(0, lambda: self._apply_inkhud_sample(key, total_bytes))
+            except Exception:
+                pass
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _apply_inkhud_sample(self, key: tuple, total_bytes: int) -> None:
+        self._inkhud_sample_job_key = key
+        self._inkhud_bytes_per_tile = total_bytes  # now stores total, not per-tile
+        self.update_inkhud_flash_bars()
 
     def estimate_tiles(self, show_errors: bool = True, update_bars: bool = False) -> None:
         try:

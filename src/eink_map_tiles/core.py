@@ -504,7 +504,7 @@ def draw_transportation(draw, data: dict, z: int, elements: set[str], topo: bool
     class_styles = {
         "motorway": ("#9ea7a1", None, 1, 0) if z < 12 else ("#5c655f", "#fbfbf8", 5, 3),
         "trunk": ("#a9b1ab", None, 1, 0) if z < 12 else ("#68716b", "#fbfbf8", 5, 3),
-        "primary": ("#b6beb8", None, 1, 0) if z < 12 else ("#747e77", "#fbfbf8", 4, 2),
+        "primary": ("#888888", None, 1, 0) if z < 12 else ("#747e77", "#fbfbf8", 4, 2),
         "secondary": ("#9aa49e", "#ffffff", 2, 1) if topo else ("#8b948e", "#ffffff", 3, 1),
         "tertiary": ("#adb6b0", "#ffffff", 2, 1) if topo else ("#9aa29c", "#ffffff", 3, 1),
         "minor": ("#c8d0ca", None, 1, 0) if topo else ("#888888", "#ffffff", 2, 1),
