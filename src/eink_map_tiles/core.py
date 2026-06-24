@@ -248,12 +248,12 @@ def render_openfreemap_image(
 
     if "land" in selected:
         draw_polygon_layer(draw, data, "landcover", "#c4cbc4", "#a7b1aa")
-        draw_polygon_layer(draw, data, "landuse", "#e5e6e1", "#c5ccc4")
+        draw_polygon_layer(draw, data, "landuse", "#e5e6e1", "#888888")
         draw_polygon_layer(draw, data, "park", "#b8c2b9", "#9ba89e")
     if topo:
         draw_topography(image, tile, user_agent, timeout, retries)
     if "water" in selected:
-        draw_polygon_layer(draw, data, "water", "#aeb9b4", "#7f8d87")
+        draw_polygon_layer(draw, data, "water", "#404040", "#222222")
         draw_waterways(draw, data, tile.z, "#6f7d77")
     if "buildings" in selected and not topo:
         draw_polygon_layer(draw, data, "building", "#d0d5cf", "#222222")
@@ -507,8 +507,8 @@ def draw_transportation(draw, data: dict, z: int, elements: set[str], topo: bool
         "primary": ("#b6beb8", None, 1, 0) if z < 12 else ("#747e77", "#fbfbf8", 4, 2),
         "secondary": ("#9aa49e", "#ffffff", 2, 1) if topo else ("#8b948e", "#ffffff", 3, 1),
         "tertiary": ("#adb6b0", "#ffffff", 2, 1) if topo else ("#9aa29c", "#ffffff", 3, 1),
-        "minor": ("#c8d0ca", None, 1, 0) if topo else ("#aeb6b0", "#ffffff", 2, 1),
-        "service": ("#d3dad5", None, 1, 0) if topo else ("#bcc4be", "#ffffff", 2, 1),
+        "minor": ("#c8d0ca", None, 1, 0) if topo else ("#888888", "#ffffff", 2, 1),
+        "service": ("#d3dad5", None, 1, 0) if topo else ("#888888", "#ffffff", 2, 1),
         "track": path_style,
         "path": path_style,
         "footway": path_style,
@@ -928,6 +928,7 @@ def optimize_tile(
     mode: str, colors: int, brightness: float, contrast: float, threshold: int,
 ) -> None:
     if mode == "original" and brightness == 1.0 and contrast == 1.0:
+        destination.parent.mkdir(parents=True, exist_ok=True)
         source.replace(destination)
         return
     from PIL import Image, ImageEnhance
@@ -1060,7 +1061,7 @@ def inkhud_quantize(rgb_image, contrast: float, brightness: float):
     return _Image.fromarray(quantized, mode="L")
 
 
-def inkhud_process(rgb_image, contrast: float, brightness: float):
+def inkhud_process(rgb_image, contrast: float, brightness: float, protect_land: bool = False):
     """InkHUD 1-bit pipeline. Ordered Bayer dither at a light gray level so land appears soft gray.
     Regular 4x4 pattern preserves LZ4 compression. Preview and device see the same 1-bit pixels."""
     import numpy as np
@@ -1069,22 +1070,29 @@ def inkhud_process(rgb_image, contrast: float, brightness: float):
     arr_rgb = np.array(rgb_image.convert("RGB"), dtype=np.int16)
     water_mask = (arr_rgb[:, :, 2] - arr_rgb[:, :, 0]) > 25
     gray = rgb_image.convert("L")
+    arr_raw = np.array(gray, dtype=np.float32)
     gray = ImageEnhance.Contrast(gray).enhance(contrast)
     gray = ImageEnhance.Brightness(gray).enhance(brightness)
     sharp = gray.filter(ImageFilter.UnsharpMask(radius=1, percent=150, threshold=2))
 
+    # Rows reordered so the two black dots fall at y≡0 and y≡2 (mod 4).
+    # The original matrix placed dots at y≡1 and y≡3, which firmware point-sampling
+    # at 2x or 4x downscale always skips — land appeared solid white on device.
     bayer = np.array([
-        [ 0,  8,  2, 10],
-        [12,  4, 14,  6],
-        [ 3, 11,  1,  9],
         [15,  7, 13,  5],
+        [ 3, 11,  1,  9],
+        [12,  4, 14,  6],
+        [ 0,  8,  2, 10],
     ], dtype=np.float32) * (255.0 / 16.0)
     arr = np.array(sharp, dtype=np.float32)
     h, w = arr.shape
     pattern = np.tile(bayer, (h // 4 + 1, w // 4 + 1))[:h, :w]
 
-    # ≤175 → solid black, 175–215 → soft Bayer dither at level 220 (~8% dots), >215 → solid white
+    # ≤175 → solid black, 175–215 → soft Bayer dither at level 220 (~12.5% dots), >215 → solid white
+    # Use raw gray to classify dither zone so land always dithers regardless of contrast setting.
     quantized = np.where(arr <= 175, 0.0, np.where(arr <= 215, 220.0, 255.0))
+    if protect_land:
+        quantized = np.where((arr_raw > 175) & (arr_raw <= 215), 220.0, quantized)
     dithered = np.where(quantized <= 0, 0,
                np.where(quantized >= 255, 255,
                np.where(quantized >= pattern, 255, 0))).astype(np.uint8)
