@@ -1725,7 +1725,7 @@ class DesktopApp(tk.Tk):
         """Compress tile_data with LZ4 and return (header_text, total_compressed_bytes).
 
         tile_data: list of (zoom, tx, ty, raw_bytes)
-        Returns the full map_tile.h content and the total compressed byte count.
+        Returns the full MapTile.h content and the total compressed byte count.
         """
         zoom_set = sorted(set(t[0] for t in tile_data))
         compressed: list[bytes] = []
@@ -2128,13 +2128,13 @@ class DesktopApp(tk.Tk):
         job["zooms"]  = list(range(min_zoom, max_zoom + 1))
         job["layout"] = DESKTOP_TILE_LAYOUT
 
-        # Ask where to save map_tile.h
+        # Ask where to save MapTile.h
         fw_default = Path(r"C:\firmware\src\graphics\niche\InkHUD\Applets\Bases\Map")
         initial_dir = str(fw_default) if fw_default.exists() else str(Path.home())
         save_path = filedialog.asksaveasfilename(
-            title="Save map_tile.h for InkHUD firmware",
+            title="Save MapTile.h for InkHUD firmware",
             defaultextension=".h",
-            initialfile="map_tile.h",
+            initialfile="MapTile.h",
             initialdir=initial_dir,
             filetypes=[("C header files", "*.h")],
         )
@@ -2193,9 +2193,9 @@ class DesktopApp(tk.Tk):
         fw_default = Path(r"C:\firmware\src\graphics\niche\InkHUD\Applets\Bases\Map")
         initial_dir = str(fw_default) if fw_default.exists() else str(Path.home())
         save_path = filedialog.asksaveasfilename(
-            title="Save map_tile.h for InkHUD2 firmware",
+            title="Save MapTile.h for InkHUD2 firmware",
             defaultextension=".h",
-            initialfile="map_tile.h",
+            initialfile="MapTile.h",
             initialdir=initial_dir,
             filetypes=[("C header files", "*.h")],
         )
@@ -2278,11 +2278,11 @@ class DesktopApp(tk.Tk):
 
             save_path.write_text(header, encoding="utf-8")
             self.messages.put(f"__TILE_TOTAL_BYTES__:{total_bytes}\n")
-            self.messages.put(f"\nmap_tile.h saved to: {save_path}\n")
+            self.messages.put(f"\nMapTile.h saved to: {save_path}\n")
             self.after(0, self.finish_export_success)
             self.after(0, lambda: messagebox.showinfo(
                 "InkHUD2 Export Complete",
-                f"map_tile.h saved to:\n{save_path}\n\n{len(tile_data)} tiles exported.\nRebuild and flash your InkHUD2 firmware to apply.",
+                f"MapTile.h saved to:\n{save_path}\n\n{len(tile_data)} tiles exported.\nRebuild and flash your InkHUD2 firmware to apply.",
             ))
         except Exception as exc:  # noqa: BLE001
             self.messages.put(f"\nInkHUD2 export failed: {exc}\n")
@@ -2362,11 +2362,11 @@ class DesktopApp(tk.Tk):
 
             save_path.write_text(header, encoding="utf-8")
             self.messages.put(f"__TILE_TOTAL_BYTES__:{total_bytes}\n")
-            self.messages.put(f"\nmap_tile.h saved to: {save_path}\n")
+            self.messages.put(f"\nMapTile.h saved to: {save_path}\n")
             self.after(0, self.finish_export_success)
             self.after(0, lambda: messagebox.showinfo(
                 "InkHUD Export Complete",
-                f"map_tile.h saved to:\n{save_path}\n\nRebuild and flash your InkHUD firmware to apply.",
+                f"MapTile.h saved to:\n{save_path}\n\nRebuild and flash your InkHUD firmware to apply.",
             ))
         except Exception as exc:  # noqa: BLE001
             self.messages.put(f"\nInkHUD export failed: {exc}\n")

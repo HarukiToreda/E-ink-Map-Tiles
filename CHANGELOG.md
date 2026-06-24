@@ -18,6 +18,9 @@
 **InkHUD flash size estimate**
 - The pre-export flash size estimate now samples one real tile per zoom level at the center of the export area, LZ4 compresses each, and sums the results. This replaces the previous fixed compression factor, giving an accurate size prediction that reflects actual map content and contrast settings. The sample runs automatically in the background about one second after settings change.
 
+**Output filename**
+- Exported firmware header renamed from `map_tile.h` to `MapTile.h` to match firmware naming conventions.
+
 **Waterways**
 - River, canal, stream, drain, and ditch widths now scale with zoom level based on real-world metres per pixel (rivers widen at z15/z16, streams stay thin).
 - Waterway names (rivers, creeks, streams) appear at zoom 15 and 16, rotated along the flow direction — same rendering engine as trail labels.
