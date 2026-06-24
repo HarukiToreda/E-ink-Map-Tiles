@@ -22,8 +22,8 @@ from . import core as cli
 DEFAULT_OUTPUT_BASE = Path.home() / "Downloads" / "EinkMapTiles"
 DESKTOP_RATE_LIMIT_SECONDS = 0.05
 DESKTOP_TILE_LAYOUT = "inkhud-dev"
-INKHUD_DEFAULT_BRIGHTNESS = 1.03
-INKHUD_DEFAULT_CONTRAST = 2.41
+INKHUD_DEFAULT_BRIGHTNESS = 0.96
+INKHUD_DEFAULT_CONTRAST = 0.96
 MIN_PREVIEW_ZOOM = 2
 MAX_PREVIEW_ZOOM = cli.TOPO_MAX_DETAIL_ZOOM
 NORMAL_PREVIEW_MAX_ZOOM = cli.OPENFREEMAP_MAX_DETAIL_ZOOM
@@ -1932,8 +1932,10 @@ class DesktopApp(tk.Tk):
         self.export_thread.start()
 
     def reset_export_progress(self, job: dict[str, Any]) -> None:
+        import time as _time
         bbox = cli.BBox(**job["bbox"])
         self.export_total = cli.count_tiles_for_bbox(bbox, job["zooms"])
+        self.export_start_time = _time.monotonic()
         self.vars["progress_value"].set(0)
         self.progress_bar.configure(maximum=max(self.export_total, 1), mode="determinate")
         self.vars["progress_text"].set(f"Exporting 0 / {self.export_total:,} tiles...")
@@ -2214,44 +2216,7 @@ class DesktopApp(tk.Tk):
 
     def _inkhud_process(self, rgb_image: "Image.Image", contrast: float, brightness: float) -> "Image.Image":
         """Shared inkhud pipeline used by both preview and export — always identical."""
-        import numpy as np
-        from PIL import Image as _Image, ImageEnhance, ImageFilter
-        # Detect water by blue dominance before grayscale (osm-eink water = light blue ~#aad3df)
-        arr_rgb = np.array(rgb_image.convert("RGB"), dtype=np.int16)
-        water_mask = (arr_rgb[:, :, 2] - arr_rgb[:, :, 0]) > 25
-        gray = rgb_image.convert("L")
-        gray = ImageEnhance.Contrast(gray).enhance(contrast)
-        gray = ImageEnhance.Brightness(gray).enhance(brightness)
-        sharp = gray.filter(ImageFilter.UnsharpMask(radius=1, percent=150, threshold=2))
-        result = np.array(self._bayer_dither(sharp), dtype=np.uint8)
-        result[water_mask] = 0  # Force water solid black
-        return _Image.fromarray(result, mode="L")
-
-    @staticmethod
-    def _bayer_dither(img: "Image.Image") -> "Image.Image":
-        """3-level posterize + Bayer dither.
-        <=140 → solid black (water, roads, labels, building outlines)
-        141-205 → light Bayer dither (building interiors, soft shading)
-        >205 → solid white (background/land)
-        """
-        import numpy as np
-        from PIL import Image as _Image
-        bayer = np.array([
-            [ 0,  8,  2, 10],
-            [12,  4, 14,  6],
-            [ 3, 11,  1,  9],
-            [15,  7, 13,  5],
-        ], dtype=np.float32) * (255.0 / 16.0)
-        arr = np.array(img, dtype=np.float32)
-        # Only dither a narrow band of very light grays (building interiors).
-        # Water, text, roads (<=175) → solid black. Background (>215) → solid white.
-        quantized = np.where(arr <= 175, 0.0,
-                    np.where(arr <= 215, 170.0, 255.0))
-        h, w = quantized.shape
-        pattern = np.tile(bayer, (h // 4 + 1, w // 4 + 1))[:h, :w]
-        dithered = np.where(quantized < pattern, 0, 255).astype(np.uint8)
-        result = np.where(quantized >= 255, 255, np.where(quantized <= 0, 0, dithered)).astype(np.uint8)
-        return _Image.fromarray(result, mode="L")
+        return cli.inkhud_process(rgb_image, contrast, brightness)
 
     def _run_inkhud_export(self, job: dict[str, Any], zoom_specs: list[dict], save_path: Path, cancel_event: threading.Event | None = None) -> None:
         from PIL import Image, ImageEnhance, ImageFilter
@@ -2773,9 +2738,10 @@ class DesktopApp(tk.Tk):
         tw = bbox[2] - bbox[0]
         th = bbox[3] - bbox[1]
         pad = max(2, font_size // 6)
-        img = _Image.new("RGB", (tw + pad * 2, th + pad * 2), (0, 0, 0))
+        img = _Image.new("RGB", (tw + pad * 2, th + pad * 2), (255, 255, 255))
         d = ImageDraw.Draw(img)
-        d.text((pad - bbox[0], pad - bbox[1]), text, fill=(255, 255, 255), font=font)
+        d.rectangle([0, 0, tw + pad * 2 - 1, th + pad * 2 - 1], outline=(0, 0, 0), width=1)
+        d.text((pad - bbox[0], pad - bbox[1]), text, fill=(0, 0, 0), font=font)
         return img
 
     def _draw_markers_on_tile(self, rgb_image, z: int, tx: int, ty: int) -> None:
@@ -2906,6 +2872,19 @@ class DesktopApp(tk.Tk):
             self.update_export_progress_from_message(message)
         self.after(100, self.poll_messages)
 
+    def _eta_string(self, completed: int, total: int) -> str:
+        import time as _time
+        if completed <= 0:
+            return ""
+        elapsed = _time.monotonic() - getattr(self, "export_start_time", _time.monotonic())
+        if elapsed < 1:
+            return ""
+        remaining_secs = elapsed / completed * (total - completed)
+        if remaining_secs < 60:
+            return f" — ~{int(remaining_secs)}s left"
+        mins, secs = divmod(int(remaining_secs), 60)
+        return f" — ~{mins}m {secs:02d}s left"
+
     def update_export_progress_from_message(self, message: str) -> None:
         for completed_text, total_text in re.findall(r"\[(\d+)/(\d+)\]", message):
             completed = int(completed_text)
@@ -2913,7 +2892,8 @@ class DesktopApp(tk.Tk):
             self.export_total = total
             self.progress_bar.configure(maximum=max(total, 1), mode="determinate")
             self.vars["progress_value"].set(completed)
-            self.vars["progress_text"].set(f"Exporting {completed:,} / {total:,} tiles...")
+            eta = self._eta_string(completed, total)
+            self.vars["progress_text"].set(f"Exporting {completed:,} / {total:,} tiles{eta}")
 
 
 def main() -> int:

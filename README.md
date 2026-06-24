@@ -65,7 +65,7 @@ Tile count and flash estimates update automatically as you change settings.
 
 ## Map Preview
 
-The preview uses the same local vector renderer and e-paper conversion as exports — what you see matches the exported tiles.
+The preview uses the same local vector renderer and e-paper conversion as exports — what you see matches the exported tiles. At zoom 15 and 16, river and creek names appear rotated along the waterway direction.
 
 Controls:
 
@@ -104,8 +104,8 @@ Check **I will keep required map attribution with exported tiles** before export
 | Mode | `grayscale` | |
 | Style | `osm-eink` | |
 | Grid | `4×4` | InkHUD/InkHUD2 only. Options: 2×2, 3×3, 4×4, 5×5, 6×6, 8×8 |
-| Brightness | 0.99 | InkHUD defaults to 1.03 |
-| Contrast | 1.15 | InkHUD defaults to 2.41 |
+| Brightness | 0.99 | InkHUD defaults to 0.96 |
+| Contrast | 1.15 | InkHUD defaults to 0.96 |
 | Mono threshold | 120 | `mono` mode only, hidden otherwise |
 
 **Output modes:**
@@ -201,7 +201,7 @@ Before compression, each tile goes through the InkHUD image pipeline:
 1. Water detection — pixels where blue significantly exceeds red are forced black (water bodies render solid).
 2. Contrast and brightness adjustment using the configured slider values.
 3. Unsharp mask to sharpen edges before dithering.
-4. Bayer ordered dithering — pixels are quantized to three levels (black, mid-gray, white) and then dithered using a 4×4 Bayer matrix. This produces clean, firmware-friendly patterns that compress better than error-diffusion dithering.
+4. Bayer ordered dithering — pixels are quantized to three levels. Dark pixels (≤175) go solid black, mid-gray pixels (175–215) are dithered with a 4×4 Bayer matrix at a light gray level so they appear as a faint texture, and light pixels (>215) go solid white. The ordered pattern compresses better than error-diffusion dithering and produces the same result on both the preview and the e-ink display.
 
 ### Tile format and compression
 
@@ -283,7 +283,7 @@ The **Markers** section lets you place custom icons on the map that are baked di
 2. Set the zoom range.
 3. Click **Place Label**, then click the map to drop it.
 
-Labels render as white text on a black background rectangle. Font size scales with zoom the same way icons do — half the pixel size per zoom level out.
+Labels render as black text on a white background rectangle with a black outline. Font size scales with zoom the same way icons do — half the pixel size per zoom level out.
 
 **Moving and editing markers:**
 - Click any row in the marker list to select it. A blue highlight appears around it on the map and the cursor changes to a move cursor.
@@ -293,7 +293,7 @@ Labels render as white text on a black background rectangle. Font size scales wi
 
 Placed markers appear in the list below the icon picker with their type, zoom range, and coordinates. Click **×** to remove one.
 
-Icons and labels are drawn as white symbols on a black square — the same sign-board style used on trail maps. Size scales with zoom: half the pixel size per zoom level out.
+Icons are drawn as white symbols on a black square. Text labels are drawn as black text on a white rectangle with a black outline. Size scales with zoom: half the pixel size per zoom level out.
 
 ## Session
 

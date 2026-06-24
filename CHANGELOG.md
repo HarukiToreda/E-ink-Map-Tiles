@@ -4,6 +4,22 @@
 
 ## Unreleased (since v1.3.1)
 
+### Map Rendering
+
+**InkHUD image pipeline**
+- Replaced Bayer dithering with a softer 3-zone approach: pixels ≤175 go solid black, pixels in 175–215 get light Bayer dithering at level 220 (~8% black dots), pixels >215 go solid white. Preview and device output now match exactly.
+- Default brightness and contrast for InkHUD and InkHUD2 modes changed to 0.96.
+- Building outlines added — buildings now render with a thin black border so they are visible on the map.
+
+**Waterways**
+- River, canal, stream, drain, and ditch widths now scale with zoom level based on real-world metres per pixel (rivers widen at z15/z16, streams stay thin).
+- Waterway names (rivers, creeks, streams) appear at zoom 15 and 16, rotated along the flow direction — same rendering engine as trail labels.
+- Waterway names are placed at the flattest (least-curved) section of each waterway so the full name fits cleanly.
+- Waterway labels respect a shared collision list with trail labels and are suppressed on busy tiles.
+
+**Custom markers**
+- Text label markers now render as white box with black text and a black outline instead of black box with white text.
+
 ---
 
 ## v1.3.1

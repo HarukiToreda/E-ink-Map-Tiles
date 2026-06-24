@@ -254,17 +254,19 @@ def render_openfreemap_image(
         draw_topography(image, tile, user_agent, timeout, retries)
     if "water" in selected:
         draw_polygon_layer(draw, data, "water", "#aeb9b4", "#7f8d87")
-        draw_line_layer(draw, data, "waterway", "#6f7d77", width=1)
+        draw_waterways(draw, data, tile.z, "#6f7d77")
     if "buildings" in selected and not topo:
-        draw_polygon_layer(draw, data, "building", "#d0d5cf", None)
+        draw_polygon_layer(draw, data, "building", "#d0d5cf", "#222222")
     if "boundaries" in selected:
         draw_line_layer(draw, data, "boundary", "#7d8781" if tile.z <= 6 else "#929c96", width=1)
     if {"roads", "highways", "paths", "transit"} & selected:
         draw_transportation(draw, data, tile.z, selected, topo=topo)
     if "labels" in selected:
         draw_labels(draw, data, tile.z, load_label_font(tile.z))
+        shared_placed: list[tuple[int, int]] = []
         if "paths" in selected:
-            draw_transportation_names(image, draw, data, tile.z, load_label_font(tile.z, small=True))
+            draw_transportation_names(image, draw, data, tile.z, load_label_font(tile.z, small=True), shared_placed)
+        draw_waterway_names(image, draw, data, tile.z, load_label_font(tile.z, small=True), shared_placed)
     if "pois" in selected:
         draw_pois(draw, data, tile.z, load_label_font(tile.z, small=True))
     return image
@@ -472,6 +474,29 @@ def draw_line_layer(draw, data: dict, layer_name: str, color: str, width: int = 
         draw_geometry_lines(draw, feature.get("geometry", {}), color, width)
 
 
+def draw_waterways(draw, data: dict, z: int, color: str) -> None:
+    # Real-world typical widths in metres by class.
+    # Rivers/canals have polygon water areas already rendered — keep centerline thin (max 3px).
+    # Streams/drains have no polygon, so width can represent their actual span.
+    real_width_m = {
+        "river":  10,   # polygon already fills the body; centerline stays thin
+        "canal":   8,
+        "stream":  5,
+        "drain":   2,
+        "ditch":   1,
+    }
+    import math as _math
+    metres_per_px = 40075016.686 / (256 * (2 ** z))
+    for feature in data.get("waterway", {}).get("features", []):
+        props = feature.get("properties", {})
+        wclass = props.get("class", props.get("brunnel", "stream"))
+        real_m = real_width_m.get(wclass)
+        if real_m is None:
+            continue
+        width = max(1, round(real_m / metres_per_px))
+        draw_geometry_lines(draw, feature.get("geometry", {}), color, width)
+
+
 def draw_transportation(draw, data: dict, z: int, elements: set[str], topo: bool = False) -> None:
     if z <= 5 and not topo:
         return
@@ -613,6 +638,8 @@ def draw_labels(draw, data: dict, z: int, font) -> None:
         draw_readable_text(draw, (x, y), name, font, fill="#111111", stroke_width=2)
         labels_drawn += 1
 
+    # Waterway names drawn rotated along the river — handled separately below
+
 
 def label_priority(properties: dict, z: int) -> int:
     label_class = properties.get("class", "")
@@ -674,15 +701,15 @@ def _geometry_angle(geometry: dict, frac: float = 0.5) -> float:
     return angle
 
 
-def draw_transportation_names(image, draw, data: dict, z: int, font) -> None:
+def draw_transportation_names(image, draw, data: dict, z: int, font, placed_all: list | None = None) -> None:
     """Draw named trail/path labels rotated along the trail direction (z == 16 only)."""
     if z < 15:
         return
     from PIL import Image, ImageDraw
 
     path_classes = {"path", "track", "footway", "cycleway", "bridleway", "steps"}
-    # All placed label centers — used to prevent visual overlap between different trails
-    placed_all: list[tuple[int, int]] = []
+    if placed_all is None:
+        placed_all = []
     overlap_spacing = 50  # minimum px to avoid drawing two labels on top of each other
     # Minimum px between repeated labels of the same trail
     repeat_spacing = 130 if z >= 16 else 100
@@ -746,6 +773,85 @@ def draw_transportation_names(image, draw, data: dict, z: int, font) -> None:
                 continue
             image.paste(rotated, (px_, py_), rotated)
             placed_this_trail.append((cx, cy))
+            placed_all.append((cx, cy))
+
+
+def draw_waterway_names(image, draw, data: dict, z: int, font, placed_all: list) -> None:
+    """Draw waterway names rotated along the river/creek direction, avoiding other labels."""
+    if z < 15:
+        return
+    from PIL import Image, ImageDraw
+
+    repeat_spacing = 300 if z >= 16 else 220
+    overlap_spacing = 120
+    # Skip waterway labels entirely if the tile already has many trail labels placed
+    if len(placed_all) > 8:
+        return
+
+    candidate_fracs = [i / 20 for i in range(1, 20)]
+    seen_waterway_names: set[str] = set()
+
+    for feature in data.get("waterway", {}).get("features", []):
+        props = feature.get("properties", {})
+        name = label_text(props)
+        if not name:
+            continue
+        geometry = feature.get("geometry", {})
+
+        try:
+            bbox = font.getbbox(name)
+            text_w = bbox[2] - bbox[0]
+            text_h = bbox[3] - bbox[1]
+        except AttributeError:
+            text_w, text_h = len(name) * 6, 10
+
+        pad = 3
+        first_for_this_name = name not in seen_waterway_names
+        placed_this_feature: list[tuple[int, int]] = []
+
+        # Score every candidate position by bend — sort flattest first so the label
+        # lands on the straightest stretch and the full name fits cleanly.
+        scored: list[tuple[float, float, int, int, float]] = []  # (bend, frac, cx, cy, angle)
+        for frac in candidate_fracs:
+            pt = _line_point_at(geometry, frac)
+            if pt is None:
+                continue
+            cx, cy = scale_point(pt)
+            if not (-10 <= cx <= 266 and -10 <= cy <= 266):
+                continue
+            angle = _geometry_angle(geometry, frac)
+            angle_before = _geometry_angle(geometry, max(0.0, frac - 0.15))
+            angle_after = _geometry_angle(geometry, min(1.0, frac + 0.15))
+            bend = abs(angle_after - angle_before)
+            if bend > 180:
+                bend = 360 - bend
+            scored.append((bend, frac, cx, cy, angle))
+        scored.sort(key=lambda s: s[0])  # flattest first
+
+        for bend, frac, cx, cy, angle in scored:
+            if bend > 35:
+                break  # remainder are all worse — stop
+            if not first_for_this_name:
+                if any(abs(cx - ex) + abs(cy - ey) < repeat_spacing for ex, ey in placed_this_feature):
+                    continue
+            if any(abs(cx - ex) + abs(cy - ey) < overlap_spacing for ex, ey in placed_all):
+                continue
+
+            scratch = Image.new("RGBA", (text_w + pad * 2, text_h + pad * 2), (0, 0, 0, 0))
+            sd = ImageDraw.Draw(scratch)
+            for ddx in (-2, -1, 0, 1, 2):
+                for ddy in (-2, -1, 0, 1, 2):
+                    if ddx or ddy:
+                        sd.text((pad + ddx, pad + ddy), name, font=font, fill=(255, 255, 255, 220))
+            sd.text((pad, pad), name, font=font, fill=(17, 17, 17, 255))
+            rotated = scratch.rotate(-angle, expand=True, resample=Image.BICUBIC)
+            rw, rh = rotated.size
+            px_ = cx - rw // 2
+            py_ = cy - rh // 2
+            image.paste(rotated, (max(0, px_), max(0, py_)), rotated)
+            seen_waterway_names.add(name)
+            first_for_this_name = False
+            placed_this_feature.append((cx, cy))
             placed_all.append((cx, cy))
 
 
@@ -955,7 +1061,8 @@ def inkhud_quantize(rgb_image, contrast: float, brightness: float):
 
 
 def inkhud_process(rgb_image, contrast: float, brightness: float):
-    """InkHUD 1-bit pipeline with Bayer dither. Used for preview only."""
+    """InkHUD 1-bit pipeline. Ordered Bayer dither at a light gray level so land appears soft gray.
+    Regular 4x4 pattern preserves LZ4 compression. Preview and device see the same 1-bit pixels."""
     import numpy as np
     from PIL import Image as _Image, ImageEnhance, ImageFilter
 
@@ -973,13 +1080,16 @@ def inkhud_process(rgb_image, contrast: float, brightness: float):
         [15,  7, 13,  5],
     ], dtype=np.float32) * (255.0 / 16.0)
     arr = np.array(sharp, dtype=np.float32)
-    quantized = np.where(arr <= 175, 0.0, np.where(arr <= 215, 170.0, 255.0))
-    h, w = quantized.shape
+    h, w = arr.shape
     pattern = np.tile(bayer, (h // 4 + 1, w // 4 + 1))[:h, :w]
-    dithered = np.where(quantized < pattern, 0, 255).astype(np.uint8)
-    result = np.where(quantized >= 255, 255, np.where(quantized <= 0, 0, dithered)).astype(np.uint8)
-    result[water_mask] = 0
-    return _Image.fromarray(result, mode="L")
+
+    # ≤175 → solid black, 175–215 → soft Bayer dither at level 220 (~8% dots), >215 → solid white
+    quantized = np.where(arr <= 175, 0.0, np.where(arr <= 215, 220.0, 255.0))
+    dithered = np.where(quantized <= 0, 0,
+               np.where(quantized >= 255, 255,
+               np.where(quantized >= pattern, 255, 0))).astype(np.uint8)
+    dithered[water_mask] = 0
+    return _Image.fromarray(dithered, mode="L")
 
 
 def download_tiles(
