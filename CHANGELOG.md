@@ -18,6 +18,9 @@
 **InkHUD flash size estimate**
 - The pre-export flash size estimate now samples one real tile per zoom level at the center of the export area, LZ4 compresses each, and sums the results. This replaces the previous fixed compression factor, giving an accurate size prediction that reflects actual map content and contrast settings. The sample runs automatically in the background about one second after settings change.
 
+**Custom zoom selection**
+- New **Custom** button in InkHUD export settings reveals per-zoom toggles for every zoom level in the min–max range. Toggle individual zooms off to exclude them from the export. The flash size estimate and coverage overlay update immediately to reflect the active set.
+
 **Output filename**
 - Exported firmware header renamed from `map_tile.h` to `MapTile.h` to match firmware naming conventions.
 

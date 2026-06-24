@@ -331,6 +331,8 @@ class DesktopApp(tk.Tk):
         self._inkhud_bytes_per_tile: int | None = None
         self._inkhud_sample_after_id: str | None = None
         self._inkhud_sample_job_key: tuple | None = None
+        self.inkhud_omit_zooms: set[int] = set()
+        self._inkhud_custom_expanded: bool = False
         self.preview_rendered_width: int = 0
         self.preview_rendered_height: int = 0
         self.live_update_after_id: str | None = None
@@ -602,6 +604,8 @@ class DesktopApp(tk.Tk):
             self.vars[key].trace_add("write", lambda *_args: self.queue_live_update(preview=False, estimate=True))
             self.vars[key].trace_add("write", lambda *_args: self.update_inkhud_flash_bars())
             self.vars[key].trace_add("write", lambda *_args: self.draw_inkhud_coverage_overlay())
+        for key in ("min_zoom", "max_zoom"):
+            self.vars[key].trace_add("write", lambda *_args: self._on_zoom_range_changed())
 
         area_keys = ("west", "south", "east", "north")
         for key in area_keys:
@@ -721,6 +725,16 @@ class DesktopApp(tk.Tk):
             else:
                 self.inkhud2_zoom_frame.grid_remove()
                 self.map_canvas.delete("tile-selection", "tile-grid")
+        # Show Custom zoom button only in inkhud mode
+        if hasattr(self, "inkhud_custom_btn"):
+            if mode == "inkhud":
+                self.inkhud_custom_btn.grid()
+            else:
+                self.inkhud_custom_btn.grid_remove()
+                self._inkhud_custom_expanded = False
+                if hasattr(self, "inkhud_zoom_toggles_frame"):
+                    self.inkhud_zoom_toggles_frame.grid_remove()
+                self.inkhud_omit_zooms.clear()
         # Update export button label
         if hasattr(self, "inkhud_button"):
             label = "⬡ Export for InkHUD2" if is_inkhud2 else "⬡ Export for InkHUD"
@@ -925,36 +939,40 @@ class DesktopApp(tk.Tk):
             values=["8x8", "6x6", "5x5", "4x4", "3x3", "2x2"], state="readonly",
         )
         self.grid_combo.grid(row=2, column=1, sticky="w", padx=(6, 10), pady=(4, 0))
-        ttk.Label(content, text="tiles/zoom", style="Hint.TLabel").grid(
-            row=2, column=2, columnspan=2, sticky="w", pady=(4, 0)
-        )
+        self.inkhud_custom_btn = self.flat_button(content, "Custom", self._toggle_inkhud_custom)
+        self.inkhud_custom_btn.grid(row=2, column=2, columnspan=2, sticky="w", pady=(4, 0))
 
-        ttk.Label(content, text="Brightness").grid(row=3, column=0, sticky="w", pady=(6, 0))
+        # Per-zoom toggle frame (hidden by default)
+        self.inkhud_zoom_toggles_frame = tk.Frame(content, background=self.C_PANEL)
+        self.inkhud_zoom_toggles_frame.grid(row=3, column=0, columnspan=4, sticky="ew", pady=(4, 0))
+        self.inkhud_zoom_toggles_frame.grid_remove()
+
+        ttk.Label(content, text="Brightness").grid(row=4, column=0, sticky="w", pady=(6, 0))
         PillSlider(content, variable=self.vars["brightness"], from_=0.6, to=1.6, bg=self.C_PANEL).grid(
-            row=3, column=1, columnspan=2, sticky="ew", padx=(6, 10), pady=(6, 0))
-        ttk.Label(content, textvariable=self.vars["brightness_text"]).grid(row=3, column=3, sticky="w", pady=(6, 0))
-
-        ttk.Label(content, text="Contrast").grid(row=4, column=0, sticky="w", pady=(6, 0))
-        PillSlider(content, variable=self.vars["contrast"], from_=0.6, to=3.0, bg=self.C_PANEL).grid(
             row=4, column=1, columnspan=2, sticky="ew", padx=(6, 10), pady=(6, 0))
-        ttk.Label(content, textvariable=self.vars["contrast_text"]).grid(row=4, column=3, sticky="w", pady=(6, 0))
+        ttk.Label(content, textvariable=self.vars["brightness_text"]).grid(row=4, column=3, sticky="w", pady=(6, 0))
+
+        ttk.Label(content, text="Contrast").grid(row=5, column=0, sticky="w", pady=(6, 0))
+        PillSlider(content, variable=self.vars["contrast"], from_=0.6, to=3.0, bg=self.C_PANEL).grid(
+            row=5, column=1, columnspan=2, sticky="ew", padx=(6, 10), pady=(6, 0))
+        ttk.Label(content, textvariable=self.vars["contrast_text"]).grid(row=5, column=3, sticky="w", pady=(6, 0))
 
         threshold_label = ttk.Label(content, text="Mono threshold")
-        threshold_label.grid(row=5, column=0, sticky="w", pady=(6, 0))
+        threshold_label.grid(row=6, column=0, sticky="w", pady=(6, 0))
         threshold_scale = PillSlider(content, variable=self.vars["threshold"], from_=80, to=230, bg=self.C_PANEL)
-        threshold_scale.grid(row=5, column=1, columnspan=2, sticky="ew", padx=(6, 10), pady=(6, 0))
+        threshold_scale.grid(row=6, column=1, columnspan=2, sticky="ew", padx=(6, 10), pady=(6, 0))
         threshold_value = ttk.Label(content, textvariable=self.vars["threshold_text"])
-        threshold_value.grid(row=5, column=3, sticky="w", pady=(6, 0))
+        threshold_value.grid(row=6, column=3, sticky="w", pady=(6, 0))
         self.threshold_widgets = [threshold_label, threshold_scale, threshold_value]
         self.threshold_grid_options = {
-            threshold_label: {"row": 5, "column": 0, "sticky": "w", "pady": (6, 0)},
-            threshold_scale: {"row": 5, "column": 1, "columnspan": 2, "sticky": "ew", "padx": (6, 10), "pady": (6, 0)},
-            threshold_value: {"row": 5, "column": 3, "sticky": "w", "pady": (6, 0)},
+            threshold_label: {"row": 6, "column": 0, "sticky": "w", "pady": (6, 0)},
+            threshold_scale: {"row": 6, "column": 1, "columnspan": 2, "sticky": "ew", "padx": (6, 10), "pady": (6, 0)},
+            threshold_value: {"row": 6, "column": 3, "sticky": "w", "pady": (6, 0)},
         }
 
-        ttk.Label(content, text="Output").grid(row=6, column=0, sticky="w", pady=(6, 0))
+        ttk.Label(content, text="Output").grid(row=7, column=0, sticky="w", pady=(6, 0))
         output_row = tk.Frame(content, background=self.C_PANEL)
-        output_row.grid(row=6, column=1, columnspan=3, sticky="ew", padx=(6, 0), pady=(6, 0))
+        output_row.grid(row=7, column=1, columnspan=3, sticky="ew", padx=(6, 0), pady=(6, 0))
         output_row.columnconfigure(0, weight=1)
         ttk.Entry(output_row, textvariable=self.vars["output"]).grid(row=0, column=0, sticky="ew", padx=(0, 6))
         self.flat_button(output_row, "Browse", self.choose_output).grid(row=0, column=1, sticky="ew")
@@ -1286,7 +1304,10 @@ class DesktopApp(tk.Tk):
 
     def build_job(self) -> dict[str, Any]:
         bbox = self.current_map_bbox()
-        zooms = cli.parse_zooms(f"{self.vars['min_zoom'].get()}-{self.vars['max_zoom'].get()}")
+        zooms = [z for z in cli.parse_zooms(f"{self.vars['min_zoom'].get()}-{self.vars['max_zoom'].get()}")
+                 if z not in self.inkhud_omit_zooms]
+        if not zooms:
+            raise ValueError("No zoom levels selected — enable at least one zoom in Custom settings.")
         source = self.vars["source"].get()
         url_template = SOURCES.get(source, {}).get("url_template") or self.vars["url"].get().strip() or None
         return {
@@ -1370,6 +1391,48 @@ class DesktopApp(tk.Tk):
 
             y0 += bar_h + 5
 
+    def _on_zoom_range_changed(self) -> None:
+        if self._inkhud_custom_expanded and hasattr(self, "inkhud_zoom_toggles_frame"):
+            self._rebuild_inkhud_zoom_toggles()
+
+    def _toggle_inkhud_custom(self) -> None:
+        self._inkhud_custom_expanded = not self._inkhud_custom_expanded
+        if self._inkhud_custom_expanded:
+            self._rebuild_inkhud_zoom_toggles()
+            self.inkhud_zoom_toggles_frame.grid()
+        else:
+            self.inkhud_zoom_toggles_frame.grid_remove()
+
+    def _rebuild_inkhud_zoom_toggles(self) -> None:
+        for w in self.inkhud_zoom_toggles_frame.winfo_children():
+            w.destroy()
+        try:
+            min_z = int(self.vars["min_zoom"].get())
+            max_z = int(self.vars["max_zoom"].get())
+        except ValueError:
+            return
+        # Remove any omitted zooms that are no longer in range
+        self.inkhud_omit_zooms = {z for z in self.inkhud_omit_zooms if min_z <= z <= max_z}
+        ttk.Label(self.inkhud_zoom_toggles_frame, text="Include zooms:", style="Hint.TLabel").grid(
+            row=0, column=0, columnspan=max_z - min_z + 1, sticky="w", pady=(0, 2)
+        )
+        for col, z in enumerate(range(min_z, max_z + 1)):
+            var = tk.BooleanVar(value=(z not in self.inkhud_omit_zooms))
+            def on_toggle(zoom=z, v=var):
+                if not v.get():
+                    self.inkhud_omit_zooms.add(zoom)
+                else:
+                    self.inkhud_omit_zooms.discard(zoom)
+                self._inkhud_bytes_per_tile = None
+                self._inkhud_sample_job_key = None
+                self.update_inkhud_flash_bars()
+                self.draw_inkhud_coverage_overlay()
+            toggle = ToggleSwitch(self.inkhud_zoom_toggles_frame, variable=var, command=on_toggle, bg=self.C_PANEL)
+            toggle.grid(row=1, column=col, padx=(0, 4))
+            ttk.Label(self.inkhud_zoom_toggles_frame, text=f"z{z}", style="Hint.TLabel").grid(
+                row=2, column=col, padx=(0, 4)
+            )
+
     def update_inkhud_flash_bars(self) -> None:
         mode = self.vars["mode"].get()
         if mode == "inkhud":
@@ -1378,7 +1441,8 @@ class DesktopApp(tk.Tk):
                 max_zoom = int(self.vars["max_zoom"].get())
             except ValueError:
                 return
-            num_zooms = max(0, max_zoom - min_zoom + 1)
+            active_zooms = [z for z in range(min_zoom, max_zoom + 1) if z not in self.inkhud_omit_zooms]
+            num_zooms = len(active_zooms)
             g = int(self.vars["inkhud_grid"].get()[0])  # "4x4" -> 4
             total_tiles = num_zooms * g * g
             if self._inkhud_bytes_per_tile is not None:
@@ -1812,7 +1876,7 @@ class DesktopApp(tk.Tk):
         g = int(self.vars["inkhud_grid"].get()[0])
 
         # Anchor to max_zoom: snapping error is 0.5 tiles at max_zoom = tiny at coarser views.
-        for i, z in enumerate(range(min_zoom, max_zoom + 1)):
+        for i, z in enumerate(z for z in range(min_zoom, max_zoom + 1) if z not in self.inkhud_omit_zooms):
             gx0, gy0 = self._inkhud_grid_origin(self.map_center_lon, self.map_center_lat, z, g, anchor_z=max_zoom)
             gx1, gy1 = gx0 + g, gy0 + g
 
