@@ -1,16 +1,16 @@
 # E-ink Map Tiles
 
-Version 1.3.1
+Version 1.5.0
 
 Local-only desktop app for generating e-paper-friendly offline map tiles for InkHUD in the Meshtastic firmware repo. Runs on Windows (pre-built `.exe`) and Linux/macOS (from source).
 
-Exports normal XYZ tile folders with attribution and a manifest, and InkHUD firmware headers (`map_tile.h`) with LZ4-compressed column-major tiles ready for ESP32-S3 and nRF52840 targets.
+Exports normal XYZ tile folders with attribution and a manifest, and InkHUD firmware headers (`MapTile.h`) with LZ4-compressed column-major tiles ready for ESP32-S3 and nRF52840 targets.
 
 ## What It Does
 
 - Pan and zoom an interactive map preview with cursor-anchored scroll wheel zoom.
 - Export the visible map area as e-paper-ready PNG tiles rendered locally from OpenFreeMap vector data.
-- Export InkHUD firmware headers (`map_tile.h`) with LZ4-compressed tiles for direct inclusion in Meshtastic firmware.
+- Export InkHUD firmware headers (`MapTile.h`) with LZ4-compressed tiles for direct inclusion in Meshtastic firmware.
 - Configurable InkHUD grid sizes (2×2, 3×3, 4×4, 5×5, 6×6, 8×8) to fit flash budgets on nRF52840 and ESP32-S3.
 - InkHUD2 mode for sparse per-tile selection across multiple zoom levels.
 - Coverage overlay showing the exact tile footprint per zoom level before export.
@@ -112,7 +112,7 @@ Check **I will keep required map attribution with exported tiles** before export
 
 - `grayscale` — 8-bit grayscale PNGs.
 - `mono` — 1-bit black/white PNGs.
-- `inkhud` — Bayer-dithered 1-bit processing matching the InkHUD firmware pipeline. Brightness and contrast default to InkHUD values when sliders are unchanged. Use **⬡ Export for InkHUD** to generate `map_tile.h`.
+- `inkhud` — Bayer-dithered 1-bit processing matching the InkHUD firmware pipeline. Brightness and contrast default to InkHUD values when sliders are unchanged. Use **⬡ Export for InkHUD** to generate `MapTile.h`.
 - `inkhud2` — Same pipeline as `inkhud`, but tiles are selected individually by clicking on the map instead of using a fixed grid. Use **⬡ Export for InkHUD** to export the selected set.
 - `palette` — Indexed-color PNGs.
 - `original` — Rendered PNGs with no e-paper conversion.
@@ -152,7 +152,7 @@ The **Export** section contains:
 - **Export Tiles** — downloads and renders the tile bundle to the output folder.
 - **Folder** — opens the output folder.
 - **About** — license and attribution summary.
-- **⬡ Export for InkHUD** — generates `map_tile.h` for firmware inclusion.
+- **⬡ Export for InkHUD** — generates `MapTile.h` for firmware inclusion.
 - **Coverage** checkbox — draws solid per-zoom bounding boxes on the map preview showing the exact InkHUD tile footprint.
 - Progress bar and **Cancel** button (appear only while an export is running).
 - Export log showing downloaded tile paths and progress.
@@ -187,12 +187,12 @@ ATTRIBUTION.txt
 InkHUD exports save a single file to the chosen path:
 
 ```
-map_tile.h
+MapTile.h
 ```
 
 ## InkHUD Firmware Export
 
-**⬡ Export for InkHUD** generates a `map_tile.h` C header for direct inclusion in the Meshtastic firmware.
+**⬡ Export for InkHUD** generates a `MapTile.h` C header for direct inclusion in the Meshtastic firmware.
 
 ### Image pipeline
 
@@ -201,7 +201,7 @@ Before compression, each tile goes through the InkHUD image pipeline:
 1. Water detection — pixels where blue significantly exceeds red are forced black (water bodies render solid).
 2. Contrast and brightness adjustment using the configured slider values.
 3. Unsharp mask to sharpen edges before dithering.
-4. Bayer ordered dithering — pixels are quantized to three levels. Dark pixels (≤175) go solid black, mid-gray pixels (175–215) are dithered with a 4×4 Bayer matrix at a light gray level so they appear as a faint texture, and light pixels (>215) go solid white. The ordered pattern compresses better than error-diffusion dithering and produces the same result on both the preview and the e-ink display.
+4. 3-zone Bayer dithering — pixels ≤175 go solid black, pixels in 175–215 are dithered with a 4×4 Bayer matrix at level 220 (~8% black dots), and pixels >215 go solid white. When the Land layer is enabled, pixels in the 175–215 range are locked to the dither zone so parks and landcover never crush to solid black at high contrast settings. The ordered pattern compresses better than error-diffusion dithering and produces the same result on both the preview and the e-ink display.
 
 ### Tile format and compression
 
@@ -255,16 +255,18 @@ nRF52840 has approximately 85 KB available for tile data. ESP32-S3 has a much la
 - z12 2×2 + z13 2×2 + z14 4×4 ≈ 81 KB (3 zoom levels)
 - z13 4×4 + z14 4×4 ≈ 112 KB (fits ESP32-S3, tight for nRF)
 
-The flash bars in the Export panel show estimated usage. The estimate uses 45% of uncompressed size as a conservative upper bound based on real urban tile measurements.
+The flash bars in the Export panel show estimated usage. The estimate is computed by rendering and LZ4-compressing one real tile per zoom level at the center of the export area, then multiplying by the grid size. This gives an accurate prediction that reflects actual map content and contrast settings. The sample runs automatically in the background about one second after settings change.
 
 ### InkHUD vs InkHUD2
 
-Both modes use the same image pipeline and the same `map_tile.h` output format. The difference is in how tiles are selected:
+Both modes use the same image pipeline and the same `MapTile.h` output format. The difference is in how tiles are selected:
 
 - **InkHUD** — fixed grid centered on the map bullseye. Every zoom level exports the same grid size (e.g. 4×4) in a square around the center. Simple and predictable.
 - **InkHUD2** — click individual tiles on the map to build a sparse, non-contiguous set across any combination of zoom levels. Useful when you want dense coverage of a specific corridor or route at one zoom level and broader context tiles at another, without paying for a full uniform grid.
 
-**Coverage overlay** — enable the **Coverage** checkbox to see solid per-zoom bounding boxes on the preview showing the exact InkHUD tile footprint before exporting. The exported tiles match the overlay boxes exactly — what the overlay shows at each zoom level is what will be in `map_tile.h`.
+**Coverage overlay** — enable the **Coverage** checkbox to see solid per-zoom bounding boxes on the preview showing the exact InkHUD tile footprint before exporting. The exported tiles match the overlay boxes exactly — what the overlay shows at each zoom level is what will be in `MapTile.h`.
+
+**Custom zoom selection** — click **Custom** in the InkHUD export settings to reveal per-zoom toggles for every zoom level in the min–max range. Toggle individual zooms off to exclude them from the export. The flash size estimate and coverage overlay update immediately to reflect the active set.
 
 ## Markers
 
