@@ -2,7 +2,7 @@
 
 ---
 
-## Unreleased (since v1.3.1)
+## v1.5.0
 
 ### Map Rendering
 
