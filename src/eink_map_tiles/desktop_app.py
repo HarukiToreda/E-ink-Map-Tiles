@@ -1511,13 +1511,17 @@ class DesktopApp(tk.Tk):
 
         def worker():
             try:
-                bbox = cli.BBox(**job["bbox"])
                 g = int(self.vars["inkhud_grid"].get()[0])
                 total_bytes = 0
                 for z in job["zooms"]:
-                    tile = _center_tile(z, bbox)
-                    bytes_for_tile = _compress_tile(tile, job)
-                    total_bytes += bytes_for_tile * g * g
+                    origin_tile = _center_tile(z, cli.BBox(**job["bbox"]))
+                    x0 = origin_tile.x - g // 2
+                    y0 = origin_tile.y - g // 2
+                    n = 2 ** z
+                    for dx in range(g):
+                        for dy in range(g):
+                            tile = cli.Tile(z=z, x=max(0, min(n - 1, x0 + dx)), y=max(0, min(n - 1, y0 + dy)))
+                            total_bytes += _compress_tile(tile, job)
                 self.after(0, lambda: self._apply_inkhud_sample(key, total_bytes))
             except Exception:
                 pass
@@ -2171,6 +2175,8 @@ class DesktopApp(tk.Tk):
         zoom_specs = []
         eps = 1e-6
         for z in range(min_zoom, max_zoom + 1):
+            if z in self.inkhud_omit_zooms:
+                continue
             tx, ty = self._inkhud_grid_origin(clng, clat, z, g, anchor_z=max_zoom)
             tx, ty = int(tx), int(ty)
             n = 2**z
@@ -2189,7 +2195,7 @@ class DesktopApp(tk.Tk):
             messagebox.showerror("Cannot export", str(exc))
             return
         job["bbox"]   = zoom_specs[0]["bbox"]
-        job["zooms"]  = list(range(min_zoom, max_zoom + 1))
+        job["zooms"]  = [z for z in range(min_zoom, max_zoom + 1) if z not in self.inkhud_omit_zooms]
         job["layout"] = DESKTOP_TILE_LAYOUT
 
         # Ask where to save MapTile.h

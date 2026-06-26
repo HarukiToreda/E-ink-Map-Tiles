@@ -2,6 +2,18 @@
 
 ---
 
+## v1.4.1
+
+### Fixes
+
+**Flash size estimate now samples all tiles in the grid**
+- The estimate previously sampled only the center tile per zoom level and multiplied by the grid size. It now renders and compresses every tile in the g×g grid, so the estimate accurately reflects variation across the full export area instead of assuming all tiles are as simple as the center.
+
+**Excluded zoom levels are now respected during export**
+- Zoom levels toggled off via the Custom button were correctly excluded from the flash estimate and coverage overlay, but were still being exported to the firmware header. The export now honors the same active-zoom set used for the estimate.
+
+---
+
 ## v1.4.0
 
 ### Map Rendering
