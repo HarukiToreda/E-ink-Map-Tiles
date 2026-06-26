@@ -2408,14 +2408,13 @@ class DesktopApp(tk.Tk):
                     rgb = Image.new("RGB", (256, 256), (255, 255, 255))
                 self._draw_markers_on_tile(rgb, z, tx, ty)
                 bw = cli.inkhud_process(rgb, contrast, brightness, protect_land=protect_land)
-                arr = np.array(bw, dtype=np.uint8)  # shape (256, 256), 0=black 255=white
-                # Pack column-major: [bx=0..31][y=0..255], bit=px%8
+                arr = np.array(bw, dtype=np.uint8)  # (H=256, W=256), arr[y,x]
                 bits = (arr == 0).astype(np.uint8)  # 1 where black
-                # Reshape to (32, 8, 256) → pack bits across axis 1
-                cols_bits = bits.reshape(32, 8, 256)
+                # Transpose to (x, y) then reshape to (32 col-blocks, 8 bits, 256 rows)
+                bits_col = bits.T.reshape(32, 8, 256)  # bits_col[bx, bit, y]
                 shifts = np.array([1 << b for b in range(8)], dtype=np.uint8)
-                packed = (cols_bits * shifts[:, np.newaxis]).sum(axis=1).astype(np.uint8)  # (32, 256)
-                raw = packed.flatten().tolist()
+                packed = (bits_col * shifts[:, np.newaxis]).sum(axis=1).astype(np.uint8)  # (32, 256)
+                raw = packed.flatten().tolist()  # raw[bx*256 + y]
                 return (z, tx, ty, raw)
 
             self.messages.put(f"Rendering {total_tiles} tiles across {len(zoom_specs)} zoom(s)...\n")

@@ -9,6 +9,7 @@
 **InkHUD export is now much faster**
 - The export no longer downloads every tile in the full bounding box. It now fetches only the exact g×g tiles needed per selected zoom level, directly and in parallel across 8 threads. A 2×2 grid with 3 zooms goes from thousands of tile downloads to 12.
 - Bit-packing is now vectorized with numpy instead of a pure-Python pixel loop, giving a significant speedup for that step.
+- Fixed a transposition bug in the numpy bit-packing that caused tile pixel data to be scrambled in the exported header.
 
 ### Fixes
 
