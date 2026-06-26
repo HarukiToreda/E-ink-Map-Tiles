@@ -378,7 +378,6 @@ class DesktopApp(tk.Tk):
             "east": tk.StringVar(value="-66.000000"),
             "north": tk.StringVar(value="50.000000"),
             "search_query": tk.StringVar(value=""),
-            "search_status": tk.StringVar(value=""),
             "center_lat": tk.StringVar(value="39.500000"),
             "center_lon": tk.StringVar(value="-98.350000"),
             "radius_km": tk.StringVar(value="1500"),
@@ -391,8 +390,6 @@ class DesktopApp(tk.Tk):
             "threshold": tk.DoubleVar(value=cli.DEFAULT_THRESHOLD),
             "output": tk.StringVar(value=str(DEFAULT_OUTPUT_BASE / f"osm-eink-{timestamp}")),
             "tile_count": tk.StringVar(value="Estimate: not calculated"),
-            "preview_status": tk.StringVar(value="Loading preview..."),
-            "status": tk.StringVar(value="Ready"),
             "progress_text": tk.StringVar(value="No export running"),
             "progress_value": tk.DoubleVar(value=0),
             "brightness_text": tk.StringVar(value=f"{cli.DEFAULT_BRIGHTNESS:.2f}"),
@@ -844,7 +841,6 @@ class DesktopApp(tk.Tk):
             with urllib.request.urlopen(req, timeout=8) as resp:
                 results = _json.loads(resp.read())
             if not results:
-                self.vars["search_status"].set("No results found.")
                 return
             r = results[0]
             lat, lon = float(r["lat"]), float(r["lon"])
@@ -861,10 +857,9 @@ class DesktopApp(tk.Tk):
                 span = max(lat_span, lon_span)
                 zoom = max(4, min(14, int(_math.log2(360 / span)) - 1))
                 self.map_zoom = zoom
-            self.vars["search_status"].set(r.get("display_name", "").split(",")[0])
             self.schedule_preview()
-        except Exception as e:
-            self.vars["search_status"].set(f"Error: {e}")
+        except Exception:  # noqa: BLE001
+            pass
 
     def build_area(self, parent: ttk.Frame) -> ttk.LabelFrame:
         frame, content = self.collapsible_section(parent, "Area", "collapse_area")
@@ -972,12 +967,6 @@ class DesktopApp(tk.Tk):
             threshold_value: {"row": 6, "column": 3, "sticky": "w", "pady": (6, 0)},
         }
 
-        ttk.Label(content, text="Output").grid(row=7, column=0, sticky="w", pady=(6, 0))
-        output_row = tk.Frame(content, background=self.C_PANEL)
-        output_row.grid(row=7, column=1, columnspan=3, sticky="ew", padx=(6, 0), pady=(6, 0))
-        output_row.columnconfigure(0, weight=1)
-        ttk.Entry(output_row, textvariable=self.vars["output"]).grid(row=0, column=0, sticky="ew", padx=(0, 6))
-        self.flat_button(output_row, "Browse", self.choose_output).grid(row=0, column=1, sticky="ew")
         return frame
 
     def build_elements(self, parent: ttk.Frame) -> tuple[tk.Frame, ttk.Frame]:
@@ -1001,18 +990,6 @@ class DesktopApp(tk.Tk):
         self.flat_button(buttons, "All", lambda: self.set_all_elements(True), primary=True).grid(row=0, column=0, sticky="ew", padx=(0, 6))
         self.flat_button(buttons, "None", lambda: self.set_all_elements(False)).grid(row=0, column=1, sticky="ew", padx=(6, 0))
         return frame, content
-
-    def build_log(self, parent: ttk.Frame) -> ttk.LabelFrame:
-        frame = ttk.LabelFrame(parent, text="Output Log", padding=12)
-        frame.columnconfigure(0, weight=1)
-        frame.rowconfigure(1, weight=1)
-        ttk.Label(frame, textvariable=self.vars["tile_count"]).grid(row=0, column=0, sticky="w")
-        self.log = tk.Text(frame, height=12, wrap="word", font=("Consolas", 9))
-        self.log.grid(row=1, column=0, sticky="nsew", pady=(8, 0))
-        scroll = ttk.Scrollbar(frame, orient="vertical", command=self.log.yview)
-        scroll.grid(row=1, column=1, sticky="ns", pady=(8, 0))
-        self.log.configure(yscrollcommand=scroll.set)
-        return frame
 
     def build_preview(self, parent: ttk.Frame) -> ttk.LabelFrame:
         frame = tk.Frame(parent, background=self.C_PANEL,
@@ -1051,12 +1028,6 @@ class DesktopApp(tk.Tk):
         self.map_canvas.bind("<Configure>", lambda _event: self.schedule_preview())
         return frame
 
-    def resize_preview_status(self, event) -> None:
-        pass
-
-    def set_preview_status(self, text: str) -> None:
-        self.vars["preview_status"].set(text)
-
     def build_actions(self, parent: ttk.Frame) -> ttk.Frame:
         frame = self.section_frame(parent, "Export")
         content = ttk.Frame(frame, style="Card.TFrame", padding=(10, 0, 10, 8))
@@ -1068,10 +1039,8 @@ class DesktopApp(tk.Tk):
         self.flash_bars_canvas.grid(row=1, column=0, columnspan=4, sticky="ew", pady=(0, 4))
         self.flash_bars_canvas.grid_remove()
         self.flash_bars_canvas.bind("<Configure>", lambda _e: self.draw_flash_bars(None))
-        ttk.Label(content, textvariable=self.vars["status"], style="Hint.TLabel").grid(row=2, column=0, columnspan=4, sticky="ew", pady=(0, 6))
         self.export_button = self.flat_button(content, "Export Tiles", self.export_tiles, primary=True)
-        self.export_button.grid(row=2, column=0, columnspan=2, sticky="ew", padx=(0, 5))
-        self.flat_button(content, "Folder", self.open_output_folder).grid(row=2, column=2, sticky="ew", padx=5)
+        self.export_button.grid(row=2, column=0, columnspan=3, sticky="ew", padx=(0, 5))
         self.flat_button(content, "About", self.show_about_licenses).grid(row=2, column=3, sticky="ew", padx=(5, 0))
         self.inkhud_button = self.flat_button(content, "⬡ Export for InkHUD", self.export_for_inkhud)
         self.inkhud_button.grid(row=3, column=0, columnspan=3, sticky="ew", pady=(6, 0))
@@ -1212,7 +1181,6 @@ class DesktopApp(tk.Tk):
 
         self.map_zoom = new_zoom
         self.sync_view_area()
-        self.set_preview_status(f"Rendering export preview z{self.map_zoom}...")
         if self.preview_image is None:
             self.draw_preview_placeholder(f"Rendering export preview z{self.map_zoom}...")
         else:
@@ -1298,11 +1266,6 @@ class DesktopApp(tk.Tk):
             except tk.TclError:
                 pass
         self.preview_after_id = self.after(delay_ms, self.refresh_preview)
-
-    def choose_output(self) -> None:
-        selected = filedialog.askdirectory(initialdir=str(DEFAULT_OUTPUT_BASE))
-        if selected:
-            self.vars["output"].set(selected)
 
     def build_job(self) -> dict[str, Any]:
         bbox = self.current_map_bbox()
@@ -1550,8 +1513,6 @@ class DesktopApp(tk.Tk):
             return
         else:
             self.vars["tile_count"].set(f"Estimate: {tile_count:,} tiles across zooms {job['zooms'][0]}-{job['zooms'][-1]}")
-        self.vars["status"].set("Estimate updated")
-
         # Flash bars update only on explicit Estimate click (InkHUD/InkHUD2 bars use a separate live path)
         if update_bars and self.vars["mode"].get() not in ("inkhud", "inkhud2"):
             self.draw_flash_bars(tile_count * 256 * 256 // 8)
@@ -1571,7 +1532,6 @@ class DesktopApp(tk.Tk):
         self.preview_button.configure(state="disabled")
         self.preview_render_id += 1
         render_id = self.preview_render_id
-        self.set_preview_status(f"Rendering export preview z{self.map_zoom}...")
         self.preview_thread = threading.Thread(target=self.load_preview, args=(job, render_id), daemon=True)
         self.preview_thread.start()
 
@@ -1579,8 +1539,8 @@ class DesktopApp(tk.Tk):
         try:
             image = self.make_preview_image(job)
             self.after(0, lambda: self.show_preview_image(image, render_id))
-        except Exception as exc:  # noqa: BLE001 - report worker errors in GUI.
-            self.after(0, lambda: self.preview_failed(str(exc)))
+        except Exception:  # noqa: BLE001 - report worker errors in GUI.
+            self.after(0, self.preview_failed)
         finally:
             self.after(0, self.finish_preview_thread)
 
@@ -2039,12 +1999,10 @@ class DesktopApp(tk.Tk):
         self.draw_tile_selection_overlay()
         self.draw_inkhud_coverage_overlay()
         self.draw_markers_overlay()
-        self.set_preview_status(f"Export preview z{self.map_zoom}: matches downloaded tile rendering.")
 
-    def preview_failed(self, error: str) -> None:
+    def preview_failed(self) -> None:
         self.draw_preview_placeholder("Preview unavailable.\n\nCheck your internet connection, then click Refresh.")
         self.preview_image = None
-        self.set_preview_status(f"Preview failed: {error}")
 
     def center_lon(self, bbox: cli.BBox) -> float:
         if bbox.west <= bbox.east:
@@ -2055,7 +2013,6 @@ class DesktopApp(tk.Tk):
         if hasattr(self, "_cancel_event"):
             self._cancel_event.set()
         self.cancel_button.grid_remove()
-        self.vars["status"].set("Cancelling...")
 
     def export_tiles(self) -> None:
         if self.export_thread and self.export_thread.is_alive():
@@ -2067,7 +2024,12 @@ class DesktopApp(tk.Tk):
             messagebox.showerror("Cannot export", str(exc))
             return
 
-        output = Path(self.vars["output"].get()).expanduser()
+        initial = Path(self.vars["output"].get()).expanduser()
+        chosen = filedialog.askdirectory(title="Choose output folder", initialdir=str(initial) if initial.exists() else str(DEFAULT_OUTPUT_BASE))
+        if not chosen:
+            return
+        output = Path(chosen)
+        self.vars["output"].set(str(output))
         self.last_output = output
         self.log.delete("1.0", "end")
         self.log.grid()
@@ -2076,7 +2038,6 @@ class DesktopApp(tk.Tk):
         self.export_button.configure(state="disabled")
         self.progress_bar.grid()
         self.cancel_button.grid()
-        self.vars["status"].set("Exporting...")
         self.export_thread = threading.Thread(target=self.run_export, args=(job, output, self._cancel_event), daemon=True)
         self.export_thread.start()
 
@@ -2134,26 +2095,14 @@ class DesktopApp(tk.Tk):
             self.after(0, self.progress_bar.grid_remove)
 
     def finish_export_success(self) -> None:
-        self.vars["status"].set("Export complete")
         self.vars["progress_value"].set(self.export_total)
         self.vars["progress_text"].set(f"Complete: {self.export_total:,} tiles exported")
 
     def finish_export_cancelled(self) -> None:
-        self.vars["status"].set("Export cancelled")
         self.vars["progress_text"].set("Export cancelled")
 
     def finish_export_failed(self, error: str) -> None:
-        self.vars["status"].set("Export failed")
         self.vars["progress_text"].set(f"Export failed: {error}")
-
-    def open_output_folder(self) -> None:
-        path = self.last_output or Path(self.vars["output"].get()).expanduser()
-        folder = path if path.is_dir() else path.parent
-        folder.mkdir(parents=True, exist_ok=True)
-        try:
-            os.startfile(folder)  # type: ignore[attr-defined]
-        except OSError as exc:
-            messagebox.showerror("Open output folder failed", str(exc))
 
     def export_for_inkhud(self) -> None:
         if self.export_thread and self.export_thread.is_alive():
@@ -2225,7 +2174,6 @@ class DesktopApp(tk.Tk):
         self.export_button.configure(state="disabled")
         self.progress_bar.grid()
         self.cancel_button.grid()
-        self.vars["status"].set("Exporting for InkHUD...")
         self._last_zoom_specs = zoom_specs
         self.export_thread = threading.Thread(
             target=self._run_inkhud_export,
@@ -2290,7 +2238,6 @@ class DesktopApp(tk.Tk):
         self.export_button.configure(state="disabled")
         self.progress_bar.grid()
         self.cancel_button.grid()
-        self.vars["status"].set("Exporting for InkHUD2...")
         selected_snapshot = {z: set(tiles) for z, tiles in self.inkhud2_selected_tiles.items()}
         self.export_thread = threading.Thread(
             target=self._run_inkhud2_export,
@@ -2988,7 +2935,6 @@ class DesktopApp(tk.Tk):
             },
         }
         Path(path).write_text(json.dumps(session, indent=2), encoding="utf-8")
-        self.vars["status"].set(f"Session saved.")
 
     def load_session(self) -> None:
         import json
@@ -3047,7 +2993,6 @@ class DesktopApp(tk.Tk):
         self.refresh_marker_list()
         self.sync_view_area()
         self.schedule_preview(delay_ms=250)
-        self.vars["status"].set("Session loaded.")
 
     def poll_messages(self) -> None:
         while True:
