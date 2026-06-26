@@ -685,6 +685,7 @@ class DesktopApp(tk.Tk):
         if not apply_brightness and not apply_contrast:
             return
 
+        prev = self.applying_mode_defaults
         self.applying_mode_defaults = True
         try:
             if apply_brightness:
@@ -694,7 +695,7 @@ class DesktopApp(tk.Tk):
                 self.vars["contrast"].set(INKHUD_DEFAULT_CONTRAST)
                 self.contrast_user_changed = False
         finally:
-            self.applying_mode_defaults = False
+            self.applying_mode_defaults = prev
         self.update_slider_labels()
 
     def update_mode_sensitive_controls(self) -> None:
@@ -709,8 +710,9 @@ class DesktopApp(tk.Tk):
         if mode in ("inkhud", "inkhud2"):
             self.apply_inkhud_defaults_if_unchanged()
             self.vars["element_land"].set(False)
-            self.vars["min_zoom"].set("8")
-            self.vars["max_zoom"].set("13")
+            if not self.applying_mode_defaults:
+                self.vars["min_zoom"].set("8")
+                self.vars["max_zoom"].set("13")
         # InkHUD2: hide min/max zoom fields, show zoom checkboxes instead
         is_inkhud2 = mode == "inkhud2"
         for widget in getattr(self, "zoom_range_widgets", []):
@@ -2213,7 +2215,11 @@ class DesktopApp(tk.Tk):
 
         self.log.delete("1.0", "end")
         self.log.grid()
-        self.reset_export_progress(job)
+        inkhud_tile_count = len(zoom_specs) * g * g
+        self.export_total = inkhud_tile_count
+        self.vars["progress_value"].set(0)
+        self.progress_bar.configure(maximum=max(inkhud_tile_count, 1), mode="determinate")
+        self.vars["progress_text"].set(f"Exporting 0 / {inkhud_tile_count} tiles...")
         self._cancel_event = threading.Event()
         self.inkhud_button.configure(state="disabled")
         self.export_button.configure(state="disabled")
@@ -2380,47 +2386,62 @@ class DesktopApp(tk.Tk):
         max_zoom = zoom_specs[-1]["zoom"]
 
         try:
-            with tempfile.TemporaryDirectory(prefix="inkhud-export-") as temp_dir:
-                temp_out = Path(temp_dir)
-                writer = QueueWriter(self.messages)
-                # Download raw RGB tiles; inkhud_process handles all bw conversion itself
-                download_job = dict(job)
-                download_job["mode"] = "original"
-                download_job["brightness"] = 1.0
-                download_job["contrast"] = 1.0
-                with redirect_stdout(writer):
-                    exit_code = cli.download_tiles(
-                        download_job, temp_out, cancel_event=cancel_event,
-                        rate_limit=DESKTOP_RATE_LIMIT_SECONDS, print_fn=lambda s: writer.write(s + "\n"),
-                    )
-                if exit_code == 2:
-                    self.after(0, self.finish_export_cancelled)
-                    return
-                if exit_code:
-                    raise RuntimeError(f"Tile download failed (exit code {exit_code})")
+            import numpy as np
+            from concurrent.futures import ThreadPoolExecutor, as_completed as futures_as_completed
 
-                # Process each tile in the grid per zoom individually at full 256x256
-                tile_data: list[tuple[int, int, int, list[int]]] = []  # (zoom, tx, ty, raw)
+            protect_land = "land" in set(job.get("elements", {}).get("include", []))
+            contrast = float(job["contrast"])
+            brightness = float(job["brightness"])
+            include_elements = job.get("elements", {}).get("include", [])
+            total_tiles = sum(rows * cols for _ in zoom_specs)
+            completed_count = 0
+
+            def process_tile(z, tx, ty):
+                if cancel_event and cancel_event.is_set():
+                    return None
+                try:
+                    rgb = cli.render_openfreemap_image(
+                        cli.Tile(z=z, x=tx, y=ty), cli.DEFAULT_USER_AGENT, 30, 3,
+                        include_elements, style,
+                    )
+                except Exception:
+                    rgb = Image.new("RGB", (256, 256), (255, 255, 255))
+                self._draw_markers_on_tile(rgb, z, tx, ty)
+                bw = cli.inkhud_process(rgb, contrast, brightness, protect_land=protect_land)
+                arr = np.array(bw, dtype=np.uint8)  # shape (256, 256), 0=black 255=white
+                # Pack column-major: [bx=0..31][y=0..255], bit=px%8
+                bits = (arr == 0).astype(np.uint8)  # 1 where black
+                # Reshape to (32, 8, 256) → pack bits across axis 1
+                cols_bits = bits.reshape(32, 8, 256)
+                shifts = np.array([1 << b for b in range(8)], dtype=np.uint8)
+                packed = (cols_bits * shifts[:, np.newaxis]).sum(axis=1).astype(np.uint8)  # (32, 256)
+                raw = packed.flatten().tolist()
+                return (z, tx, ty, raw)
+
+            self.messages.put(f"Rendering {total_tiles} tiles across {len(zoom_specs)} zoom(s)...\n")
+            tile_data: list[tuple[int, int, int, list[int]]] = []
+            with ThreadPoolExecutor(max_workers=8) as executor:
+                future_map = {}
                 for spec in zoom_specs:
                     z = spec["zoom"]
                     x0, y0 = spec["tx"], spec["ty"]
                     for dy in range(rows):
                         for dx in range(cols):
                             tx, ty = x0 + dx, y0 + dy
-                            tile_path = temp_out / "tiles" / style / str(z) / str(tx) / f"{ty}.png"
-                            rgb = Image.open(tile_path).convert("RGB") if tile_path.exists() else Image.new("RGB", (256, 256), (255, 255, 255))
-                            self._draw_markers_on_tile(rgb, z, tx, ty)
-                            bw = cli.inkhud_process(rgb, float(job["contrast"]), float(job["brightness"]), protect_land="land" in set(job.get("elements", {}).get("include", [])))
-                            raw: list[int] = []
-                            for bx in range(32):
-                                for y in range(256):
-                                    byte = 0
-                                    for bit in range(8):
-                                        if bw.getpixel((bx * 8 + bit, y)) == 0:
-                                            byte |= 1 << bit
-                                    raw.append(byte)
-                            tile_data.append((z, tx, ty, raw))
-                    self.messages.put(f"  zoom {z}: {rows * cols} tiles, {rows * cols * 8192:,} bytes\n")
+                            future_map[executor.submit(process_tile, z, tx, ty)] = (z, tx, ty)
+
+                for future in futures_as_completed(future_map):
+                    if cancel_event and cancel_event.is_set():
+                        self.after(0, self.finish_export_cancelled)
+                        return
+                    result = future.result()
+                    if result is not None:
+                        tile_data.append(result)
+                    completed_count += 1
+                    self.messages.put(f"  {completed_count}/{total_tiles} tiles rendered\n")
+
+            # Sort to deterministic order: zoom asc, tx asc, ty asc
+            tile_data.sort(key=lambda t: (t[0], t[1], t[2]))
 
             header, total_bytes = self._build_tile_header(
                 tile_data, style, "InkHUD sparse export",
@@ -2947,14 +2968,19 @@ class DesktopApp(tk.Tk):
             "settings": {
                 k: self.vars[k].get()
                 for k in [
-                    "source", "min_zoom", "max_zoom", "mode", "style", "inkhud_grid",
+                    "source", "url",
+                    "min_zoom", "max_zoom", "mode", "style", "inkhud_grid",
                     "brightness", "contrast", "threshold",
                     "output",
+                    "center_lat", "center_lon", "radius_km",
                     "marker_icon", "marker_min_zoom", "marker_max_zoom", "marker_label_text", "marker_label_font_size",
                     "show_inkhud_coverage", "permission",
+                    "collapse_map_source", "collapse_area", "collapse_export_settings",
+                    "collapse_map_elements", "collapse_markers",
                 ]
             },
             "inkhud_omit_zooms": sorted(self.inkhud_omit_zooms),
+            "inkhud_custom_expanded": self._inkhud_custom_expanded,
             "elements": {e: bool(self.vars[f"element_{e}"].get()) for e in cli.MAP_ELEMENTS},
             "markers": self.markers,
             "inkhud2_selected_tiles": {
@@ -2982,25 +3008,41 @@ class DesktopApp(tk.Tk):
         self.map_center_lon = float(data.get("map_center_lon", self.map_center_lon))
         self.map_zoom = int(data.get("map_zoom", self.map_zoom))
         settings = data.get("settings", {})
-        for k in ["source", "min_zoom", "max_zoom", "mode", "style", "inkhud_grid",
-                  "output",
-                  "marker_icon", "marker_min_zoom", "marker_max_zoom", "marker_label_text", "marker_label_font_size"]:
-            if k in settings and k in self.vars:
-                self.vars[k].set(str(settings[k]))
-        for k in ["brightness", "contrast", "threshold"]:
-            if k in settings and k in self.vars:
-                self.vars[k].set(float(settings[k]))
-        for k in ["show_inkhud_coverage", "permission"]:
-            if k in settings and k in self.vars:
-                self.vars[k].set(bool(settings[k]))
-        for e in cli.MAP_ELEMENTS:
-            elems = data.get("elements", {})
-            if e in elems:
-                self.vars[f"element_{e}"].set(bool(elems[e]))
-        self.inkhud_omit_zooms = set(data.get("inkhud_omit_zooms", []))
-        self.markers = data.get("markers", [])
-        raw = data.get("inkhud2_selected_tiles", {})
-        self.inkhud2_selected_tiles = {int(z): {(tx, ty) for tx, ty in tiles} for z, tiles in raw.items()}
+        # Suppress mode-change callbacks that clobber zoom/element values during load
+        self.applying_mode_defaults = True
+        try:
+            for k in ["source", "url",
+                      "mode", "style", "inkhud_grid",
+                      "min_zoom", "max_zoom",
+                      "output",
+                      "center_lat", "center_lon", "radius_km",
+                      "marker_icon", "marker_min_zoom", "marker_max_zoom", "marker_label_text", "marker_label_font_size"]:
+                if k in settings and k in self.vars:
+                    self.vars[k].set(str(settings[k]))
+            for k in ["brightness", "contrast", "threshold"]:
+                if k in settings and k in self.vars:
+                    self.vars[k].set(float(settings[k]))
+            for k in ["show_inkhud_coverage", "permission",
+                      "collapse_map_source", "collapse_area", "collapse_export_settings",
+                      "collapse_map_elements", "collapse_markers"]:
+                if k in settings and k in self.vars:
+                    self.vars[k].set(bool(settings[k]))
+            for e in cli.MAP_ELEMENTS:
+                elems = data.get("elements", {})
+                if e in elems:
+                    self.vars[f"element_{e}"].set(bool(elems[e]))
+            self.inkhud_omit_zooms = set(data.get("inkhud_omit_zooms", []))
+            self._inkhud_custom_expanded = bool(data.get("inkhud_custom_expanded", False))
+            self.markers = data.get("markers", [])
+            raw = data.get("inkhud2_selected_tiles", {})
+            self.inkhud2_selected_tiles = {int(z): {(tx, ty) for tx, ty in tiles} for z, tiles in raw.items()}
+            # Rebuild UI that depends on the loaded values, still inside the guard
+            self.update_mode_sensitive_controls()
+            if self._inkhud_custom_expanded:
+                self._rebuild_inkhud_zoom_toggles()
+            self.update_inkhud_flash_bars()
+        finally:
+            self.applying_mode_defaults = False
         if self.marker_placing:
             self._exit_marker_placing()
         self.refresh_marker_list()

@@ -4,13 +4,20 @@
 
 ## v1.5.0
 
+### Performance
+
+**InkHUD export is now much faster**
+- The export no longer downloads every tile in the full bounding box. It now fetches only the exact g×g tiles needed per selected zoom level, directly and in parallel across 8 threads. A 2×2 grid with 3 zooms goes from thousands of tile downloads to 12.
+- Bit-packing is now vectorized with numpy instead of a pure-Python pixel loop, giving a significant speedup for that step.
+
 ### Fixes
 
-**Session save now includes all export settings**
-- Output folder path and Custom zoom toggle exclusions (omitted zoom levels) are now saved and restored with the session. Previously these were reset to defaults on load.
+**Session save and load now fully restores all settings**
+- Min/max zoom, Custom zoom toggle state (which zoom levels are included), output folder, map source URL, area center/radius, section collapse state, brightness, contrast, map elements, and markers are all saved and restored correctly.
+- Previously, loading a session while in InkHUD mode would reset min/max zoom to 8/13 due to a mode-change callback overwriting the restored values during load.
 
 **Flash size estimate now samples all tiles in the grid**
-- The estimate previously sampled only the center tile per zoom level and multiplied by the grid size. It now renders and compresses every tile in the g×g grid, so the estimate accurately reflects variation across the full export area instead of assuming all tiles are as simple as the center.
+- The estimate previously sampled only the center tile per zoom level and multiplied by the grid size. It now renders and compresses every tile in the g×g grid, giving an accurate prediction that reflects variation across the full export area.
 
 **Excluded zoom levels are now respected during export**
 - Zoom levels toggled off via the Custom button were correctly excluded from the flash estimate and coverage overlay, but were still being exported to the firmware header. The export now honors the same active-zoom set used for the estimate.
