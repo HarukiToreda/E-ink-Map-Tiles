@@ -2949,10 +2949,12 @@ class DesktopApp(tk.Tk):
                 for k in [
                     "source", "min_zoom", "max_zoom", "mode", "style", "inkhud_grid",
                     "brightness", "contrast", "threshold",
+                    "output",
                     "marker_icon", "marker_min_zoom", "marker_max_zoom", "marker_label_text", "marker_label_font_size",
                     "show_inkhud_coverage", "permission",
                 ]
             },
+            "inkhud_omit_zooms": sorted(self.inkhud_omit_zooms),
             "elements": {e: bool(self.vars[f"element_{e}"].get()) for e in cli.MAP_ELEMENTS},
             "markers": self.markers,
             "inkhud2_selected_tiles": {
@@ -2981,6 +2983,7 @@ class DesktopApp(tk.Tk):
         self.map_zoom = int(data.get("map_zoom", self.map_zoom))
         settings = data.get("settings", {})
         for k in ["source", "min_zoom", "max_zoom", "mode", "style", "inkhud_grid",
+                  "output",
                   "marker_icon", "marker_min_zoom", "marker_max_zoom", "marker_label_text", "marker_label_font_size"]:
             if k in settings and k in self.vars:
                 self.vars[k].set(str(settings[k]))
@@ -2994,6 +2997,7 @@ class DesktopApp(tk.Tk):
             elems = data.get("elements", {})
             if e in elems:
                 self.vars[f"element_{e}"].set(bool(elems[e]))
+        self.inkhud_omit_zooms = set(data.get("inkhud_omit_zooms", []))
         self.markers = data.get("markers", [])
         raw = data.get("inkhud2_selected_tiles", {})
         self.inkhud2_selected_tiles = {int(z): {(tx, ty) for tx, ty in tiles} for z, tiles in raw.items()}

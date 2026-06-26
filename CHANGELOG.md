@@ -6,6 +6,9 @@
 
 ### Fixes
 
+**Session save now includes all export settings**
+- Output folder path and Custom zoom toggle exclusions (omitted zoom levels) are now saved and restored with the session. Previously these were reset to defaults on load.
+
 **Flash size estimate now samples all tiles in the grid**
 - The estimate previously sampled only the center tile per zoom level and multiplied by the grid size. It now renders and compresses every tile in the g×g grid, so the estimate accurately reflects variation across the full export area instead of assuming all tiles are as simple as the center.
 
