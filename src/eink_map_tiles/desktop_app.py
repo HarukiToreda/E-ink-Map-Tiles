@@ -724,6 +724,13 @@ class DesktopApp(tk.Tk):
             else:
                 self.inkhud2_zoom_frame.grid_remove()
                 self.map_canvas.delete("tile-selection", "tile-grid")
+        # Show Grid row and Coverage toggle only in inkhud/inkhud2 mode
+        is_inkhud = mode in ("inkhud", "inkhud2")
+        for widget in [getattr(self, w, None) for w in ("grid_label", "grid_combo")]:
+            if widget:
+                widget.grid() if is_inkhud else widget.grid_remove()
+        if hasattr(self, "coverage_toggle"):
+            self.coverage_toggle.master.grid() if is_inkhud else self.coverage_toggle.master.grid_remove()
         # Show Custom zoom button only in inkhud mode
         if hasattr(self, "inkhud_custom_btn"):
             if mode == "inkhud":
@@ -734,10 +741,14 @@ class DesktopApp(tk.Tk):
                 if hasattr(self, "inkhud_zoom_toggles_frame"):
                     self.inkhud_zoom_toggles_frame.grid_remove()
                 self.inkhud_omit_zooms.clear()
-        # Update export button label
+        # Show/hide and label the InkHUD export button
         if hasattr(self, "inkhud_button"):
-            label = "⬡ Export for InkHUD2" if is_inkhud2 else "⬡ Export for InkHUD"
-            self.inkhud_button.configure(text=label)
+            if is_inkhud:
+                label = "⬡ Export for InkHUD2" if is_inkhud2 else "⬡ Export for InkHUD"
+                self.inkhud_button.configure(text=label)
+                self.inkhud_button.grid()
+            else:
+                self.inkhud_button.grid_remove()
         if hasattr(self, "flash_bars_canvas"):
             if mode in ("inkhud", "inkhud2"):
                 self.flash_bars_canvas.grid()
@@ -930,14 +941,21 @@ class DesktopApp(tk.Tk):
             state="readonly",
         ).grid(row=1, column=3, sticky="ew", padx=(6, 0), pady=(4, 0))
 
-        ttk.Label(content, text="Grid").grid(row=2, column=0, sticky="w", pady=(4, 0))
+        self.grid_label = ttk.Label(content, text="Grid")
+        self.grid_label.grid(row=2, column=0, sticky="w", pady=(4, 0))
         self.grid_combo = ttk.Combobox(
             content, textvariable=self.vars["inkhud_grid"],
-            values=["8x8", "6x6", "5x5", "4x4", "3x3", "2x2"], state="readonly",
+            values=["8x8", "6x6", "5x5", "4x4", "3x3", "2x2", "1x1"], state="readonly",
         )
         self.grid_combo.grid(row=2, column=1, sticky="w", padx=(6, 10), pady=(4, 0))
         self.inkhud_custom_btn = self.flat_button(content, "Custom", self._toggle_inkhud_custom)
-        self.inkhud_custom_btn.grid(row=2, column=2, columnspan=2, sticky="w", pady=(4, 0))
+        self.inkhud_custom_btn.grid(row=2, column=2, sticky="w", pady=(4, 0))
+        cov_frame = ttk.Frame(content, style="Card.TFrame")
+        cov_frame.grid(row=2, column=3, sticky="w", padx=(6, 0), pady=(4, 0))
+        self.coverage_toggle = ToggleSwitch(cov_frame, variable=self.vars["show_inkhud_coverage"],
+                                            command=self.draw_inkhud_coverage_overlay, bg=self.C_PANEL)
+        self.coverage_toggle.grid(row=0, column=0, padx=(0, 4))
+        ttk.Label(cov_frame, text="Coverage", style="Hint.TLabel").grid(row=0, column=1, sticky="w")
 
         # Per-zoom toggle frame (hidden by default)
         self.inkhud_zoom_toggles_frame = tk.Frame(content, background=self.C_PANEL)
@@ -1043,13 +1061,7 @@ class DesktopApp(tk.Tk):
         self.export_button.grid(row=2, column=0, columnspan=3, sticky="ew", padx=(0, 5))
         self.flat_button(content, "About", self.show_about_licenses).grid(row=2, column=3, sticky="ew", padx=(5, 0))
         self.inkhud_button = self.flat_button(content, "⬡ Export for InkHUD", self.export_for_inkhud)
-        self.inkhud_button.grid(row=3, column=0, columnspan=3, sticky="ew", pady=(6, 0))
-        cov_frame = ttk.Frame(content, style="Card.TFrame")
-        cov_frame.grid(row=3, column=3, sticky="ew", padx=(5, 0), pady=(6, 0))
-        self.coverage_toggle = ToggleSwitch(cov_frame, variable=self.vars["show_inkhud_coverage"],
-                                            command=self.draw_inkhud_coverage_overlay, bg=self.C_PANEL)
-        self.coverage_toggle.grid(row=0, column=0, padx=(0, 4))
-        ttk.Label(cov_frame, text="Coverage", style="Hint.TLabel").grid(row=0, column=1, sticky="w")
+        self.inkhud_button.grid(row=3, column=0, columnspan=4, sticky="ew", pady=(6, 0))
         self.progress_bar = ttk.Progressbar(content, variable=self.vars["progress_value"], maximum=1, mode="determinate")
         self.progress_bar.grid(row=4, column=0, columnspan=3, sticky="ew", pady=(8, 2))
         self.progress_bar.grid_remove()

@@ -1,6 +1,6 @@
 # E-ink Map Tiles
 
-Version 1.4.0
+Version 1.6.0
 
 Local-only desktop app for generating e-paper-friendly offline map tiles for InkHUD in the Meshtastic firmware repo. Runs on Windows (pre-built `.exe`) and Linux/macOS (from source).
 
@@ -11,7 +11,7 @@ Exports normal XYZ tile folders with attribution and a manifest, and InkHUD firm
 - Pan and zoom an interactive map preview with cursor-anchored scroll wheel zoom.
 - Export the visible map area as e-paper-ready PNG tiles rendered locally from OpenFreeMap vector data.
 - Export InkHUD firmware headers (`MapTile.h`) with LZ4-compressed tiles for direct inclusion in Meshtastic firmware.
-- Configurable InkHUD grid sizes (2×2, 3×3, 4×4, 5×5, 6×6, 8×8) to fit flash budgets on nRF52840 and ESP32-S3.
+- Configurable InkHUD grid sizes (1×1, 2×2, 3×3, 4×4, 5×5, 6×6, 8×8) to fit flash budgets on nRF52840 and ESP32-S3.
 - InkHUD2 mode for sparse per-tile selection across multiple zoom levels.
 - Coverage overlay showing the exact tile footprint per zoom level before export.
 - Flash usage bars showing how much of the available firmware flash the tiles will consume on ESP32-S3 and nRF52840.
@@ -58,8 +58,8 @@ pyinstaller EinkMapTiles-linux.spec
 2. Pan and zoom the map preview to your area of interest.
 3. Check the attribution checkbox in **Map Source**.
 4. In **Export Settings**, choose zoom range, mode, style, and grid size.
-5. Click **Export Tiles** for a normal PNG tile bundle, or **⬡ Export for InkHUD** for a firmware header.
-6. Click **Folder** when done to open the output directory.
+5. Click **Export Tiles** for a normal PNG tile bundle — a folder picker will open to choose where to save.
+6. In InkHUD/InkHUD2 mode, click **⬡ Export for InkHUD** to generate a firmware header.
 
 Tile count and flash estimates update automatically as you change settings.
 
@@ -103,7 +103,7 @@ Check **I will keep required map attribution with exported tiles** before export
 | Max zoom | 8 (13 in InkHUD/InkHUD2 mode) | |
 | Mode | `grayscale` | |
 | Style | `osm-eink` | |
-| Grid | `4×4` | InkHUD/InkHUD2 only. Options: 2×2, 3×3, 4×4, 5×5, 6×6, 8×8 |
+| Grid | `4×4` | InkHUD/InkHUD2 only. Options: 1×1, 2×2, 3×3, 4×4, 5×5, 6×6, 8×8 |
 | Brightness | 0.99 | InkHUD defaults to 0.96 |
 | Contrast | 1.15 | InkHUD defaults to 0.96 |
 | Mono threshold | 120 | `mono` mode only, hidden otherwise |
@@ -149,11 +149,10 @@ The **Export** section contains:
 
 - Tile count and flash estimate label (updates automatically as settings change).
 - Flash usage bars for ESP32-S3 and nRF52840 targets (shown in InkHUD/InkHUD2 mode). Bars turn yellow above 60% and red above 85%.
-- **Export Tiles** — downloads and renders the tile bundle to the output folder.
-- **Folder** — opens the output folder.
+- **Export Tiles** — opens a folder picker, then downloads and renders the tile bundle to the chosen folder.
 - **About** — license and attribution summary.
-- **⬡ Export for InkHUD** — generates `MapTile.h` for firmware inclusion.
-- **Coverage** checkbox — draws solid per-zoom bounding boxes on the map preview showing the exact InkHUD tile footprint.
+- **⬡ Export for InkHUD** — generates `MapTile.h` for firmware inclusion (shown in InkHUD/InkHUD2 mode only).
+- **Coverage** toggle — draws solid per-zoom bounding boxes on the map preview showing the exact InkHUD tile footprint (shown in InkHUD/InkHUD2 mode only, located in Export Settings next to the Custom button).
 - Progress bar and **Cancel** button (appear only while an export is running).
 - Export log showing downloaded tile paths and progress.
 - **Save Session** / **Load Session** — save and restore the full tool state to a JSON file.
@@ -243,6 +242,7 @@ The firmware decompresses tiles on demand into a 2-entry LRU cache using an inli
 
 | Grid | Tiles/zoom | Uncompressed | Typical LZ4 |
 |---|---|---|---|
+| 1×1 | 1 | 8 KB | ~4 KB |
 | 2×2 | 4 | 32 KB | ~15 KB |
 | 3×3 | 9 | 72 KB | ~32 KB |
 | 4×4 | 16 | 128 KB | ~56 KB |

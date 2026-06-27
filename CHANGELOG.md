@@ -2,6 +2,25 @@
 
 ---
 
+## v1.6.0
+
+### UI
+
+**Export panel cleaned up**
+- Removed Browse and Folder buttons. Export Tiles now opens a folder picker before starting so you choose where tiles go each time.
+- Output path field removed from Export Settings.
+- Status bar label removed.
+
+**InkHUD-only controls now hidden in other modes**
+- Grid size, Coverage toggle, Custom zoom button, and Export for InkHUD button are hidden when mode is not `inkhud` or `inkhud2`. They appear automatically when switching to an InkHUD mode.
+- Coverage toggle moved to the Export Settings Grid row, next to the Custom button.
+- Export for InkHUD button now spans the full width of the Export panel.
+
+**Grid sizes**
+- Added `1×1` grid option.
+
+---
+
 ## v1.5.0
 
 ### Performance
