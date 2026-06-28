@@ -69,7 +69,7 @@ The preview uses the same local vector renderer and e-paper conversion as export
 
 Controls:
 
-- **Search** — type any place name in the search bar and press Enter or click Search to jump the map there. Accepts city names, addresses, landmarks, national parks, mountains, lakes, zip codes, or any location OpenStreetMap recognizes. The map zooms automatically to fit the result.
+- **Search** — type a city, address, zip code, landmark, or any location in the search bar and press Enter or click Search to jump the map there. The map zooms automatically to fit the result.
 - **Drag** to pan.
 - **Scroll wheel** zooms in or out, re-centering on the cursor position.
 - **Refresh** re-renders the preview at the current view.
@@ -99,8 +99,8 @@ Check **I will keep required map attribution with exported tiles** before export
 
 | Setting | Default | Notes |
 |---|---|---|
-| Min zoom | 4 (8 in InkHUD/InkHUD2 mode) | |
-| Max zoom | 8 (13 in InkHUD/InkHUD2 mode) | |
+| Min zoom | 4 (11 in InkHUD/InkHUD2 mode) | |
+| Max zoom | 8 (15 in InkHUD/InkHUD2 mode) | |
 | Mode | `grayscale` | |
 | Style | `osm-eink` | |
 | Grid | `4×4` | InkHUD/InkHUD2 only. Options: 1×1, 2×2, 3×3, 4×4, 5×5, 6×6, 8×8 |
@@ -148,11 +148,11 @@ Buildings and POI are off by default to reduce clutter on e-paper.
 The **Export** section contains:
 
 - Tile count and flash estimate label (updates automatically as settings change).
-- Flash usage bars for ESP32-S3 and nRF52840 targets (shown in InkHUD/InkHUD2 mode). Bars turn yellow above 60% and red above 85%.
+- Flash usage bars for four InkHUD targets — ESP32-S3 16 MB, 8 MB, and 4 MB, plus nRF52840 1 MB (shown in InkHUD/InkHUD2 mode). Bars show "Calculating…" while sampling and turn yellow above 60%, red above 85%.
 - **Export Tiles** — opens a folder picker, then downloads and renders the tile bundle to the chosen folder.
 - **About** — license and attribution summary.
 - **⬡ Export for InkHUD** — generates `MapTile.h` for firmware inclusion (shown in InkHUD/InkHUD2 mode only).
-- **Coverage** toggle — draws solid per-zoom bounding boxes on the map preview showing the exact InkHUD tile footprint (shown in InkHUD/InkHUD2 mode only, located in Export Settings next to the Custom button).
+- **Coverage Boxes** toggle — draws solid per-zoom bounding boxes on the map preview showing the exact InkHUD tile footprint (shown in InkHUD/InkHUD2 mode only, located in Export Settings next to the Custom button; on by default when switching to InkHUD mode).
 - Progress bar and **Cancel** button (appear only while an export is running).
 - Export log showing downloaded tile paths and progress.
 - **Save Session** / **Load Session** — save and restore the full tool state to a JSON file.
@@ -250,10 +250,20 @@ The firmware decompresses tiles on demand into a 2-entry LRU cache using an inli
 | 6×6 | 36 | 288 KB | ~130 KB |
 | 8×8 | 64 | 512 KB | ~230 KB |
 
-nRF52840 has approximately 85 KB available for tile data. ESP32-S3 has a much larger flash budget and can accommodate 5×5, 6×6, or 8×8 grids comfortably. Example combinations that fit nRF52840:
+Flash available for tile data (based on real InkHUD builds):
 
-- z12 2×2 + z13 2×2 + z14 4×4 ≈ 81 KB (3 zoom levels)
-- z13 4×4 + z14 4×4 ≈ 112 KB (fits ESP32-S3, tight for nRF)
+| Target | Available |
+|---|---|
+| ESP32-S3 16 MB | ~4,150 KB (estimated) |
+| ESP32-S3 8 MB | ~1,011 KB (estimated) |
+| ESP32-S3 4 MB | ~54 KB (T3S3 build) |
+| nRF52840 1 MB | ~47 KB (L1 build) |
+
+Example combinations that fit nRF52840 (~47 KB budget):
+
+- z14 4×4 ≈ 56 KB — tight; use 3×3 per zoom or a single zoom level
+- z14 3×3 ≈ 32 KB — fits with room for a second zoom level
+- z13 2×2 + z14 3×3 ≈ 47 KB — two zoom levels at nRF budget
 
 The flash bars in the Export panel show estimated usage. The estimate is computed by rendering and LZ4-compressing one real tile per zoom level at the center of the export area, then multiplying by the grid size. This gives an accurate prediction that reflects actual map content and contrast settings. The sample runs automatically in the background about one second after settings change.
 
@@ -264,7 +274,7 @@ Both modes use the same image pipeline and the same `MapTile.h` output format. T
 - **InkHUD** — fixed grid centered on the map bullseye. Every zoom level exports the same grid size (e.g. 4×4) in a square around the center. Simple and predictable.
 - **InkHUD2** — click individual tiles on the map to build a sparse, non-contiguous set across any combination of zoom levels. Useful when you want dense coverage of a specific corridor or route at one zoom level and broader context tiles at another, without paying for a full uniform grid.
 
-**Coverage overlay** — enable the **Coverage** checkbox to see solid per-zoom bounding boxes on the preview showing the exact InkHUD tile footprint before exporting. The exported tiles match the overlay boxes exactly — what the overlay shows at each zoom level is what will be in `MapTile.h`.
+**Coverage Boxes** — enable the **Coverage Boxes** toggle (on by default in InkHUD mode) to see solid per-zoom bounding boxes on the preview showing the exact InkHUD tile footprint before exporting. The exported tiles match the overlay boxes exactly — what the overlay shows at each zoom level is what will be in `MapTile.h`.
 
 **Custom zoom selection** — click **Custom** in the InkHUD export settings to reveal per-zoom toggles for every zoom level in the min–max range. Toggle individual zooms off to exclude them from the export. The flash size estimate and coverage overlay update immediately to reflect the active set.
 

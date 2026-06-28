@@ -19,6 +19,31 @@
 **Grid sizes**
 - Added `1×1` grid option.
 
+**Custom zoom toggle wrapping**
+- Per-zoom toggles in the Custom panel now wrap to a new row after every 8 zoom levels so all toggles remain accessible when a wide zoom range is selected.
+
+**Flash usage bars**
+- Added flash bars for all InkHUD-relevant flash targets: ESP32-S3 4 MB, ESP32-S3 8 MB, ESP32-S3 16 MB, and nRF52840 1 MB.
+- Available flash figures are based on real InkHUD builds: 54,953 bytes free on a 4 MB ESP32-S3 (T3S3), 48,400 bytes free on nRF52840 (L1); 8 MB and 16 MB figures are estimated pending builds.
+- Bars show "Calculating…" while the background LZ4 sample is running instead of displaying a potentially wrong early estimate.
+
+**Coverage toggle**
+- Coverage is now on by default when switching to InkHUD or InkHUD2 mode.
+- Label changed to "Coverage / Boxes" stacked on two lines to fit the grid row without truncation.
+
+**InkHUD default zoom range changed to 11–15**
+- Switching to InkHUD or InkHUD2 mode now defaults to zoom 11–15 instead of 8–13, which better matches typical street-level use.
+
+**Section hints**
+- All collapsible sections and the Export panel now show a brief description next to their title so the purpose of each section is clear at a glance.
+
+**Search bar placeholder**
+- The map search bar now shows "City, address, zip code, landmark…" as placeholder text and clears on focus.
+
+**Markers icon grid**
+- Icons rearranged to 8 per row (2 rows of 8) to fill the available width without dead space.
+- Placement hint ("Click an icon, then click the map to place it at those coordinates.") shown below the icon grid, wrapping correctly at any panel width.
+
 ---
 
 ## v1.5.0

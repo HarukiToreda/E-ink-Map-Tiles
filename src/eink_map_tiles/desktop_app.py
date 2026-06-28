@@ -399,7 +399,7 @@ class DesktopApp(tk.Tk):
             "collapse_area": tk.BooleanVar(value=False),
             "collapse_export_settings": tk.BooleanVar(value=True),
             "collapse_map_elements": tk.BooleanVar(value=True),
-            "show_inkhud_coverage": tk.BooleanVar(value=False),
+            "show_inkhud_coverage": tk.BooleanVar(value=True),
             "inkhud_grid": tk.StringVar(value="4x4"),
             "marker_icon": tk.StringVar(value="parking"),
             "marker_min_zoom": tk.StringVar(value="14"),
@@ -484,16 +484,25 @@ class DesktopApp(tk.Tk):
                         bordercolor=self.C_BORDER, arrowcolor=self.C_MUTED)
         style.map("TScrollbar", background=[("active", self.C_BTN_HV)])
 
-    def section_frame(self, parent: tk.Misc, title: str) -> tk.Frame:
+    def section_frame(self, parent: tk.Misc, title: str, hint: str = "") -> tk.Frame:
         frame = tk.Frame(parent, background=self.C_PANEL,
                          highlightbackground=self.C_BORDER, highlightthickness=1, borderwidth=0)
         frame.columnconfigure(0, weight=1)
         hdr = tk.Frame(frame, background=self.C_PANEL)
         hdr.grid(row=0, column=0, sticky="ew")
+        hdr.columnconfigure(2, weight=1)
         accent = tk.Frame(hdr, background=self.C_ACCENT, width=3)
         accent.grid(row=0, column=0, sticky="ns", padx=(0, 8), pady=2)
         ttk.Label(hdr, text=title, style="Section.TLabel").grid(row=0, column=1, sticky="w", pady=(8, 6))
+        if hint:
+            ttk.Label(hdr, text=f"— {hint}", style="Hint.TLabel").grid(row=0, column=2, sticky="w", padx=(4, 0), pady=(8, 6))
         return frame
+
+    def _add_section_hint(self, frame: tk.Frame, text: str) -> None:
+        header = frame.winfo_children()[0]
+        header.columnconfigure(2, weight=0)
+        header.columnconfigure(3, weight=1)
+        ttk.Label(header, text=f"— {text}", style="Hint.TLabel").grid(row=0, column=3, sticky="w", padx=(4, 0), pady=(7, 5))
 
     def collapsible_section(self, parent: tk.Misc, title: str, variable_name: str) -> tuple[tk.Frame, ttk.Frame]:
         frame = tk.Frame(parent, background=self.C_PANEL,
@@ -706,10 +715,11 @@ class DesktopApp(tk.Tk):
         # InkHUD / InkHUD2 mode: uncheck Land so water renders through (matches export behavior)
         if mode in ("inkhud", "inkhud2"):
             self.apply_inkhud_defaults_if_unchanged()
+            self.vars["show_inkhud_coverage"].set(True)
             self.vars["element_land"].set(False)
             if not self.applying_mode_defaults:
-                self.vars["min_zoom"].set("8")
-                self.vars["max_zoom"].set("13")
+                self.vars["min_zoom"].set("11")
+                self.vars["max_zoom"].set("15")
         # InkHUD2: hide min/max zoom fields, show zoom checkboxes instead
         is_inkhud2 = mode == "inkhud2"
         for widget in getattr(self, "zoom_range_widgets", []):
@@ -810,6 +820,7 @@ class DesktopApp(tk.Tk):
 
     def build_source(self, parent: ttk.Frame) -> ttk.LabelFrame:
         frame, content = self.collapsible_section(parent, "Map Source", "collapse_map_source")
+        self._add_section_hint(frame, "where tile data comes from")
         content.columnconfigure(0, weight=1)
 
         source_combo = ttk.Combobox(
@@ -840,8 +851,9 @@ class DesktopApp(tk.Tk):
         return frame
 
     def search_location(self) -> None:
-        query = self.vars["search_query"].get().strip()
-        if not query:
+        raw = self.search_entry.get() if hasattr(self, "search_entry") else self.vars["search_query"].get()
+        query = raw.strip()
+        if not query or query == "City, address, zip code, landmark…":
             return
         import urllib.request, urllib.parse, json as _json
         url = "https://nominatim.openstreetmap.org/search?" + urllib.parse.urlencode({
@@ -874,6 +886,7 @@ class DesktopApp(tk.Tk):
 
     def build_area(self, parent: ttk.Frame) -> ttk.LabelFrame:
         frame, content = self.collapsible_section(parent, "Area", "collapse_area")
+        self._add_section_hint(frame, "map center and bounding box")
         content.columnconfigure(1, weight=1, uniform="halves")
         content.columnconfigure(3, weight=1, uniform="halves")
 
@@ -904,6 +917,7 @@ class DesktopApp(tk.Tk):
 
     def build_settings(self, parent: ttk.Frame) -> ttk.LabelFrame:
         frame, content = self.collapsible_section(parent, "Export Settings", "collapse_export_settings")
+        self._add_section_hint(frame, "zoom, mode, grid, and image options")
         content.columnconfigure(1, weight=1, uniform="halves")
         content.columnconfigure(3, weight=1, uniform="halves")
 
@@ -954,8 +968,9 @@ class DesktopApp(tk.Tk):
         cov_frame.grid(row=2, column=3, sticky="w", padx=(6, 0), pady=(4, 0))
         self.coverage_toggle = ToggleSwitch(cov_frame, variable=self.vars["show_inkhud_coverage"],
                                             command=self.draw_inkhud_coverage_overlay, bg=self.C_PANEL)
-        self.coverage_toggle.grid(row=0, column=0, padx=(0, 4))
-        ttk.Label(cov_frame, text="Coverage", style="Hint.TLabel").grid(row=0, column=1, sticky="w")
+        self.coverage_toggle.grid(row=0, column=0, rowspan=2, padx=(0, 4))
+        ttk.Label(cov_frame, text="Coverage", style="Hint.TLabel").grid(row=0, column=1, sticky="sw")
+        ttk.Label(cov_frame, text="Boxes", style="Hint.TLabel").grid(row=1, column=1, sticky="nw")
 
         # Per-zoom toggle frame (hidden by default)
         self.inkhud_zoom_toggles_frame = tk.Frame(content, background=self.C_PANEL)
@@ -989,6 +1004,7 @@ class DesktopApp(tk.Tk):
 
     def build_elements(self, parent: ttk.Frame) -> tuple[tk.Frame, ttk.Frame]:
         frame, content = self.collapsible_section(parent, "Map Elements", "collapse_map_elements")
+        self._add_section_hint(frame, "toggle which layers appear in tiles")
         element_columns = 3
         for column in range(element_columns):
             content.columnconfigure(column, weight=1)
@@ -1022,9 +1038,21 @@ class DesktopApp(tk.Tk):
         accent = tk.Frame(hdr, background=self.C_ACCENT, width=3)
         accent.grid(row=0, column=0, sticky="ns", padx=(0, 8), pady=2)
         ttk.Label(hdr, text="Map Preview", style="Section.TLabel").grid(row=0, column=1, sticky="w", pady=(6, 4), padx=(0, 10))
-        search_entry = ttk.Entry(hdr, textvariable=self.vars["search_query"])
-        search_entry.grid(row=0, column=2, sticky="ew", pady=(4, 2), padx=(0, 4))
-        search_entry.bind("<Return>", lambda _e: self.search_location())
+        _SEARCH_PLACEHOLDER = "City, address, zip code, landmark…"
+        self.search_entry = ttk.Entry(hdr, foreground=self.C_MUTED)
+        self.search_entry.insert(0, _SEARCH_PLACEHOLDER)
+        def _search_focus_in(_e):
+            if self.search_entry.get() == _SEARCH_PLACEHOLDER:
+                self.search_entry.delete(0, "end")
+                self.search_entry.configure(foreground=self.C_TEXT)
+        def _search_focus_out(_e):
+            if not self.search_entry.get().strip():
+                self.search_entry.configure(foreground=self.C_MUTED)
+                self.search_entry.insert(0, _SEARCH_PLACEHOLDER)
+        self.search_entry.bind("<FocusIn>", _search_focus_in)
+        self.search_entry.bind("<FocusOut>", _search_focus_out)
+        self.search_entry.grid(row=0, column=2, sticky="ew", pady=(4, 2), padx=(0, 4))
+        self.search_entry.bind("<Return>", lambda _e: self.search_location())
         self.flat_button(hdr, "Search", self.search_location).grid(row=0, column=3, pady=(4, 2), padx=(0, 4))
         self.flat_button(hdr, "-", lambda: self.zoom_map(-1), width=3).grid(row=0, column=4, padx=(0, 3), pady=(4, 2))
         self.flat_button(hdr, "+", lambda: self.zoom_map(1), width=3).grid(row=0, column=5, padx=3, pady=(4, 2))
@@ -1047,13 +1075,13 @@ class DesktopApp(tk.Tk):
         return frame
 
     def build_actions(self, parent: ttk.Frame) -> ttk.Frame:
-        frame = self.section_frame(parent, "Export")
+        frame = self.section_frame(parent, "Export", "tile count, flash estimate, and output")
         content = ttk.Frame(frame, style="Card.TFrame", padding=(10, 0, 10, 8))
         content.grid(row=1, column=0, sticky="ew")
         for column in range(4):
             content.columnconfigure(column, weight=1)
         ttk.Label(content, textvariable=self.vars["tile_count"], style="Hint.TLabel").grid(row=0, column=0, columnspan=4, sticky="ew", pady=(0, 2))
-        self.flash_bars_canvas = tk.Canvas(content, height=44, background=self.C_PANEL, highlightthickness=0)
+        self.flash_bars_canvas = tk.Canvas(content, height=80, background=self.C_PANEL, highlightthickness=0)
         self.flash_bars_canvas.grid(row=1, column=0, columnspan=4, sticky="ew", pady=(0, 4))
         self.flash_bars_canvas.grid_remove()
         self.flash_bars_canvas.bind("<Configure>", lambda _e: self.draw_flash_bars(None))
@@ -1309,14 +1337,18 @@ class DesktopApp(tk.Tk):
         }
 
     # Flash budgets: (available_for_tiles_bytes, label)
-    # ESP32-S3: app0 partition = 0x330000 (3,342,336 B), InkHUD firmware ~2.2 MB → ~1.1 MB free
-    # nRF52840: usable flash = 0xC6000 (811,008 B) after SoftDevice, firmware ~720 KB → ~88 KB free
+    # ESP32-S3 16 MB: app0 = 0x640000 (6,553,600 B), firmware size unknown → estimated
+    # ESP32-S3  8 MB: app0 = 0x330000 (3,342,336 B), firmware size unknown → estimated
+    # ESP32-S3  4 MB: app0 = 0x250000 (2,424,832 B), firmware = 2,369,879 B → 54,953 B free (T3S3 InkHUD build)
+    # nRF52840  1 MB: total = 815,104 B, firmware = 766,704 B → 48,400 B free (L1 InkHUD build)
     FLASH_TARGETS = [
-        (1_100_000, "ESP32-S3 (8 MB flash)"),
-        (  87_232,  "nRF52840 (1 MB flash)"),
+        (4_246_733, "ESP32-S3 (16 MB flash)"),  # estimated
+        (1_035_469, "ESP32-S3 (8 MB flash)"),   # estimated
+        (   54_953, "ESP32-S3 (4 MB flash)"),
+        (   48_400, "nRF52840 (1 MB flash)"),
     ]
 
-    def draw_flash_bars(self, tile_bytes: int | None = None, upper_bound: bool = False) -> None:
+    def draw_flash_bars(self, tile_bytes: int | None = None, upper_bound: bool = False, calculating: bool = False) -> None:
         c = self.flash_bars_canvas
         c.delete("all")
         w = c.winfo_width()
@@ -1325,13 +1357,15 @@ class DesktopApp(tk.Tk):
         if tile_bytes is None:
             tile_bytes = getattr(self, "_last_tile_bytes", None)
             upper_bound = getattr(self, "_last_tile_upper_bound", False)
+            calculating = getattr(self, "_last_tile_calculating", False)
         if tile_bytes is None:
             return
         self._last_tile_bytes = tile_bytes
         self._last_tile_upper_bound = upper_bound
+        self._last_tile_calculating = calculating
 
         bar_h = 14
-        label_w = 120
+        label_w = 140
         bar_w = w - label_w - 8
         y0 = 2
 
@@ -1346,11 +1380,14 @@ class DesktopApp(tk.Tk):
             else:
                 color = "#c0392b"
 
-            kb = tile_bytes / 1024
-            avail_kb = available / 1024
-            pct = (tile_bytes / available) * 100
-            bound_tag = "≤ " if upper_bound else ""
-            size_text = f"{bound_tag}{kb:.0f} / {avail_kb:.0f} KB ({bound_tag}{pct:.0f}%)"
+            if calculating:
+                size_text = "Calculating…"
+            else:
+                kb = tile_bytes / 1024
+                avail_kb = available / 1024
+                pct = (tile_bytes / available) * 100
+                bound_tag = "≤ " if upper_bound else ""
+                size_text = f"{bound_tag}{kb:.0f} / {avail_kb:.0f} KB ({bound_tag}{pct:.0f}%)"
 
             # Label left of bar
             c.create_text(0, y0 + bar_h // 2, anchor="w", text=label,
@@ -1390,10 +1427,13 @@ class DesktopApp(tk.Tk):
             return
         # Remove any omitted zooms that are no longer in range
         self.inkhud_omit_zooms = {z for z in self.inkhud_omit_zooms if min_z <= z <= max_z}
+        COLS_PER_ROW = 8
         ttk.Label(self.inkhud_zoom_toggles_frame, text="Include zooms:", style="Hint.TLabel").grid(
-            row=0, column=0, columnspan=max_z - min_z + 1, sticky="w", pady=(0, 2)
+            row=0, column=0, columnspan=COLS_PER_ROW, sticky="w", pady=(0, 2)
         )
-        for col, z in enumerate(range(min_z, max_z + 1)):
+        for idx, z in enumerate(range(min_z, max_z + 1)):
+            col = idx % COLS_PER_ROW
+            band = idx // COLS_PER_ROW
             var = tk.BooleanVar(value=(z not in self.inkhud_omit_zooms))
             def on_toggle(zoom=z, v=var):
                 if not v.get():
@@ -1405,9 +1445,9 @@ class DesktopApp(tk.Tk):
                 self.update_inkhud_flash_bars()
                 self.draw_inkhud_coverage_overlay()
             toggle = ToggleSwitch(self.inkhud_zoom_toggles_frame, variable=var, command=on_toggle, bg=self.C_PANEL)
-            toggle.grid(row=1, column=col, padx=(0, 4))
+            toggle.grid(row=1 + band * 2, column=col, padx=(0, 4))
             ttk.Label(self.inkhud_zoom_toggles_frame, text=f"z{z}", style="Hint.TLabel").grid(
-                row=2, column=col, padx=(0, 4)
+                row=2 + band * 2, column=col, padx=(0, 4)
             )
 
     def update_inkhud_flash_bars(self) -> None:
@@ -1421,14 +1461,13 @@ class DesktopApp(tk.Tk):
             active_zooms = [z for z in range(min_zoom, max_zoom + 1) if z not in self.inkhud_omit_zooms]
             num_zooms = len(active_zooms)
             g = int(self.vars["inkhud_grid"].get()[0])  # "4x4" -> 4
-            total_tiles = num_zooms * g * g
             if self._inkhud_bytes_per_tile is not None:
                 estimated = self._inkhud_bytes_per_tile
+                self.draw_flash_bars(estimated, upper_bound=True)
                 label = f"InkHUD: {num_zooms} zoom(s) {g}×{g} — ≈{estimated // 1024} KB"
             else:
-                estimated = int(total_tiles * 256 * 256 // 8 * 0.90)
-                label = f"InkHUD: {num_zooms} zoom(s) {g}×{g} — ≈{estimated // 1024} KB (sampling…)"
-            self.draw_flash_bars(estimated, upper_bound=True)
+                self.draw_flash_bars(0, calculating=True)
+                label = f"InkHUD: {num_zooms} zoom(s) {g}×{g} — calculating…"
             self.vars["tile_count"].set(label)
             self._schedule_inkhud_sample()
         elif mode == "inkhud2":
@@ -2434,14 +2473,15 @@ class DesktopApp(tk.Tk):
     def build_markers_section(self, parent: ttk.Frame) -> ttk.Frame:
         from PIL import Image as _Image, ImageTk
         frame, content = self.collapsible_section(parent, "Markers", "collapse_markers")
+        self._add_section_hint(frame, "custom icons & labels baked into map tiles")
         content.columnconfigure(0, weight=1)
 
         # Icon picker grid — click to select & enter placement mode
         picker = ttk.Frame(content, style="Card.TFrame")
-        picker.grid(row=0, column=0, sticky="ew", pady=(0, 4))
+        picker.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 4))
         self._icon_button_photos: dict[str, Any] = {}
         self._icon_buttons: dict[str, tk.Button] = {}
-        icons_per_row = 5
+        icons_per_row = 8
         for i, icon_name in enumerate(self.MARKER_ICONS):
             icon_pil = self._get_icon_image(icon_name)
             photo = ImageTk.PhotoImage(icon_pil.resize((24, 24), _Image.NEAREST))
@@ -2455,7 +2495,7 @@ class DesktopApp(tk.Tk):
 
         # Label text row
         label_row = ttk.Frame(content, style="Card.TFrame")
-        label_row.grid(row=1, column=0, sticky="ew", pady=(0, 4))
+        label_row.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(0, 4))
         ttk.Label(label_row, text="Label text:").grid(row=0, column=0, sticky="w", padx=(0, 6))
         ttk.Entry(label_row, textvariable=self.vars["marker_label_text"], width=14).grid(row=0, column=1, sticky="ew")
         ttk.Label(label_row, text="pt:").grid(row=0, column=2, padx=(6, 2))
@@ -2465,14 +2505,18 @@ class DesktopApp(tk.Tk):
 
         # Zoom range
         zoom_row = ttk.Frame(content, style="Card.TFrame")
-        zoom_row.grid(row=2, column=0, sticky="ew", pady=(0, 4))
+        zoom_row.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(0, 4))
         ttk.Label(zoom_row, text="Show at zoom:").grid(row=0, column=0, sticky="w", padx=(0, 6))
         ttk.Spinbox(zoom_row, textvariable=self.vars["marker_min_zoom"], from_=0, to=20, width=4).grid(row=0, column=1)
         ttk.Label(zoom_row, text="–").grid(row=0, column=2, padx=4)
         ttk.Spinbox(zoom_row, textvariable=self.vars["marker_max_zoom"], from_=0, to=20, width=4).grid(row=0, column=3)
 
-        self.marker_status_label = ttk.Label(content, text="Click an icon or Place Label, then click the map.", style="Hint.TLabel")
-        self.marker_status_label.grid(row=3, column=0, sticky="w", pady=(0, 4))
+        self.marker_status_label = ttk.Label(
+            content,
+            text="Click an icon, then click the map to place it at those coordinates.",
+            style="Hint.TLabel", wraplength=280, justify="left",
+        )
+        self.marker_status_label.grid(row=3, column=0, columnspan=2, sticky="w", pady=(0, 4))
 
         self.marker_list_frame = ttk.Frame(content, style="Card.TFrame")
         self.marker_list_frame.grid(row=4, column=0, sticky="ew")
@@ -2517,7 +2561,7 @@ class DesktopApp(tk.Tk):
             for btn in self._icon_buttons.values():
                 btn.configure(relief="flat")
         if hasattr(self, "marker_status_label"):
-            self.marker_status_label.configure(text="Click an icon or Place Label, then click the map.")
+            self.marker_status_label.configure(text="Click an icon, then click the map to place it at those coordinates.")
 
     def toggle_marker_placing(self) -> None:
         if self.marker_placing:
@@ -2643,7 +2687,7 @@ class DesktopApp(tk.Tk):
             self._dragging_marker = False
             self.map_canvas.configure(cursor="")
             if hasattr(self, "marker_status_label"):
-                self.marker_status_label.configure(text="Click an icon or Place Label, then click the map.")
+                self.marker_status_label.configure(text="Click an icon, then click the map to place it at those coordinates.")
             self._update_marker_list_display()
             self.draw_markers_overlay()
             return
