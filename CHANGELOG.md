@@ -2,6 +2,17 @@
 
 ---
 
+## v1.7.0
+
+### Fixes
+
+**Flash estimate no longer recalculates on preview zoom changes**
+- Pressing +/- or scrolling the map preview no longer triggers a new flash estimate when the map center and export settings are unchanged. The sample key now tracks map center coordinates instead of the view bounding box, so zooming the preview (which only changes what's visible, not where tiles are exported from) correctly hits the cache.
+- Fixed a logic error where the key check was evaluated after the cache was already cleared, causing redundant recalculations even on unchanged settings.
+- Any in-progress sample worker is now cancelled immediately when settings genuinely change, freeing the GIL and keeping the preview render responsive.
+
+---
+
 ## v1.6.0
 
 ### UI

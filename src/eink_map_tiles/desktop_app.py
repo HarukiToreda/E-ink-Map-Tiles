@@ -331,6 +331,7 @@ class DesktopApp(tk.Tk):
         self._inkhud_bytes_per_tile: int | None = None
         self._inkhud_sample_after_id: str | None = None
         self._inkhud_sample_job_key: tuple | None = None
+        self._inkhud_sample_cancel: "threading.Event | None" = None
         self.inkhud_omit_zooms: set[int] = set()
         self._inkhud_custom_expanded: bool = False
         self.preview_rendered_width: int = 0
@@ -1478,18 +1479,22 @@ class DesktopApp(tk.Tk):
             self.vars["tile_count"].set(f"InkHUD2: {total} tile(s) across {zoom_count} zoom(s) — ≈{estimated // 1024} KB (LZ4 est.)")
 
     def _schedule_inkhud_sample(self) -> None:
-        """Debounce: wait 900 ms after the last settings change, then sample one tile per zoom."""
+        """Debounce: wait 900 ms after the last settings change, then sample tiles for the flash estimate."""
         try:
             job = self.build_job()
             key = (tuple(job["zooms"]), self.vars["inkhud_grid"].get(),
-                   job.get("bbox", {}).get("west"), job.get("bbox", {}).get("north"),
+                   round(self.map_center_lat, 5), round(self.map_center_lon, 5),
                    job["contrast"], job["brightness"],
                    str(job.get("elements", {})))
         except Exception:
             return
         if key == self._inkhud_sample_job_key:
-            return  # settings unchanged, sample still valid
+            return  # same settings — cached or worker already running for this key
+        self._inkhud_sample_job_key = key
         self._inkhud_bytes_per_tile = None
+        # Cancel any running worker so it stops competing for the GIL
+        if self._inkhud_sample_cancel is not None:
+            self._inkhud_sample_cancel.set()
         if self._inkhud_sample_after_id:
             self.after_cancel(self._inkhud_sample_after_id)
         self._inkhud_sample_after_id = self.after(900, lambda: self._run_inkhud_sample(key, job))
@@ -1497,6 +1502,8 @@ class DesktopApp(tk.Tk):
     def _run_inkhud_sample(self, key: tuple, job: dict) -> None:
         import threading
         self._inkhud_sample_after_id = None
+        cancel = threading.Event()
+        self._inkhud_sample_cancel = cancel
 
         def _center_tile(zoom, bbox):
             import math as _math
@@ -1530,12 +1537,16 @@ class DesktopApp(tk.Tk):
                 g = int(self.vars["inkhud_grid"].get()[0])
                 total_bytes = 0
                 for z in job["zooms"]:
+                    if cancel.is_set():
+                        return
                     origin_tile = _center_tile(z, cli.BBox(**job["bbox"]))
                     x0 = origin_tile.x - g // 2
                     y0 = origin_tile.y - g // 2
                     n = 2 ** z
                     for dx in range(g):
                         for dy in range(g):
+                            if cancel.is_set():
+                                return
                             tile = cli.Tile(z=z, x=max(0, min(n - 1, x0 + dx)), y=max(0, min(n - 1, y0 + dy)))
                             total_bytes += _compress_tile(tile, job)
                 self.after(0, lambda: self._apply_inkhud_sample(key, total_bytes))
@@ -1545,8 +1556,7 @@ class DesktopApp(tk.Tk):
         threading.Thread(target=worker, daemon=True).start()
 
     def _apply_inkhud_sample(self, key: tuple, total_bytes: int) -> None:
-        self._inkhud_sample_job_key = key
-        self._inkhud_bytes_per_tile = total_bytes  # now stores total, not per-tile
+        self._inkhud_bytes_per_tile = total_bytes
         self.update_inkhud_flash_bars()
 
     def estimate_tiles(self, show_errors: bool = True, update_bars: bool = False) -> None:
