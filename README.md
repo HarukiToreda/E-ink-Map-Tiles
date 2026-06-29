@@ -4,6 +4,8 @@ Version 1.7.0
 
 Local-only desktop app for generating e-paper-friendly offline map tiles for InkHUD in the Meshtastic firmware repo. Runs on Windows (pre-built `.exe`) and Linux/macOS (from source).
 
+> **Also in this repo:** [InkHUD Firmware Builder](README-firmware-builder.md) — standalone Windows tool for building and flashing Meshtastic InkHUD firmware. Use both together: generate `MapTile.h` here, then flash it with the builder.
+
 Exports normal XYZ tile folders with attribution and a manifest, and InkHUD firmware headers (`MapTile.h`) with LZ4-compressed column-major tiles ready for ESP32-S3 and nRF52840 targets.
 
 ## What It Does
@@ -193,6 +195,11 @@ MapTile.h
 
 **⬡ Export for InkHUD** generates a `MapTile.h` C header for direct inclusion in the Meshtastic firmware.
 
+Once you have `MapTile.h`, you have two options to get it into firmware:
+
+- **[InkHUD Firmware Builder](README-firmware-builder.md)** *(recommended — no setup required)* — open `InkHUDBuilder.exe`, paste the path to your `MapTile.h`, select your device, and click **Build**. The tool handles everything: cloning the firmware repo, running PlatformIO, and optionally flashing to your device over USB.
+- **Build from source** — copy `MapTile.h` into `src/graphics/niche/InkHUD/Applets/Bases/Map/` inside your local [meshtastic/firmware](https://github.com/meshtastic/firmware) clone and run `pio run -e <your-env>`.
+
 ### Image pipeline
 
 Before compression, each tile goes through the InkHUD image pipeline:
@@ -318,6 +325,12 @@ Icons are drawn as white symbols on a black square. Text labels are drawn as bla
 - InkHUD2 selected tile set
 
 Use sessions to switch between different areas or projects without re-configuring everything from scratch.
+
+## Companion Tool — InkHUD Firmware Builder
+
+`InkHUDBuilder.exe` builds and flashes Meshtastic InkHUD firmware directly from the official repo. Point it at the `MapTile.h` this tool generates to bake your custom map tiles into firmware in one step. No Git, Python, or PlatformIO installation required.
+
+→ **[InkHUD Firmware Builder — full documentation](README-firmware-builder.md)**
 
 ## Legal Map Sources
 
