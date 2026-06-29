@@ -59,9 +59,9 @@ jobs:
       - name: Show build log on failure
         if: failure()
         run: |
-          if [ -f build/EinkMapTiles/warn-EinkMapTiles.txt ]; then
-            cat build/EinkMapTiles/warn-EinkMapTiles.txt
-          fi
+          for f in build/EinkMapTiles/warn-EinkMapTiles.txt build/InkHUDBuilder/warn-InkHUDBuilder.txt; do
+            if [ -f "$f" ]; then echo "=== $f ==="; cat "$f"; fi
+          done
         shell: bash
 
       - name: Rename artifact for platform clarity
