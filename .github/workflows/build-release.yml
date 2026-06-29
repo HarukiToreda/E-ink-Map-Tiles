@@ -44,11 +44,13 @@ jobs:
         run: |
           pip install --upgrade pip
           pip install -r requirements.txt
-          pip install pyinstaller
+          pip install pyinstaller pyserial
 
       - name: Build (Windows)
         if: runner.os == 'Windows'
-        run: pyinstaller EinkMapTiles.spec --noconfirm --log-level WARN
+        run: |
+          pyinstaller EinkMapTiles.spec --noconfirm --log-level WARN
+          pyinstaller InkHUDBuilder.spec --noconfirm --log-level WARN
 
       - name: Build (Linux/macOS)
         if: runner.os != 'Windows'
@@ -68,11 +70,18 @@ jobs:
           cp dist/${{ matrix.artifact_name }} upload/${{ matrix.asset_name }}
         shell: bash
 
+      - name: Upload InkHUD Builder (Windows only)
+        if: runner.os == 'Windows'
+        run: cp dist/InkHUDBuilder.exe upload/InkHUDBuilder-windows.exe
+        shell: bash
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.asset_name }}
-          path: upload/${{ matrix.asset_name }}
+          path: upload/
+
+
 
   release:
     needs: build
@@ -126,5 +135,6 @@ jobs:
           body: ${{ steps.changelog.outputs.notes }}
           files: |
             artifacts/EinkMapTiles-windows.exe
+            artifacts/InkHUDBuilder-windows.exe
             artifacts/EinkMapTiles-linux
             artifacts/EinkMapTiles-mac
