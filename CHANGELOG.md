@@ -4,6 +4,25 @@
 
 ## v1.7.0
 
+### New Tool — InkHUD Firmware Builder
+
+**`InkHUDBuilder.exe`** is a new standalone Windows companion tool for building and flashing Meshtastic InkHUD firmware. No Git, Python, PlatformIO, or VS Code installation required.
+
+- Downloads a portable Python environment and installs PlatformIO on first run, with a live log pane showing progress.
+- Clones and updates [meshtastic/firmware](https://github.com/meshtastic/firmware) automatically before each build.
+- Optionally copies a `MapTile.h` from the EinkMapTile Tool into the firmware repo before building.
+- Builds firmware for 14 supported InkHUD devices (6 ESP32-S3, 8 nRF52840) via PlatformIO.
+- **Build** compiles firmware; **Build + Flash** compiles and flashes in a single PlatformIO invocation with no double-build.
+- **Upload** flashes any previously built `.bin` directly via esptool — no rebuild. Automatically uses the `.factory.bin` (merged bootloader + partitions + app at `0x0`) matching the Meshtastic web flasher approach.
+- COM port dropdown shows USB device names alongside port numbers (e.g. `COM4 — USB-SERIAL CH340`).
+- Branch selector: `develop` (default) or `master`.
+- Clean button removes the full local cache to start fresh.
+
+### Docs
+
+- Added `README-firmware-builder.md` — standalone documentation for InkHUD Firmware Builder.
+- Updated `README.md` with a companion tool callout, cross-links, and next-step instructions after `MapTile.h` export pointing users to the builder.
+
 ### Fixes
 
 **Flash estimate no longer recalculates on preview zoom changes**
