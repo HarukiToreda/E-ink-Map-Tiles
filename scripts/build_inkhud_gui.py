@@ -75,7 +75,7 @@ def git_available() -> bool:
 
 
 def _download(url: str, dest: Path, progress_cb=None) -> None:
-    with urllib.request.urlopen(url) as resp:
+    with urllib.request.urlopen(url, timeout=60) as resp:
         total = int(resp.headers.get("Content-Length", 0))
         dest.parent.mkdir(parents=True, exist_ok=True)
         downloaded = 0
@@ -93,6 +93,10 @@ def _download(url: str, dest: Path, progress_cb=None) -> None:
 def setup_pio(log_cb, progress_cb):
     """Download portable Python, install pip, install platformio. Runs in a thread."""
     try:
+        # Wipe any partial previous install so read-only/locked files don't block us
+        if TOOLS_DIR.exists():
+            log_cb("Cleaning up previous (incomplete) install…", "warn")
+            _force_rmtree(TOOLS_DIR)
         TOOLS_DIR.mkdir(parents=True, exist_ok=True)
 
         # 1. Download Python embeddable
@@ -113,7 +117,7 @@ def setup_pio(log_cb, progress_cb):
         log_cb("── Step 2/4: Extracting Python ──", "step")
         progress_cb(0.35, "Extracting Python…")
         if PYTHON_DIR.exists():
-            shutil.rmtree(PYTHON_DIR)
+            _force_rmtree(PYTHON_DIR)
         with zipfile.ZipFile(py_zip, "r") as z:
             z.extractall(PYTHON_DIR)
         py_zip.unlink()
@@ -172,7 +176,7 @@ def setup_pio(log_cb, progress_cb):
 
     except Exception as exc:
         log_cb(f"Setup failed: {exc}", "fail")
-        return False
+        return str(exc)
 
 
 class SetupDialog(tk.Toplevel):
@@ -244,15 +248,15 @@ class SetupDialog(tk.Toplevel):
                 self.after(0, lambda l=label: self._status_var.set(l))
 
         def run():
-            ok = setup_pio(log, progress)
-            self.after(0, lambda: self._finish(ok))
+            result = setup_pio(log, progress)
+            self.after(0, lambda: self._finish(result))
 
         threading.Thread(target=run, daemon=True).start()
 
-    def _finish(self, ok: bool):
+    def _finish(self, result):
         self.grab_release()
         self.destroy()
-        self._on_done(ok)
+        self._on_done(result is True, result if result is not True else None)
 
 
 # ── Main app ───────────────────────────────────────────────────────────────
@@ -283,16 +287,17 @@ class BuilderApp(tk.Tk):
             self._upload_btn.configure(state="disabled")
             SetupDialog(self, self._on_setup_done)
 
-    def _on_setup_done(self, ok: bool):
+    def _on_setup_done(self, ok: bool, error: str | None = None):
         if ok:
             self._build_btn.configure(state="normal")
             self._upload_btn.configure(state="normal")
             self._update_setup_status()
             self._emit("PlatformIO ready. Select a target and MapTile.h to begin.", "ok")
         else:
-            self._emit("Setup failed. Check your internet connection and try again.", "fail")
+            detail = f"\n\nError: {error}" if error else ""
+            self._emit(f"Setup failed: {error or 'unknown error'}", "fail")
             messagebox.showerror("Setup failed",
-                                 "Could not install PlatformIO.\n"
+                                 f"Could not install PlatformIO.{detail}\n\n"
                                  "Check your internet connection and restart the app.")
 
     # ── Styles ────────────────────────────────────────────────────────────
@@ -556,7 +561,7 @@ class BuilderApp(tk.Tk):
         if not messagebox.askyesno("Clean all", msg):
             return
         try:
-            shutil.rmtree(APP_DATA, ignore_errors=True)
+            _force_rmtree(APP_DATA)
         except Exception as exc:
             messagebox.showerror("Error", f"Could not remove {APP_DATA}:\n{exc}")
             return
