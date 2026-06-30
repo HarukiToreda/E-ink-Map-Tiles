@@ -142,7 +142,8 @@ def setup_pio(log_cb, progress_cb):
         )
         get_pip.unlink()
         if result.returncode != 0:
-            raise RuntimeError(result.stderr.strip() or "pip install failed")
+            out = (result.stdout or result.stderr or "").strip()
+            raise RuntimeError(f"get-pip failed (exit {result.returncode}):\n{out}")
         log_cb("  pip installed.", "ok")
 
         # 4. Install PlatformIO
@@ -156,6 +157,18 @@ def setup_pio(log_cb, progress_cb):
         pio_env["PYTHONNOUSERSITE"] = "1"
         pio_env.pop("PYTHONPATH", None)
         pio_env.pop("PYTHONUSERBASE", None)
+        # setuptools and wheel must be present before pip can build anything
+        log_cb("  Installing setuptools + wheel…", "warn")
+        pre = subprocess.run(
+            [str(PIP_EXE), "install", "setuptools", "wheel",
+             "--prefix", str(PYTHON_DIR), "--no-warn-script-location"],
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+            env=pio_env, creationflags=subprocess.CREATE_NO_WINDOW,
+        )
+        if pre.returncode != 0:
+            raise RuntimeError(f"setuptools install failed:\n{pre.stdout.strip()[-600:]}")
+        log_cb("  setuptools + wheel installed.", "ok")
+
         proc = subprocess.Popen(
             [str(PIP_EXE), "install", "platformio", "esptool",
              "--prefix", str(PYTHON_DIR),
@@ -163,13 +176,16 @@ def setup_pio(log_cb, progress_cb):
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
             env=pio_env, creationflags=subprocess.CREATE_NO_WINDOW,
         )
+        pip_lines = []
         for line in proc.stdout:
             line = line.rstrip()
             if line:
+                pip_lines.append(line)
                 log_cb(f"  {line}")
         proc.wait()
         if proc.returncode != 0:
-            raise RuntimeError("PlatformIO install failed")
+            tail = "\n".join(pip_lines[-8:]) if pip_lines else "(no output)"
+            raise RuntimeError(f"pip install failed (exit {proc.returncode}):\n{tail}")
         progress_cb(1.0, "Setup complete.")
         log_cb("── Setup complete. PlatformIO is ready. ──", "ok")
         return True
@@ -271,6 +287,7 @@ class BuilderApp(tk.Tk):
 
         self._build_thread: threading.Thread | None = None
         self._cancel_flag = threading.Event()
+        self._pio_proc: subprocess.Popen | None = None
         self._log_queue: queue.Queue[tuple[str, str]] = queue.Queue()
         self._selected_target: dict | None = None
 
@@ -420,6 +437,7 @@ class BuilderApp(tk.Tk):
         flash_frame = ttk.Frame(self, style="Panel.TFrame", padding=(10, 8))
         flash_frame.grid(row=2, column=0, sticky="ew", padx=10, pady=(0, 4))
         flash_frame.columnconfigure(1, weight=1)
+        flash_frame.columnconfigure(3, weight=2)
 
         self._upload_var = tk.BooleanVar(value=False)
         ttk.Checkbutton(flash_frame, text="Flash after build",
@@ -430,13 +448,10 @@ class BuilderApp(tk.Tk):
         self._port_label.grid(row=0, column=2, sticky="e", padx=(20, 6))
         self._port_var = tk.StringVar()
         self._port_combo = ttk.Combobox(flash_frame, textvariable=self._port_var,
-                                        state="readonly", width=28)
-        self._port_combo.grid(row=0, column=3, sticky="e")
+                                        state="readonly", width=38)
+        self._port_combo.grid(row=0, column=3, sticky="ew")
         self._refresh_btn = self._btn(flash_frame, "↻", self._refresh_ports, small=True)
         self._refresh_btn.grid(row=0, column=4, padx=(6, 0))
-        self._port_label.grid_remove()
-        self._port_combo.grid_remove()
-        self._refresh_btn.grid_remove()
 
         # Actions
         actions = ttk.Frame(self, padding=(10, 4))
@@ -582,9 +597,7 @@ class BuilderApp(tk.Tk):
         self._selected_target = self._combo_targets.get(val)
 
     def _on_upload_toggle(self):
-        show = self._upload_var.get()
-        for w in (self._port_label, self._port_combo, self._refresh_btn):
-            w.grid() if show else w.grid_remove()
+        pass
 
     def _selected_port(self) -> str:
         """Return the raw COM port string (e.g. 'COM4') for the current dropdown selection."""
@@ -712,6 +725,7 @@ class BuilderApp(tk.Tk):
         log_dir = out_dir / "logs"
         log_dir.mkdir(parents=True, exist_ok=True)
 
+        self._kill_pio()
         self._cancel_flag.clear()
         self._build_btn.configure(state="disabled")
         self._upload_btn.configure(state="disabled")
@@ -879,6 +893,7 @@ class BuilderApp(tk.Tk):
 
     def _cancel_build(self):
         self._cancel_flag.set()
+        self._kill_pio()
         self._cancel_btn.configure(state="disabled")
         self._status_var.set("Cancelling…")
 
@@ -983,17 +998,34 @@ class BuilderApp(tk.Tk):
             fixed = True
         return fixed
 
+    def _kill_pio(self):
+        """Kill the running PlatformIO process tree (terminates esptool children too)."""
+        proc = self._pio_proc
+        if proc and proc.poll() is None:
+            try:
+                subprocess.run(
+                    ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                    capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW,
+                )
+            except Exception:
+                proc.terminate()
+        self._pio_proc = None
+
     def _run_pio(self, extra_args: list[str], cwd: Path, log_file: Path) -> int:
         cmd = [str(PYTHON_EXE), "-m", "platformio", "run"] + extra_args
+        pio_env = os.environ.copy()
+        pio_env["PYTHONIOENCODING"] = "utf-8"
+        pio_env["PYTHONUTF8"] = "1"
         for attempt in range(2):
             try:
                 with open(log_file, "w", encoding="utf-8") as fh:
                     proc = subprocess.Popen(
-                        cmd, cwd=cwd,
+                        cmd, cwd=cwd, env=pio_env,
                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                         text=True, encoding="utf-8", errors="replace",
-                        creationflags=subprocess.CREATE_NO_WINDOW,
+                        creationflags=subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP,
                     )
+                    self._pio_proc = proc
                     log_lines = []
                     for line in proc.stdout:
                         line = line.rstrip()
@@ -1003,9 +1035,10 @@ class BuilderApp(tk.Tk):
                         if line:
                             self._emit(line, "muted")
                         if self._cancel_flag.is_set():
-                            proc.terminate()
+                            self._kill_pio()
                             return -1
                     proc.wait()
+                    self._pio_proc = None
                 if proc.returncode != 0 and attempt == 0:
                     # Check for missing pyyaml in espidf venv
                     log_text = "\n".join(log_lines)
