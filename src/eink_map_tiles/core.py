@@ -653,6 +653,18 @@ def label_priority(properties: dict, z: int) -> int:
     }.get(label_class, 5)
 
 
+# OpenMapTiles POI classes that get a medical cross instead of the generic dot.
+MEDICAL_POI_CLASSES = {"hospital", "pharmacy", "doctors", "dentist"}
+
+
+def draw_medical_cross(draw, x: int, y: int) -> None:
+    """Draw a small monochrome '+' with a white halo for contrast."""
+    draw.line([(x - 3, y), (x + 3, y)], fill="#ffffff", width=3)
+    draw.line([(x, y - 3), (x, y + 3)], fill="#ffffff", width=3)
+    draw.line([(x - 3, y), (x + 3, y)], fill="#111111", width=1)
+    draw.line([(x, y - 3), (x, y + 3)], fill="#111111", width=1)
+
+
 def draw_pois(draw, data: dict, z: int, font) -> None:
     if z < 13:
         return
@@ -664,11 +676,15 @@ def draw_pois(draw, data: dict, z: int, font) -> None:
         point = representative_point(geometry)
         if not point:
             continue
-        name = label_text(feature.get("properties", {}))
+        properties = feature.get("properties", {})
+        name = label_text(properties)
         if not name:
             continue
         x, y = scale_point(point)
-        draw.ellipse([x - 2, y - 2, x + 2, y + 2], fill="#111111", outline="#ffffff")
+        if properties.get("class") in MEDICAL_POI_CLASSES:
+            draw_medical_cross(draw, x, y)
+        else:
+            draw.ellipse([x - 2, y - 2, x + 2, y + 2], fill="#111111", outline="#ffffff")
         draw_readable_text(draw, (x + 4, y - 5), name, font, fill="#111111", stroke_width=2)
         labels_drawn += 1
 

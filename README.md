@@ -289,7 +289,7 @@ Both modes use the same image pipeline and the same `MapTile.h` output format. T
 
 The **Markers** section lets you place custom icons on the map that are baked directly into the exported tile images. No firmware changes are needed — the firmware sees them as normal tile pixels.
 
-**Available icons:** Parking, Sun, Star, Home, Fish, Bridge, Picnic, Bathroom, Binoculars, Hunting, Tent, RV, Tree, Group, Car, Campfire
+**Available icons:** Parking, Sun, Star, Home, Fish, Bridge, Picnic, Bathroom, Binoculars, Hunting, Tent, RV, Tree, Group, Car, Campfire, Hospital
 
 **How to place an icon marker:**
 1. Set the zoom range — the marker will only appear in tiles at those zoom levels.

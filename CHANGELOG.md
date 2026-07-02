@@ -4,6 +4,11 @@
 
 ## v1.7.0
 
+### Hospital cross icon
+
+- POI markers (auto-detected from map data) now draw a "+" cross instead of a dot for hospitals, clinics, doctors, dentists, and pharmacies.
+- Added a matching "Hospital" icon to the Markers panel for manually placing a cross anywhere on the map.
+
 ### New Tool — InkHUD Firmware Builder
 
 **`InkHUDBuilder.exe`** is a new standalone Windows companion tool for building and flashing Meshtastic InkHUD firmware. No Git, Python, PlatformIO, or VS Code installation required.

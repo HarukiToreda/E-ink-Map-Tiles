@@ -2478,7 +2478,7 @@ class DesktopApp(tk.Tk):
     # ── Markers ──────────────────────────────────────────────────────────────
 
     MARKER_ICONS = ["parking", "sun", "star", "home", "fish", "bridge", "picnic", "bathroom", "binoculars", "hunting",
-                    "tent", "rv", "tree", "group", "car", "campfire"]
+                    "tent", "rv", "tree", "group", "car", "campfire", "hospital"]
 
     def build_markers_section(self, parent: ttk.Frame) -> ttk.Frame:
         from PIL import Image as _Image, ImageTk
@@ -2897,6 +2897,9 @@ class DesktopApp(tk.Tk):
             # Flame: teardrop polygon
             d.polygon([(7, 2), (4, 7), (5, 10), (9, 10), (10, 7)], fill=W)
             d.polygon([(7, 5), (6, 8), (8, 8)], fill=B)  # inner dark core
+        elif name == "hospital":
+            d.rectangle([6, 2, 9, 13], fill=W)   # vertical bar
+            d.rectangle([2, 6, 13, 9], fill=W)   # horizontal bar
         self._icon_cache[name] = img
         return img
 
