@@ -25,6 +25,11 @@
 
 ### Fixes
 
+**InkHUD Firmware Builder no longer depends on (or corrupts) ambient system installs**
+- The builder used to inherit the system's `PLATFORMIO_CORE_DIR` when set (e.g. by VSCode's PlatformIO extension), silently reading and writing a shared, externally-owned PlatformIO package cache instead of its own isolated one — and "Clean all" had no way to know that cache existed, so it never actually cleaned up after itself. PlatformIO's core dir is now always pinned to `%APPDATA%\InkHUDBuilder\core`, so the app never touches anything it didn't create, and Clean all now removes 100% of what it installs.
+- Builds silently failed to install esptool (`idf_tools.py`, `ERROR: MSys/Mingw is not supported`) whenever the app was launched from a Git Bash/MSYS2 shell, because `MSYSTEM` was being forwarded into the PlatformIO subprocess unfiltered. It's now stripped before every `pio` invocation.
+- Switched first-run setup from Python's official installer to a portable, no-installer Python distribution ([python-build-standalone](https://github.com/astral-sh/python-build-standalone)). The MSI installer approach failed with exit 1638 ("another version of this product is already installed") on any machine that already had a matching Python 3.12.x installed — extremely common — because Windows Installer blocks parallel installs of the same product version regardless of target directory. The new distribution has zero registry/Windows Installer footprint, so "Clean all" is a plain folder delete with nothing left behind.
+
 **Flash estimate no longer recalculates on preview zoom changes**
 - Pressing +/- or scrolling the map preview no longer triggers a new flash estimate when the map center and export settings are unchanged. The sample key now tracks map center coordinates instead of the view bounding box, so zooming the preview (which only changes what's visible, not where tiles are exported from) correctly hits the cache.
 - Fixed a logic error where the key check was evaluated after the cache was already cleared, causing redundant recalculations even on unchanged settings.

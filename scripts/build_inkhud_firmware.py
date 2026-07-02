@@ -12,6 +12,7 @@ Usage:
 """
 
 import argparse
+import os
 import shutil
 import subprocess
 import sys
@@ -192,6 +193,13 @@ def build_env(pio: str, firmware_root: Path, env: str, label: str, log_dir: Path
     print(f"  Log:      {log_file}")
     print(f"{'─'*60}")
 
+    # idf_tools.py refuses to install esptool if it sees MSYSTEM (Git Bash/MSYS2)
+    # in the environment, even on a native Windows Python. Strip it so builds
+    # succeed regardless of what shell this script is invoked from.
+    pio_env = os.environ.copy()
+    for var in ("MSYSTEM", "MSYSTEM_PREFIX", "MSYSTEM_CHOST", "MSYSTEM_CARCH"):
+        pio_env.pop(var, None)
+
     t0 = time.time()
     with open(log_file, "w", encoding="utf-8") as fh:
         result = subprocess.run(
@@ -199,6 +207,7 @@ def build_env(pio: str, firmware_root: Path, env: str, label: str, log_dir: Path
             cwd=firmware_root,
             stdout=fh,
             stderr=subprocess.STDOUT,
+            env=pio_env,
         )
     elapsed = time.time() - t0
 

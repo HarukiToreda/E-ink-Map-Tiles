@@ -15,7 +15,6 @@ import threading
 import time
 import tkinter as tk
 import urllib.request
-import zipfile
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
@@ -27,15 +26,29 @@ APP_DATA    = Path(os.environ.get("APPDATA", Path.home() / "AppData" / "Roaming"
 TOOLS_DIR   = APP_DATA / "tools"
 PYTHON_DIR  = TOOLS_DIR / "python"
 PIO_EXE     = PYTHON_DIR / "Scripts" / "pio.exe"
-PIP_EXE     = PYTHON_DIR / "Scripts" / "pip.exe"
 PYTHON_EXE  = PYTHON_DIR / "python.exe"
 FIRMWARE_DIR = APP_DATA / "firmware"
+# Isolate PlatformIO's package/platform/toolchain cache under APP_DATA so this
+# app never reads from or writes to an ambient system-wide PlatformIO install
+# (e.g. PLATFORMIO_CORE_DIR set by VSCode's PlatformIO extension). This also
+# ensures "Clean all" actually wipes everything the app uses.
+CORE_DIR    = APP_DATA / "core"
 
 FIRMWARE_REPO = "https://github.com/meshtastic/firmware.git"
 FIRMWARE_BRANCH = "develop"
 
-PYTHON_URL  = "https://www.python.org/ftp/python/3.12.7/python-3.12.7-embed-amd64.zip"
-GETPIP_URL  = "https://bootstrap.pypa.io/get-pip.py"
+# python-build-standalone: a full CPython (venv, pip, everything — unlike the
+# stripped-down "embeddable" zip) distributed as a plain tarball with no
+# Windows Installer involved. The official python.org MSI installer was tried
+# first but rejected (exit 1638, "another version of this product is already
+# installed") on any machine that already has a matching Python 3.12.x
+# installed system-wide — which is extremely common. A plain archive has no
+# registry/product-code footprint at all: nothing to collide with, nothing to
+# uninstall, "Clean all" just deletes the folder.
+PYTHON_URL = (
+    "https://github.com/astral-sh/python-build-standalone/releases/download/"
+    "20241016/cpython-3.12.7+20241016-x86_64-pc-windows-msvc-install_only.tar.gz"
+)
 
 
 def _force_rmtree(path: Path) -> None:
@@ -91,7 +104,11 @@ def _download(url: str, dest: Path, progress_cb=None) -> None:
 
 
 def setup_pio(log_cb, progress_cb):
-    """Download portable Python, install pip, install platformio. Runs in a thread."""
+    """Download a portable, fully-featured Python (python-build-standalone)
+    into APP_DATA, then install platformio + esptool into it. Runs in a
+    thread. No Windows Installer/registry involvement at any point — the
+    whole thing is just files under APP_DATA, so "Clean all" (a plain
+    rmtree) removes 100% of what this installs."""
     try:
         # Wipe any partial previous install so read-only/locked files don't block us
         if TOOLS_DIR.exists():
@@ -99,10 +116,10 @@ def setup_pio(log_cb, progress_cb):
             _force_rmtree(TOOLS_DIR)
         TOOLS_DIR.mkdir(parents=True, exist_ok=True)
 
-        # 1. Download Python embeddable
-        py_zip = TOOLS_DIR / "python.zip"
-        log_cb("── Step 1/4: Downloading portable Python 3.12 ──", "step")
+        # 1. Download the standalone Python archive.
+        log_cb("── Step 1/3: Downloading Python 3.12 ──", "step")
         log_cb(f"  Source: {PYTHON_URL}")
+        archive = TOOLS_DIR / "python.tar.gz"
         last_pct = [-1]
         def py_progress(p):
             pct = int(p * 100)
@@ -110,68 +127,34 @@ def setup_pio(log_cb, progress_cb):
                 log_cb(f"  {pct}%…")
                 last_pct[0] = pct
             progress_cb(p * 0.35, f"Downloading Python… {pct}%")
-        _download(PYTHON_URL, py_zip, py_progress)
+        _download(PYTHON_URL, archive, py_progress)
         log_cb("  Download complete.", "ok")
 
-        # 2. Extract
-        log_cb("── Step 2/4: Extracting Python ──", "step")
+        # 2. Extract. The archive's top-level "python/" dir becomes PYTHON_DIR.
+        log_cb("── Step 2/3: Extracting Python ──", "step")
         progress_cb(0.35, "Extracting Python…")
         if PYTHON_DIR.exists():
             _force_rmtree(PYTHON_DIR)
-        with zipfile.ZipFile(py_zip, "r") as z:
-            z.extractall(PYTHON_DIR)
-        py_zip.unlink()
-        for pth in PYTHON_DIR.glob("python*._pth"):
-            text = pth.read_text()
-            text = text.replace("#import site", "import site")
-            pth.write_text(text)
+        import tarfile
+        with tarfile.open(archive, "r:gz") as tf:
+            tf.extractall(TOOLS_DIR, filter="data")
+        archive.unlink()
+        if not PYTHON_EXE.exists():
+            raise RuntimeError(f"Extraction did not produce {PYTHON_EXE}")
         log_cb(f"  Extracted to {PYTHON_DIR}", "ok")
 
-        # 3. Download + install pip
-        log_cb("── Step 3/4: Installing pip ──", "step")
-        get_pip = TOOLS_DIR / "get-pip.py"
-        log_cb(f"  Source: {GETPIP_URL}")
-        _download(GETPIP_URL, get_pip,
-                  lambda p: progress_cb(0.40 + p * 0.05, "Downloading pip…"))
-        log_cb("  Running get-pip.py…")
-        progress_cb(0.46, "Installing pip…")
-        result = subprocess.run(
-            [str(PYTHON_EXE), str(get_pip), "--no-warn-script-location"],
-            capture_output=True, text=True,
-            creationflags=subprocess.CREATE_NO_WINDOW,
-        )
-        get_pip.unlink()
-        if result.returncode != 0:
-            out = (result.stdout or result.stderr or "").strip()
-            raise RuntimeError(f"get-pip failed (exit {result.returncode}):\n{out}")
-        log_cb("  pip installed.", "ok")
-
-        # 4. Install PlatformIO
-        log_cb("── Step 4/4: Installing PlatformIO ──", "step")
-        log_cb("  Running: pip install platformio")
+        # 3. Install PlatformIO
+        log_cb("── Step 3/3: Installing PlatformIO ──", "step")
+        log_cb("  Running: pip install platformio esptool")
         log_cb("  This downloads ~30 MB and may take a minute…", "warn")
         progress_cb(0.50, "Installing PlatformIO…")
-        # Use --prefix to force install into the embedded Python, and set
-        # PYTHONNOUSERSITE so pip doesn't resolve deps from the system user site.
         pio_env = os.environ.copy()
         pio_env["PYTHONNOUSERSITE"] = "1"
         pio_env.pop("PYTHONPATH", None)
         pio_env.pop("PYTHONUSERBASE", None)
-        # setuptools and wheel must be present before pip can build anything
-        log_cb("  Installing setuptools + wheel…", "warn")
-        pre = subprocess.run(
-            [str(PIP_EXE), "install", "setuptools", "wheel",
-             "--prefix", str(PYTHON_DIR), "--no-warn-script-location"],
-            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-            env=pio_env, creationflags=subprocess.CREATE_NO_WINDOW,
-        )
-        if pre.returncode != 0:
-            raise RuntimeError(f"setuptools install failed:\n{pre.stdout.strip()[-600:]}")
-        log_cb("  setuptools + wheel installed.", "ok")
 
         proc = subprocess.Popen(
-            [str(PIP_EXE), "install", "platformio", "esptool",
-             "--prefix", str(PYTHON_DIR),
+            [str(PYTHON_EXE), "-m", "pip", "install", "platformio", "esptool",
              "--no-warn-script-location"],
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
             env=pio_env, creationflags=subprocess.CREATE_NO_WINDOW,
@@ -213,7 +196,7 @@ class SetupDialog(tk.Toplevel):
                  font=("Segoe UI", 11, "bold")).grid(
             row=0, column=0, pady=(18, 4), padx=24, sticky="w")
         tk.Label(self,
-                 text="Downloading a portable Python environment and PlatformIO (~60 MB).\n"
+                 text="Downloading a private Python environment and PlatformIO (~100 MB).\n"
                       "This happens once — subsequent launches are instant.",
                  bg=C_BG, fg=C_MUTED, font=("Segoe UI", 9),
                  justify="left").grid(row=1, column=0, padx=24, pady=(0, 10), sticky="w")
@@ -553,9 +536,13 @@ class BuilderApp(tk.Tk):
 
     def _update_setup_status(self):
         if pio_ready():
-            size_mb = sum(f.stat().st_size for f in TOOLS_DIR.rglob("*") if f.is_file()) / 1e6
+            size_mb = sum(
+                f.stat().st_size
+                for d in (TOOLS_DIR, CORE_DIR)
+                for f in d.rglob("*") if f.is_file()
+            ) / 1e6
             self._setup_status.configure(
-                text=f"PlatformIO installed  ({size_mb:.0f} MB in {TOOLS_DIR})",
+                text=f"PlatformIO installed  ({size_mb:.0f} MB in {APP_DATA})",
                 fg=C_MUTED,
             )
             self._clean_btn.configure(state="normal")
@@ -568,10 +555,13 @@ class BuilderApp(tk.Tk):
 
     def _clean_setup(self):
         msg = (
-            f"Delete the local PlatformIO installation and firmware clone?\n\n"
+            f"Remove everything this app installed — Python, PlatformIO, the\n"
+            f"firmware clone, and the toolchain cache?\n\n"
             f"  {APP_DATA}\n\n"
-            "PlatformIO toolchain caches in ~/.platformio are not affected.\n"
-            "Everything will be re-downloaded on next build."
+            "This app installs nothing outside that folder — nothing is\n"
+            "registered with Windows, so deleting it removes 100% of what\n"
+            "this app added to your system. Everything will be re-downloaded\n"
+            "on next build."
         )
         if not messagebox.askyesno("Clean all", msg):
             return
@@ -965,8 +955,8 @@ class BuilderApp(tk.Tk):
         self.after(0, self._build_done, True)
 
     def _fix_espidf_pyyaml(self) -> bool:
-        """Install pyyaml into any .espidf-* venvs under C:\\PlatformIO\\penv if missing."""
-        pio_penv = Path("C:/PlatformIO/penv")
+        """Install pyyaml into any .espidf-* venvs under CORE_DIR/penv if missing."""
+        pio_penv = CORE_DIR / "penv"
         if not pio_penv.is_dir():
             return False
         fixed = False
@@ -1016,6 +1006,12 @@ class BuilderApp(tk.Tk):
         pio_env = os.environ.copy()
         pio_env["PYTHONIOENCODING"] = "utf-8"
         pio_env["PYTHONUTF8"] = "1"
+        pio_env["PLATFORMIO_CORE_DIR"] = str(CORE_DIR)
+        # idf_tools.py refuses to install esptool if it sees MSYSTEM (Git Bash/MSYS2)
+        # in the environment, even on a native Windows Python. Strip it so builds
+        # succeed regardless of what shell launched this app.
+        for var in ("MSYSTEM", "MSYSTEM_PREFIX", "MSYSTEM_CHOST", "MSYSTEM_CARCH"):
+            pio_env.pop(var, None)
         for attempt in range(2):
             try:
                 with open(log_file, "w", encoding="utf-8") as fh:
