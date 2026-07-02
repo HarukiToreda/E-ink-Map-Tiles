@@ -6,8 +6,7 @@
 
 ### Hospital cross icon
 
-- POI markers (auto-detected from map data) now draw a "+" cross instead of a dot for hospitals, clinics, doctors, dentists, and pharmacies.
-- Added a matching "Hospital" icon to the Markers panel for manually placing a cross anywhere on the map.
+- Added a "Hospital" icon to the Markers panel for manually placing a "+" cross anywhere on the map.
 
 ### New Tool — InkHUD Firmware Builder
 
