@@ -2,11 +2,22 @@
 
 ---
 
-## v1.7.0
+## v1.8.0
 
 ### Hospital cross icon
 
 - Added a "Hospital" icon to the Markers panel.
+
+### Fixes
+
+- **InkHUDBuilder no longer touches ambient system installs** — PlatformIO's core dir is now isolated under its own AppData folder, `MSYSTEM` no longer leaks into the build env, and first-run Python setup uses a zero-registry-footprint distribution instead of the MSI installer (which failed if any Python 3.12.x was already installed).
+- **Cursor-anchored zoom no longer drifts off target** — fixed the anchor math (was snapping to screen center) and locked the anchor for the duration of a scroll burst.
+- **Map panning no longer flashes empty tiles or a stray box** — overlays now stay visible while dragging, the preview renders a small buffer beyond the edges, and the leftover export-area outline was removed.
+- **InkHUD zoom/pan no longer slows down mid-calculation** — the background flash-size worker now pauses during interaction and resumes after, and its coverage overlay updates in place instead of recreating itself every drag step.
+
+---
+
+## v1.7.0
 
 ### New Tool — InkHUD Firmware Builder
 
@@ -22,11 +33,7 @@
 
 ### Fixes
 
-- **InkHUDBuilder no longer touches ambient system installs** — PlatformIO's core dir is now isolated under its own AppData folder, `MSYSTEM` no longer leaks into the build env, and first-run Python setup uses a zero-registry-footprint distribution instead of the MSI installer (which failed if any Python 3.12.x was already installed).
 - **Flash estimate no longer recalculates on preview zoom** — sample key tracks map center instead of view bounds; fixed a logic error causing redundant recalculation; in-progress workers now cancel on real settings changes.
-- **Cursor-anchored zoom no longer drifts off target** — fixed the anchor math (was snapping to screen center) and locked the anchor for the duration of a scroll burst.
-- **Map panning no longer flashes empty tiles or a stray box** — overlays now stay visible while dragging, the preview renders a small buffer beyond the edges, and the leftover export-area outline was removed.
-- **InkHUD zoom/pan no longer slows down mid-calculation** — the background flash-size worker now pauses during interaction and resumes after, and its coverage overlay updates in place instead of recreating itself every drag step.
 
 ---
 
