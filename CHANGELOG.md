@@ -6,38 +6,27 @@
 
 ### Hospital cross icon
 
-- Added a "Hospital" icon to the Markers panel for manually placing a "+" cross anywhere on the map.
+- Added a "Hospital" icon to the Markers panel.
 
 ### New Tool — InkHUD Firmware Builder
 
-**`InkHUDBuilder.exe`** is a new standalone Windows companion tool for building and flashing Meshtastic InkHUD firmware. No Git, Python, PlatformIO, or VS Code installation required.
+**`InkHUDBuilder.exe`** — standalone Windows tool for building and flashing Meshtastic InkHUD firmware. No Git, Python, PlatformIO, or VS Code required.
 
-- Downloads a portable Python environment and installs PlatformIO on first run, with a live log pane showing progress.
-- Clones and updates [meshtastic/firmware](https://github.com/meshtastic/firmware) automatically before each build.
-- Optionally copies a `MapTile.h` from the EinkMapTile Tool into the firmware repo before building.
-- Builds firmware for 14 supported InkHUD devices (6 ESP32-S3, 8 nRF52840) via PlatformIO.
-- **Build** compiles firmware; **Build + Flash** compiles and flashes in a single PlatformIO invocation with no double-build.
-- **Upload** flashes any previously built `.bin` directly via esptool — no rebuild. Automatically uses the `.factory.bin` (merged bootloader + partitions + app at `0x0`) matching the Meshtastic web flasher approach.
-- COM port dropdown shows USB device names alongside port numbers (e.g. `COM4 — USB-SERIAL CH340`).
-- Branch selector: `develop` (default) or `master`.
-- Clean button removes the full local cache to start fresh.
+- Downloads Python + PlatformIO on first run, auto-clones/updates the firmware repo.
+- Optionally bakes a `MapTile.h` from the EinkMapTile Tool into the build.
+- Builds any of 14 InkHUD devices; Build + Flash or Upload-only; branch selector; Clean button resets everything.
 
 ### Docs
 
-- Added `README-firmware-builder.md` — standalone documentation for InkHUD Firmware Builder.
-- Updated `README.md` with a companion tool callout, cross-links, and next-step instructions after `MapTile.h` export pointing users to the builder.
+- Added `README-firmware-builder.md`; updated `README.md` with a companion-tool callout.
 
 ### Fixes
 
-**InkHUD Firmware Builder no longer depends on (or corrupts) ambient system installs**
-- The builder used to inherit the system's `PLATFORMIO_CORE_DIR` when set (e.g. by VSCode's PlatformIO extension), silently reading and writing a shared, externally-owned PlatformIO package cache instead of its own isolated one — and "Clean all" had no way to know that cache existed, so it never actually cleaned up after itself. PlatformIO's core dir is now always pinned to `%APPDATA%\InkHUDBuilder\core`, so the app never touches anything it didn't create, and Clean all now removes 100% of what it installs.
-- Builds silently failed to install esptool (`idf_tools.py`, `ERROR: MSys/Mingw is not supported`) whenever the app was launched from a Git Bash/MSYS2 shell, because `MSYSTEM` was being forwarded into the PlatformIO subprocess unfiltered. It's now stripped before every `pio` invocation.
-- Switched first-run setup from Python's official installer to a portable, no-installer Python distribution ([python-build-standalone](https://github.com/astral-sh/python-build-standalone)). The MSI installer approach failed with exit 1638 ("another version of this product is already installed") on any machine that already had a matching Python 3.12.x installed — extremely common — because Windows Installer blocks parallel installs of the same product version regardless of target directory. The new distribution has zero registry/Windows Installer footprint, so "Clean all" is a plain folder delete with nothing left behind.
-
-**Flash estimate no longer recalculates on preview zoom changes**
-- Pressing +/- or scrolling the map preview no longer triggers a new flash estimate when the map center and export settings are unchanged. The sample key now tracks map center coordinates instead of the view bounding box, so zooming the preview (which only changes what's visible, not where tiles are exported from) correctly hits the cache.
-- Fixed a logic error where the key check was evaluated after the cache was already cleared, causing redundant recalculations even on unchanged settings.
-- Any in-progress sample worker is now cancelled immediately when settings genuinely change, freeing the GIL and keeping the preview render responsive.
+- **InkHUDBuilder no longer touches ambient system installs** — PlatformIO's core dir is now isolated under its own AppData folder, `MSYSTEM` no longer leaks into the build env, and first-run Python setup uses a zero-registry-footprint distribution instead of the MSI installer (which failed if any Python 3.12.x was already installed).
+- **Flash estimate no longer recalculates on preview zoom** — sample key tracks map center instead of view bounds; fixed a logic error causing redundant recalculation; in-progress workers now cancel on real settings changes.
+- **Cursor-anchored zoom no longer drifts off target** — fixed the anchor math (was snapping to screen center) and locked the anchor for the duration of a scroll burst.
+- **Map panning no longer flashes empty tiles or a stray box** — overlays now stay visible while dragging, the preview renders a small buffer beyond the edges, and the leftover export-area outline was removed.
+- **InkHUD zoom/pan no longer slows down mid-calculation** — the background flash-size worker now pauses during interaction and resumes after, and its coverage overlay updates in place instead of recreating itself every drag step.
 
 ---
 

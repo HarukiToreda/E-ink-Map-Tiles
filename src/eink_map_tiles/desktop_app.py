@@ -8,6 +8,7 @@ import queue
 import re
 import tempfile
 import threading
+import time
 import tkinter as tk
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import redirect_stdout
@@ -26,6 +27,9 @@ INKHUD_DEFAULT_BRIGHTNESS = 0.96
 INKHUD_DEFAULT_CONTRAST = 0.96
 MIN_PREVIEW_ZOOM = 2
 MAX_PREVIEW_ZOOM = cli.TOPO_MAX_DETAIL_ZOOM
+# Extra margin (px) rendered beyond the visible viewport on every side, so a drag
+# reveals real map content instead of blank canvas until it exceeds this buffer.
+PREVIEW_PAD_PX = 256
 NORMAL_PREVIEW_MAX_ZOOM = cli.OPENFREEMAP_MAX_DETAIL_ZOOM
 ELEMENT_LABELS = {
     "land": "Land",
@@ -326,6 +330,10 @@ class DesktopApp(tk.Tk):
         self.map_zoom = 4
         self.map_drag_start: tuple[int, int] | None = None
         self.map_drag_center: tuple[float, float] | None = None
+        self._wheel_zoom_anchor: tuple[int, int] | None = None
+        self._wheel_zoom_reset_id: str | None = None
+        self._last_drag_overlay_redraw = 0.0
+        self._inkhud_coverage_items: list[tuple[int, int]] = []
         self.preview_render_id = 0
         self.preview_after_id: str | None = None
         self._inkhud_bytes_per_tile: int | None = None
@@ -1183,11 +1191,11 @@ class DesktopApp(tk.Tk):
             self.vars["center_lon"].set(f"{self.map_center_lon:.6f}")
         finally:
             self.syncing_view_bounds = False
-        if self.vars["mode"].get() == "inkhud2":
-            self.update_inkhud2_info()
-        elif self.vars["mode"].get() == "inkhud":
-            self.update_inkhud_flash_bars()
         if update_estimate:
+            if self.vars["mode"].get() == "inkhud2":
+                self.update_inkhud2_info()
+            elif self.vars["mode"].get() == "inkhud":
+                self.update_inkhud_flash_bars()
             self.estimate_tiles(show_errors=False)
 
     def zoom_to_fit_bbox(self, bbox: cli.BBox) -> int:
@@ -1208,20 +1216,31 @@ class DesktopApp(tk.Tk):
         new_zoom = cli.clamp(old_zoom + delta, MIN_PREVIEW_ZOOM, self.max_preview_zoom_for_style())
         if new_zoom == old_zoom:
             return
+        self._pause_inkhud_sample_for_interaction()
 
         if anchor is not None:
             width = self.preview_rendered_width or max(self.map_canvas.winfo_width(), 320)
             height = self.preview_rendered_height or max(self.map_canvas.winfo_height(), 260)
             anchor_x, anchor_y = anchor
+            # Find the lon/lat currently under the cursor (at old_zoom)...
             old_center_x, old_center_y = self.lon_lat_to_world_pixel(self.map_center_lon, self.map_center_lat, old_zoom)
             anchor_world_x = old_center_x - width / 2 + anchor_x
             anchor_world_y = old_center_y - height / 2 + anchor_y
             anchor_lon, anchor_lat = self.world_pixel_to_lon_lat(anchor_world_x, anchor_world_y, old_zoom)
-            self.map_center_lon = cli.normalize_lon(anchor_lon)
-            self.map_center_lat = max(min(anchor_lat, cli.MAX_MERCATOR_LAT), -cli.MAX_MERCATOR_LAT)
+            # ...then solve for the new center that keeps that same lon/lat under the
+            # cursor at new_zoom, instead of snapping it to screen center. The old code
+            # set map_center = anchor point directly, which moves the hovered location
+            # to the middle of the screen every tick — for an off-center cursor this
+            # compounds into a runaway drift across a multi-tick scroll burst.
+            new_anchor_x, new_anchor_y = self.lon_lat_to_world_pixel(anchor_lon, anchor_lat, new_zoom)
+            new_center_x = new_anchor_x - anchor_x + width / 2
+            new_center_y = new_anchor_y - anchor_y + height / 2
+            new_center_lon, new_center_lat = self.world_pixel_to_lon_lat(new_center_x, new_center_y, new_zoom)
+            self.map_center_lon = cli.normalize_lon(new_center_lon)
+            self.map_center_lat = max(min(new_center_lat, cli.MAX_MERCATOR_LAT), -cli.MAX_MERCATOR_LAT)
 
         self.map_zoom = new_zoom
-        self.sync_view_area()
+        self.sync_view_area(update_estimate=False)
         if self.preview_image is None:
             self.draw_preview_placeholder(f"Rendering export preview z{self.map_zoom}...")
         else:
@@ -1231,6 +1250,7 @@ class DesktopApp(tk.Tk):
         self.schedule_preview(delay_ms=250)
 
     def start_map_drag(self, event) -> None:
+        self._pause_inkhud_sample_for_interaction()
         self.map_drag_start = (event.x, event.y)
         self.map_drag_center = (self.map_center_lon, self.map_center_lat)
         # Check if click is near selected marker → start marker drag
@@ -1296,7 +1316,19 @@ class DesktopApp(tk.Tk):
         return self.world_pixel_to_lon_lat(world_x, world_y, self.map_zoom)
 
     def on_mouse_wheel(self, event) -> None:
-        self.zoom_map(1 if event.delta > 0 else -1, anchor=(event.x, event.y))
+        # Lock the anchor to wherever the cursor was when this scroll burst started,
+        # so rapid ticks zoom in/out around that one point instead of drifting with
+        # small mouse movements between ticks. The anchor resets once scrolling pauses.
+        if self._wheel_zoom_anchor is None:
+            self._wheel_zoom_anchor = (event.x, event.y)
+        if self._wheel_zoom_reset_id:
+            self.after_cancel(self._wheel_zoom_reset_id)
+        self._wheel_zoom_reset_id = self.after(500, self._end_wheel_zoom_session)
+        self.zoom_map(1 if event.delta > 0 else -1, anchor=self._wheel_zoom_anchor)
+
+    def _end_wheel_zoom_session(self) -> None:
+        self._wheel_zoom_anchor = None
+        self._wheel_zoom_reset_id = None
 
     def schedule_preview(self, delay_ms: int = 350) -> None:
         self.sync_view_area(update_estimate=False)
@@ -1478,6 +1510,21 @@ class DesktopApp(tk.Tk):
             self.draw_flash_bars(estimated, upper_bound=True)
             self.vars["tile_count"].set(f"InkHUD2: {total} tile(s) across {zoom_count} zoom(s) — ≈{estimated // 1024} KB (LZ4 est.)")
 
+    def _pause_inkhud_sample_for_interaction(self) -> None:
+        """Stop any in-progress flash-estimate worker immediately so it stops
+        competing with the UI thread for the GIL while the user is actively
+        zooming/dragging, then re-arm the debounce so a fresh sample gets
+        scheduled once the interaction settles — same as any other change."""
+        if self.vars["mode"].get() != "inkhud":
+            return
+        if self._inkhud_sample_cancel is not None:
+            self._inkhud_sample_cancel.set()
+        if self._inkhud_sample_after_id:
+            self.after_cancel(self._inkhud_sample_after_id)
+            self._inkhud_sample_after_id = None
+        self._inkhud_sample_job_key = None
+        self._schedule_inkhud_sample()
+
     def _schedule_inkhud_sample(self) -> None:
         """Debounce: wait 900 ms after the last settings change, then sample tiles for the flash estimate."""
         try:
@@ -1516,21 +1563,19 @@ class DesktopApp(tk.Tk):
             return cli.Tile(z=zoom, x=max(0, min(n - 1, tx)), y=max(0, min(n - 1, ty)))
 
         def _compress_tile(tile, job):
+            import numpy as np
             protect_land = "land" in set(job.get("elements", {}).get("include", []))
             rgb = cli.render_openfreemap_image(tile, cli.DEFAULT_USER_AGENT, 30, 3,
                                                job.get("elements", {}).get("include", []),
                                                job.get("style"))
             bw = cli.inkhud_process(rgb, float(job["contrast"]), float(job["brightness"]),
                                     protect_land=protect_land)
-            raw = []
-            for bx in range(32):
-                for y in range(256):
-                    byte = 0
-                    for bit in range(8):
-                        if bw.getpixel((bx * 8 + bit, y)) == 0:
-                            byte |= 1 << bit
-                    raw.append(byte)
-            return len(lz4.block.compress(bytes(raw), store_size=False))
+            # Vectorized bit-packing, byte-for-byte identical to the old getpixel() loop
+            # (column-major, LSB-first) — that loop's 65536 Python-level calls per tile
+            # held the GIL long enough to freeze the UI while this ran on its thread.
+            grouped = (np.asarray(bw) == 0).reshape(256, 32, 8)
+            raw = np.packbits(grouped, axis=2, bitorder="little").squeeze(-1).T.tobytes()
+            return len(lz4.block.compress(raw, store_size=False))
 
         def worker():
             try:
@@ -1614,20 +1659,22 @@ class DesktopApp(tk.Tk):
     def make_preview_image(self, job: dict[str, Any]):
         from PIL import Image, ImageDraw
 
-        bbox = cli.BBox(**job["bbox"])
         zoom = self.map_zoom
         tile_size = 256
         width = job.get("canvas_width") or max(self.map_canvas.winfo_width(), 320)
         height = job.get("canvas_height") or max(self.map_canvas.winfo_height(), 260)
+        pad = PREVIEW_PAD_PX
+        padded_width = width + 2 * pad
+        padded_height = height + 2 * pad
         center_world_x, center_world_y = self.lon_lat_to_world_pixel(self.map_center_lon, self.map_center_lat, zoom)
-        left_world = center_world_x - width / 2
-        top_world = center_world_y - height / 2
+        left_world = center_world_x - width / 2 - pad
+        top_world = center_world_y - height / 2 - pad
         first_x = math.floor(left_world / tile_size)
         first_y = math.floor(top_world / tile_size)
-        last_x = math.floor((left_world + width) / tile_size)
-        last_y = math.floor((top_world + height) / tile_size)
+        last_x = math.floor((left_world + padded_width) / tile_size)
+        last_y = math.floor((top_world + padded_height) / tile_size)
         n = 2**zoom
-        canvas = Image.new("RGB", (width, height), "#dfe5df")
+        canvas = Image.new("RGB", (padded_width, padded_height), "#dfe5df")
 
         tile_jobs = []
         for x in range(first_x, last_x + 1):
@@ -1657,11 +1704,11 @@ class DesktopApp(tk.Tk):
                 paste_x, paste_y, tile_image = future.result()
                 canvas.paste(tile_image, (paste_x, paste_y))
 
-        self.draw_preview_bbox(canvas, bbox, zoom, left_world, top_world)
-        self.draw_preview_attribution(canvas)
+        self.draw_preview_attribution(canvas, pad, width, height)
         return canvas
 
-    def draw_preview_attribution(self, canvas) -> None:
+    def draw_preview_attribution(self, canvas, pad: int = 0, viewport_width: int | None = None,
+                                  viewport_height: int | None = None) -> None:
         from PIL import ImageDraw, ImageFont
 
         draw = ImageDraw.Draw(canvas)
@@ -1670,26 +1717,14 @@ class DesktopApp(tk.Tk):
         box = draw.textbbox((0, 0), text, font=font)
         width = box[2] - box[0] + 10
         height = box[3] - box[1] + 8
-        x = canvas.width - width - 8
-        y = canvas.height - height - 8
+        # Anchor to the visible viewport's corner, not the padded canvas's corner —
+        # otherwise this would sit in the hidden margin, off-screen until dragged into view.
+        vw = viewport_width if viewport_width is not None else canvas.width - 2 * pad
+        vh = viewport_height if viewport_height is not None else canvas.height - 2 * pad
+        x = pad + vw - width - 8
+        y = pad + vh - height - 8
         draw.rectangle([x, y, x + width, y + height], fill="#ffffff", outline="#b8c4bc")
         draw.text((x + 5, y + 4), text, fill="#17211b", font=font)
-
-    def draw_preview_bbox(self, canvas, bbox: cli.BBox, zoom: int, left_world: float, top_world: float) -> None:
-        from PIL import ImageDraw
-
-        bbox_left_world, bbox_top_world = self.lon_lat_to_world_pixel(bbox.west, bbox.north, zoom)
-        bbox_right_world, bbox_bottom_world = self.lon_lat_to_world_pixel(bbox.east, bbox.south, zoom)
-        left = bbox_left_world - left_world
-        right = bbox_right_world - left_world
-        top = bbox_top_world - top_world
-        bottom = bbox_bottom_world - top_world
-        draw = ImageDraw.Draw(canvas)
-        draw.rectangle(
-            [max(0, left), max(0, top), min(canvas.width - 1, right), min(canvas.height - 1, bottom)],
-            outline="#0f766e",
-            width=3,
-        )
 
     def lon_lat_to_world_pixel(self, lon: float, lat: float, z: int) -> tuple[float, float]:
         lat = max(min(lat, cli.MAX_MERCATOR_LAT), -cli.MAX_MERCATOR_LAT)
@@ -1880,10 +1915,21 @@ class DesktopApp(tk.Tk):
         return gx0, gy0
 
     def draw_inkhud_coverage_overlay(self) -> None:
-        self.map_canvas.delete("inkhud-coverage")
-        if self.vars["mode"].get() != "inkhud":
-            return
-        if not self.vars["show_inkhud_coverage"].get():
+        # create_text()/create_rectangle() involve GDI font rasterization that's
+        # expensive enough (measured up to ~400ms with a wide zoom range) to cause
+        # visible drag jitter if redone from scratch on every call. Reuse existing
+        # canvas items via coords()/itemconfigure() when the zoom count is unchanged
+        # — this is the common case during a drag, where only position changes.
+        items = self._inkhud_coverage_items
+        # Cached ids go stale whenever something else does map_canvas.delete("all")
+        # (e.g. a full preview re-render) — detect that instead of silently failing
+        # to redraw (coords()/itemconfigure() on a deleted id is a harmless no-op).
+        if items and self.map_canvas.type(items[0][0]) is None:
+            items = []
+        if self.vars["mode"].get() != "inkhud" or not self.vars["show_inkhud_coverage"].get():
+            for rect_id, text_id in items:
+                self.map_canvas.delete(rect_id, text_id)
+            self._inkhud_coverage_items = []
             return
         try:
             min_zoom = int(self.vars["min_zoom"].get())
@@ -1901,9 +1947,21 @@ class DesktopApp(tk.Tk):
         colors = ["#e63946", "#f4a261", "#2a9d8f", "#457b9d", "#6a4c93", "#e9c46a"]
 
         g = int(self.vars["inkhud_grid"].get()[0])
+        active_zooms = [z for z in range(min_zoom, max_zoom + 1) if z not in self.inkhud_omit_zooms]
+
+        # Item count changed (zoom range/omits edited) — rebuild from scratch.
+        if len(items) != len(active_zooms):
+            for rect_id, text_id in items:
+                self.map_canvas.delete(rect_id, text_id)
+            items = []
+            for _ in active_zooms:
+                rect_id = self.map_canvas.create_rectangle(0, 0, 0, 0, fill="", tags=("inkhud-coverage",))
+                text_id = self.map_canvas.create_text(0, 0, anchor="nw", font=("Segoe UI", 9, "bold"), tags=("inkhud-coverage",))
+                items.append((rect_id, text_id))
+            self._inkhud_coverage_items = items
 
         # Anchor to max_zoom: snapping error is 0.5 tiles at max_zoom = tiny at coarser views.
-        for i, z in enumerate(z for z in range(min_zoom, max_zoom + 1) if z not in self.inkhud_omit_zooms):
+        for i, z in enumerate(active_zooms):
             gx0, gy0 = self._inkhud_grid_origin(self.map_center_lon, self.map_center_lat, z, g, anchor_z=max_zoom)
             gx1, gy1 = gx0 + g, gy0 + g
 
@@ -1916,18 +1974,13 @@ class DesktopApp(tk.Tk):
             y1 = gy1 * tile_px - top_world
 
             color = colors[i % len(colors)]
-            self.map_canvas.create_rectangle(
-                x0, y0, x1, y1,
-                fill="", outline=color, width=2,
-                tags=("inkhud-coverage",)
-            )
+            rect_id, text_id = items[i]
+            self.map_canvas.coords(rect_id, x0, y0, x1, y1)
+            self.map_canvas.itemconfigure(rect_id, outline=color, width=2)
             label_x = max(x0 + 4, 2)
             label_y = max(y0 + 2, 2)
-            self.map_canvas.create_text(
-                label_x, label_y, anchor="nw",
-                text=f"z{z}", fill=color, font=("Segoe UI", 9, "bold"),
-                tags=("inkhud-coverage",)
-            )
+            self.map_canvas.coords(text_id, label_x, label_y)
+            self.map_canvas.itemconfigure(text_id, text=f"z{z}", fill=color)
 
     def _inkhud2_coverage_bbox(self, base_zoom: int) -> cli.BBox:
         """The 3x3 tile geographic bbox centered on the map center at base_zoom — identical to what InkHUD exports."""
@@ -1957,10 +2010,12 @@ class DesktopApp(tk.Tk):
         self.map_canvas.create_text(width / 2, height / 2, text=text, fill="#102019", font=("Segoe UI", 11), justify="center")
 
     def draw_zoom_badge(self) -> None:
+        self.map_canvas.delete("zoom-badge")
         self.map_canvas.create_oval(12, 12, 48, 48, fill="#ffffff", outline="#d7e2db", width=1, tags=("zoom-badge",))
         self.map_canvas.create_text(30, 30, text=str(self.map_zoom), fill="#102019", font=("Segoe UI", 12, "bold"), tags=("zoom-badge",))
 
     def draw_center_marker(self) -> None:
+        self.map_canvas.delete("center-marker")
         width = max(self.map_canvas.winfo_width(), 320)
         height = max(self.map_canvas.winfo_height(), 260)
         x = width / 2
@@ -1975,10 +2030,28 @@ class DesktopApp(tk.Tk):
         if self.preview_image is None:
             self.draw_preview_placeholder("Release to render map...")
             return
-        self.map_canvas.coords("map-image", dx, dy)
-        self.map_canvas.delete("zoom-badge", "center-marker", "tile-grid", "tile-selection")
+        pad = PREVIEW_PAD_PX
+        self.map_canvas.coords("map-image", dx - pad, dy - pad)
+        # Cheap (a handful of canvas items) — keep these live on every drag event.
         self.draw_zoom_badge()
         self.draw_center_marker()
+        # These compute their position from the live map_center_lon/lat (already
+        # updated by drag_map before this is called), so redrawing them keeps them
+        # in sync with the shifted image instead of leaving them deleted — and
+        # visibly empty — until the full re-render lands on release. But measured
+        # up to ~500ms per call at wide InkHUD zoom ranges (many canvas items,
+        # markers regenerating PhotoImages) — running that on every single mouse-move
+        # event is what made dragging feel jittery, so throttle to ~20fps. The
+        # post-release full re-render always redraws these fresh regardless, so
+        # throttling here only affects live feedback mid-drag, never correctness.
+        now = time.monotonic()
+        if now - self._last_drag_overlay_redraw < 0.05:
+            return
+        self._last_drag_overlay_redraw = now
+        self.draw_tile_grid_overlay()
+        self.draw_tile_selection_overlay()
+        self.draw_inkhud_coverage_overlay()
+        self.draw_markers_overlay()
 
     def render_preview_vector_tile(self, tile: cli.Tile, job: dict[str, Any]):
         elements = tuple(job["elements"]["include"])
@@ -2049,11 +2122,12 @@ class DesktopApp(tk.Tk):
 
         if render_id != self.preview_render_id:
             return
+        pad = PREVIEW_PAD_PX
         self.preview_image = ImageTk.PhotoImage(image)
-        self.preview_rendered_width = image.width
-        self.preview_rendered_height = image.height
+        self.preview_rendered_width = image.width - 2 * pad
+        self.preview_rendered_height = image.height - 2 * pad
         self.map_canvas.delete("all")
-        self.map_canvas.create_image(0, 0, image=self.preview_image, anchor="nw", tags=("map-image",))
+        self.map_canvas.create_image(-pad, -pad, image=self.preview_image, anchor="nw", tags=("map-image",))
         self.draw_zoom_badge()
         self.draw_center_marker()
         self.draw_tile_grid_overlay()
