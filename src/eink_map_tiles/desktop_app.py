@@ -312,6 +312,14 @@ class RoundedButton(tk.Canvas):
 
 
 class DesktopApp(tk.Tk):
+    INKHUD_LZ4_MODE = "high_compression"
+    INKHUD_LZ4_LEVEL = 9
+    INKHUD_TILE_LAYOUT_SPARSE = 0
+    INKHUD_TILE_LAYOUT_GRID = 1
+    INKHUD_TILE_KIND_LZ4 = 0
+    INKHUD_TILE_KIND_WHITE = 1
+    INKHUD_TILE_KIND_BLACK = 2
+
     def __init__(self) -> None:
         super().__init__()
         self.title("E-ink Map Tiles")
@@ -1575,12 +1583,17 @@ class DesktopApp(tk.Tk):
             # held the GIL long enough to freeze the UI while this ran on its thread.
             grouped = (np.asarray(bw) == 0).reshape(256, 32, 8)
             raw = np.packbits(grouped, axis=2, bitorder="little").squeeze(-1).T.tobytes()
-            return len(lz4.block.compress(raw, store_size=False))
+            return self._encode_inkhud_tile(raw)
 
         def worker():
             try:
                 g = int(self.vars["inkhud_grid"].get()[0])
-                total_bytes = 0
+                total_payload_bytes = 0
+                seen_payloads: set[bytes] = set()
+                compressed_sizes: list[int] = []
+                block_zooms: list[int] = []
+                block_tx: list[int] = []
+                block_ty: list[int] = []
                 for z in job["zooms"]:
                     if cancel.is_set():
                         return
@@ -1588,12 +1601,23 @@ class DesktopApp(tk.Tk):
                     x0 = origin_tile.x - g // 2
                     y0 = origin_tile.y - g // 2
                     n = 2 ** z
+                    block_zooms.append(z)
+                    block_tx.append(max(0, min(n - 1, x0)))
+                    block_ty.append(max(0, min(n - 1, y0)))
                     for dx in range(g):
                         for dy in range(g):
                             if cancel.is_set():
                                 return
                             tile = cli.Tile(z=z, x=max(0, min(n - 1, x0 + dx)), y=max(0, min(n - 1, y0 + dy)))
-                            total_bytes += _compress_tile(tile, job)
+                            kind, payload = _compress_tile(tile, job)
+                            if kind != self.INKHUD_TILE_KIND_LZ4:
+                                continue
+                            compressed_sizes.append(len(payload))
+                            if payload in seen_payloads:
+                                continue
+                            seen_payloads.add(payload)
+                            total_payload_bytes += len(payload)
+                total_bytes = self._estimate_grid_storage_bytes(block_zooms, block_tx, block_ty, g, total_payload_bytes, compressed_sizes)
                 self.after(0, lambda: self._apply_inkhud_sample(key, total_bytes))
             except Exception:
                 pass
@@ -1847,6 +1871,126 @@ class DesktopApp(tk.Tk):
                     )
 
     @staticmethod
+    def _compress_inkhud_lz4(raw: bytes | bytearray | list[int]) -> bytes:
+        raw_bytes = raw if isinstance(raw, (bytes, bytearray)) else bytes(raw)
+        return lz4.block.compress(
+            raw_bytes,
+            mode=DesktopApp.INKHUD_LZ4_MODE,
+            compression=DesktopApp.INKHUD_LZ4_LEVEL,
+            store_size=False,
+        )
+
+    @staticmethod
+    def _encode_inkhud_tile(raw: bytes | bytearray | list[int]) -> tuple[int, bytes]:
+        raw_bytes = raw if isinstance(raw, (bytes, bytearray)) else bytes(raw)
+        if raw_bytes and raw_bytes.count(0x00) == len(raw_bytes):
+            return DesktopApp.INKHUD_TILE_KIND_WHITE, b""
+        if raw_bytes and raw_bytes.count(0xFF) == len(raw_bytes):
+            return DesktopApp.INKHUD_TILE_KIND_BLACK, b""
+        return DesktopApp.INKHUD_TILE_KIND_LZ4, DesktopApp._compress_inkhud_lz4(raw_bytes)
+
+    @staticmethod
+    def _smallest_uint_type(values: list[int]) -> str:
+        max_value = max(values, default=0)
+        if max_value <= 0xFF:
+            return "uint8_t"
+        if max_value <= 0xFFFF:
+            return "uint16_t"
+        return "uint32_t"
+
+    @staticmethod
+    def _tile_count_type(tile_count: int) -> str:
+        if tile_count <= 0xFFFF:
+            return "uint16_t"
+        return "uint32_t"
+
+    @staticmethod
+    def _ctype_size(type_name: str) -> int:
+        return {
+            "uint8_t": 1,
+            "uint16_t": 2,
+            "uint32_t": 4,
+        }[type_name]
+
+    @staticmethod
+    def _prepare_tile_payloads(tile_data: list[tuple[int, int, int, list[int]]]) -> dict[str, Any]:
+        unique_payloads: list[bytes] = []
+        payload_index_by_bytes: dict[bytes, int] = {}
+        tile_kinds: list[int] = []
+        compressed_indexes: list[int | None] = []
+        compressed_sizes: list[int] = []
+
+        for _, _, _, raw in tile_data:
+            kind, compressed = DesktopApp._encode_inkhud_tile(raw)
+            tile_kinds.append(kind)
+            if kind != DesktopApp.INKHUD_TILE_KIND_LZ4:
+                compressed_indexes.append(None)
+                compressed_sizes.append(0)
+                continue
+            payload_index = payload_index_by_bytes.get(compressed)
+            if payload_index is None:
+                payload_index = len(unique_payloads)
+                payload_index_by_bytes[compressed] = payload_index
+                unique_payloads.append(compressed)
+            compressed_indexes.append(payload_index)
+            compressed_sizes.append(len(compressed))
+
+        payload_offsets: list[int] = []
+        running_offset = 0
+        for payload in unique_payloads:
+            payload_offsets.append(running_offset)
+            running_offset += len(payload)
+
+        tile_offsets = [payload_offsets[idx] if idx is not None else 0 for idx in compressed_indexes]
+        total_payload_bytes = sum(len(payload) for payload in unique_payloads)
+        compressed_tile_count = sum(1 for kind in tile_kinds if kind == DesktopApp.INKHUD_TILE_KIND_LZ4)
+        white_tiles = sum(1 for kind in tile_kinds if kind == DesktopApp.INKHUD_TILE_KIND_WHITE)
+        black_tiles = sum(1 for kind in tile_kinds if kind == DesktopApp.INKHUD_TILE_KIND_BLACK)
+
+        return {
+            "unique_payloads": unique_payloads,
+            "payload_offsets": payload_offsets,
+            "tile_kinds": tile_kinds,
+            "compressed_sizes": compressed_sizes,
+            "tile_offsets": tile_offsets,
+            "total_payload_bytes": total_payload_bytes,
+            "compressed_tile_count": compressed_tile_count,
+            "white_tiles": white_tiles,
+            "black_tiles": black_tiles,
+        }
+
+    @staticmethod
+    def _payload_storage_bytes(unique_payloads: list[bytes], total_payload_bytes: int) -> int:
+        return total_payload_bytes if unique_payloads else 1
+
+    @staticmethod
+    def _estimate_grid_storage_bytes(block_zooms: list[int], block_tx: list[int], block_ty: list[int], grid_size: int, total_payload_bytes: int, compressed_sizes: list[int]) -> int:
+        tile_count = len(block_zooms) * grid_size * grid_size
+        count_type = DesktopApp._tile_count_type(tile_count)
+        block_zoom_type = DesktopApp._smallest_uint_type(block_zooms)
+        block_tx_type = DesktopApp._smallest_uint_type(block_tx)
+        block_ty_type = DesktopApp._smallest_uint_type(block_ty)
+        kind_type = "uint8_t"
+        size_type = DesktopApp._smallest_uint_type(compressed_sizes)
+        offset_type = DesktopApp._smallest_uint_type([total_payload_bytes])
+        payload_storage_bytes = total_payload_bytes if total_payload_bytes else 1
+        return (
+            4  # layout + grid cols + grid rows + block count
+            + DesktopApp._ctype_size(count_type)
+            + len(block_zooms) * (
+                DesktopApp._ctype_size(block_zoom_type)
+                + DesktopApp._ctype_size(block_tx_type)
+                + DesktopApp._ctype_size(block_ty_type)
+            )
+            + tile_count * (
+                DesktopApp._ctype_size(kind_type)
+                + DesktopApp._ctype_size(size_type)
+                + DesktopApp._ctype_size(offset_type)
+            )
+            + payload_storage_bytes
+        )
+
+    @staticmethod
     def _build_tile_header(tile_data: list[tuple[int, int, int, list[int]]], style: str, label: str, extra_comments: list[str] | None = None) -> tuple[str, int]:
         """Compress tile_data with LZ4 and return (header_text, total_compressed_bytes).
 
@@ -1854,47 +1998,197 @@ class DesktopApp(tk.Tk):
         Returns the full MapTile.h content and the total compressed byte count.
         """
         zoom_set = sorted(set(t[0] for t in tile_data))
-        compressed: list[bytes] = []
-        for _, _, _, raw in tile_data:
-            compressed.append(lz4.block.compress(bytes(raw), store_size=False))
-
-        total_bytes = sum(len(c) for c in compressed)
+        payloads = DesktopApp._prepare_tile_payloads(tile_data)
+        unique_payloads = payloads["unique_payloads"]
+        payload_offsets = payloads["payload_offsets"]
+        tile_kinds = payloads["tile_kinds"]
+        compressed_sizes = payloads["compressed_sizes"]
+        tile_offsets = payloads["tile_offsets"]
+        total_payload_bytes = payloads["total_payload_bytes"]
+        compressed_tile_count = payloads["compressed_tile_count"]
+        white_tiles = payloads["white_tiles"]
+        black_tiles = payloads["black_tiles"]
 
         zoom_arr = ", ".join(str(int(t[0])) for t in tile_data)
-        tx_arr   = ", ".join(str(int(t[1])) for t in tile_data)
-        ty_arr   = ", ".join(str(int(t[2])) for t in tile_data)
-        size_arr = ", ".join(str(len(c)) for c in compressed)
+        tx_arr = ", ".join(str(int(t[1])) for t in tile_data)
+        ty_arr = ", ".join(str(int(t[2])) for t in tile_data)
+        kind_arr = ", ".join(str(kind) for kind in tile_kinds)
+        size_arr = ", ".join(str(size) for size in compressed_sizes)
+        offset_arr = ", ".join(str(offset) for offset in tile_offsets)
+
+        count_type = DesktopApp._tile_count_type(len(tile_data))
+        zoom_type = DesktopApp._smallest_uint_type([int(t[0]) for t in tile_data])
+        tx_type = DesktopApp._smallest_uint_type([int(t[1]) for t in tile_data])
+        ty_type = DesktopApp._smallest_uint_type([int(t[2]) for t in tile_data])
+        kind_type = DesktopApp._smallest_uint_type(tile_kinds)
+        size_type = DesktopApp._smallest_uint_type(compressed_sizes)
+        offset_type = DesktopApp._smallest_uint_type(tile_offsets)
+        deduped_tiles = compressed_tile_count - len(unique_payloads)
+        total_bytes = (
+            4  # layout + grid cols + grid rows + block count
+            + DesktopApp._ctype_size(count_type)
+            + len(tile_data) * (
+                DesktopApp._ctype_size(zoom_type)
+                + DesktopApp._ctype_size(tx_type)
+                + DesktopApp._ctype_size(ty_type)
+                + DesktopApp._ctype_size(kind_type)
+                + DesktopApp._ctype_size(size_type)
+                + DesktopApp._ctype_size(offset_type)
+            )
+            + DesktopApp._payload_storage_bytes(unique_payloads, total_payload_bytes)
+        )
 
         lines = [
             "#pragma once",
             "#include <stdint.h>",
             "",
             f"// {style} {label}: {len(tile_data)} tiles, zooms [{', '.join(str(z) for z in zoom_set)}]",
-            f"// Each tile is 256x256px = 8192 bytes uncompressed, stored here as LZ4 blocks.",
+            f"// Each tile is 256x256px = 8192 bytes uncompressed, stored here as raw LZ4 blocks.",
+            f"// LZ4 uses high-compression mode in the exporter; the firmware decoder is unchanged.",
             f"// Byte layout is COLUMN-MAJOR: bytes are packed as [bx=0..31][y=0..255], not row-major.",
             f"// To read pixel (px, py): byte = tile[(px/8)*256 + py], bit = px%8",
-            f"// Firmware: search map_tile_zooms/tx/ty for (zoom,tx,ty), decompress map_tile_data[i]",
-            f"// using map_tile_sizes[i] bytes into an 8192-byte buffer, then read pixels from buffer.",
+            f"// map_tile_kinds: 0=LZ4 payload, 1=all-white tile, 2=all-black tile",
+            f"// Identical compressed tiles are stored once and referenced by offset.",
+            f"// unique payloads: {len(unique_payloads)} / {compressed_tile_count} compressed tiles ({deduped_tiles} deduplicated)",
+            f"// sentinels: {white_tiles} white, {black_tiles} black",
+            f"// Firmware: search map_tile_zooms/tx/ty for (zoom,tx,ty), then decompress",
+            f"// map_tile_data + map_tile_offsets[i] using map_tile_sizes[i] bytes into an 8192-byte buffer,",
+            f"// or synthesize a solid tile when map_tile_kinds[i] is a sentinel.",
         ]
         if extra_comments:
             lines.extend(f"// {c}" for c in extra_comments)
         lines += [
             "",
-            f"static const int map_tile_count = {len(tile_data)};",
-            f"static const int map_tile_zooms[] = {{ {zoom_arr} }};",
-            f"static const int map_tile_tx[]    = {{ {tx_arr} }};",
-            f"static const int map_tile_ty[]    = {{ {ty_arr} }};",
-            f"static const int map_tile_sizes[] = {{ {size_arr} }};",
+            f"static const uint8_t map_tile_layout = {DesktopApp.INKHUD_TILE_LAYOUT_SPARSE};",
+            "static const uint8_t map_tile_grid_cols = 0;",
+            "static const uint8_t map_tile_grid_rows = 0;",
+            "static const uint8_t map_tile_block_count = 0;",
+            f"static const {count_type} map_tile_count = {len(tile_data)};",
+            f"static const {zoom_type} map_tile_zooms[]     = {{ {zoom_arr} }};",
+            f"static const {tx_type} map_tile_tx[]        = {{ {tx_arr} }};",
+            f"static const {ty_type} map_tile_ty[]        = {{ {ty_arr} }};",
+            "static const uint8_t map_tile_block_zooms[] = {};",
+            "static const uint16_t map_tile_block_tx[] = {};",
+            "static const uint16_t map_tile_block_ty[] = {};",
+            f"static const {kind_type} map_tile_kinds[]     = {{ {kind_arr} }};",
+            f"static const {size_type} map_tile_sizes[]     = {{ {size_arr} }};",
+            f"static const {offset_type} map_tile_offsets[] = {{ {offset_arr} }};",
             "",
+            "static const uint8_t map_tile_data[] = {",
         ]
-        for idx, ((z, tx, ty, _), cdata) in enumerate(zip(tile_data, compressed)):
-            lines.append(f"static const uint8_t map_tile_data_{idx}[] = {{  // z{z}/{tx}/{ty}, {len(cdata)} bytes compressed")
-            for i in range(0, len(cdata), 16):
-                lines.append("    " + ", ".join(f"0x{b:02X}" for b in cdata[i : i + 16]) + ",")
-            lines.append("};")
-            lines.append("")
-        ptr_list = ", ".join(f"map_tile_data_{i}" for i in range(len(tile_data)))
-        lines.append(f"static const uint8_t* const map_tile_data[] = {{ {ptr_list} }};")
+        if unique_payloads:
+            for idx, payload in enumerate(unique_payloads):
+                lines.append(f"    // blob {idx}, offset {payload_offsets[idx]}, {len(payload)} bytes")
+                for i in range(0, len(payload), 16):
+                    lines.append("    " + ", ".join(f"0x{b:02X}" for b in payload[i : i + 16]) + ",")
+        else:
+            lines.append("    0x00,  // padding byte when all tiles are sentinel-filled")
+        lines.append("};")
+
+        return "\n".join(lines), total_bytes
+
+    @staticmethod
+    def _build_grid_tile_header(
+        tile_data: list[tuple[int, int, int, list[int]]],
+        style: str,
+        label: str,
+        zoom_specs: list[dict[str, Any]],
+        cols: int,
+        rows: int,
+        extra_comments: list[str] | None = None,
+    ) -> tuple[str, int]:
+        zoom_set = sorted(set(t[0] for t in tile_data))
+        payloads = DesktopApp._prepare_tile_payloads(tile_data)
+        unique_payloads = payloads["unique_payloads"]
+        payload_offsets = payloads["payload_offsets"]
+        tile_kinds = payloads["tile_kinds"]
+        compressed_sizes = payloads["compressed_sizes"]
+        tile_offsets = payloads["tile_offsets"]
+        total_payload_bytes = payloads["total_payload_bytes"]
+        compressed_tile_count = payloads["compressed_tile_count"]
+        white_tiles = payloads["white_tiles"]
+        black_tiles = payloads["black_tiles"]
+
+        block_zooms = [int(spec["zoom"]) for spec in zoom_specs]
+        block_tx = [int(spec["tx"]) for spec in zoom_specs]
+        block_ty = [int(spec["ty"]) for spec in zoom_specs]
+
+        kind_arr = ", ".join(str(kind) for kind in tile_kinds)
+        size_arr = ", ".join(str(size) for size in compressed_sizes)
+        offset_arr = ", ".join(str(offset) for offset in tile_offsets)
+        block_zoom_arr = ", ".join(str(z) for z in block_zooms)
+        block_tx_arr = ", ".join(str(tx) for tx in block_tx)
+        block_ty_arr = ", ".join(str(ty) for ty in block_ty)
+
+        count_type = DesktopApp._tile_count_type(len(tile_data))
+        block_zoom_type = DesktopApp._smallest_uint_type(block_zooms)
+        block_tx_type = DesktopApp._smallest_uint_type(block_tx)
+        block_ty_type = DesktopApp._smallest_uint_type(block_ty)
+        kind_type = DesktopApp._smallest_uint_type(tile_kinds)
+        size_type = DesktopApp._smallest_uint_type(compressed_sizes)
+        offset_type = DesktopApp._smallest_uint_type(tile_offsets)
+        deduped_tiles = compressed_tile_count - len(unique_payloads)
+        total_bytes = (
+            4  # layout + grid cols + grid rows + block count
+            + DesktopApp._ctype_size(count_type)
+            + len(zoom_specs) * (
+                DesktopApp._ctype_size(block_zoom_type)
+                + DesktopApp._ctype_size(block_tx_type)
+                + DesktopApp._ctype_size(block_ty_type)
+            )
+            + len(tile_data) * (
+                DesktopApp._ctype_size(kind_type)
+                + DesktopApp._ctype_size(size_type)
+                + DesktopApp._ctype_size(offset_type)
+            )
+            + DesktopApp._payload_storage_bytes(unique_payloads, total_payload_bytes)
+        )
+
+        lines = [
+            "#pragma once",
+            "#include <stdint.h>",
+            "",
+            f"// {style} {label}: {len(tile_data)} tiles, zooms [{', '.join(str(z) for z in zoom_set)}]",
+            f"// Each tile is 256x256px = 8192 bytes uncompressed, stored here as raw LZ4 blocks.",
+            f"// LZ4 uses high-compression mode in the exporter; the firmware decoder is unchanged.",
+            f"// Byte layout is COLUMN-MAJOR: bytes are packed as [bx=0..31][y=0..255], not row-major.",
+            f"// To read pixel (px, py): byte = tile[(px/8)*256 + py], bit = px%8",
+            f"// Compact fixed-grid metadata layout: one block origin per zoom, tile positions reconstructed on device.",
+            f"// map_tile_kinds: 0=LZ4 payload, 1=all-white tile, 2=all-black tile",
+            f"// grid: {cols}x{rows}, blocks: {len(zoom_specs)}",
+            f"// unique payloads: {len(unique_payloads)} / {compressed_tile_count} compressed tiles ({deduped_tiles} deduplicated)",
+            f"// sentinels: {white_tiles} white, {black_tiles} black",
+            f"// Firmware: block i starts at tile index i * (grid_cols * grid_rows) with local order tx-major, ty-minor.",
+        ]
+        if extra_comments:
+            lines.extend(f"// {c}" for c in extra_comments)
+        lines += [
+            "",
+            f"static const uint8_t map_tile_layout = {DesktopApp.INKHUD_TILE_LAYOUT_GRID};",
+            f"static const uint8_t map_tile_grid_cols = {cols};",
+            f"static const uint8_t map_tile_grid_rows = {rows};",
+            f"static const uint8_t map_tile_block_count = {len(zoom_specs)};",
+            f"static const {count_type} map_tile_count = {len(tile_data)};",
+            "static const uint8_t map_tile_zooms[] = {};",
+            "static const uint16_t map_tile_tx[] = {};",
+            "static const uint16_t map_tile_ty[] = {};",
+            f"static const {block_zoom_type} map_tile_block_zooms[] = {{ {block_zoom_arr} }};",
+            f"static const {block_tx_type} map_tile_block_tx[] = {{ {block_tx_arr} }};",
+            f"static const {block_ty_type} map_tile_block_ty[] = {{ {block_ty_arr} }};",
+            f"static const {kind_type} map_tile_kinds[]     = {{ {kind_arr} }};",
+            f"static const {size_type} map_tile_sizes[]     = {{ {size_arr} }};",
+            f"static const {offset_type} map_tile_offsets[] = {{ {offset_arr} }};",
+            "",
+            "static const uint8_t map_tile_data[] = {",
+        ]
+        if unique_payloads:
+            for idx, payload in enumerate(unique_payloads):
+                lines.append(f"    // blob {idx}, offset {payload_offsets[idx]}, {len(payload)} bytes")
+                for i in range(0, len(payload), 16):
+                    lines.append("    " + ", ".join(f"0x{b:02X}" for b in payload[i : i + 16]) + ",")
+        else:
+            lines.append("    0x00,  // padding byte when all tiles are sentinel-filled")
+        lines.append("};")
 
         return "\n".join(lines), total_bytes
 
@@ -2524,8 +2818,8 @@ class DesktopApp(tk.Tk):
             # Sort to deterministic order: zoom asc, tx asc, ty asc
             tile_data.sort(key=lambda t: (t[0], t[1], t[2]))
 
-            header, total_bytes = self._build_tile_header(
-                tile_data, style, "InkHUD sparse export",
+            header, total_bytes = self._build_grid_tile_header(
+                tile_data, style, "InkHUD grid export", zoom_specs, cols, rows,
                 extra_comments=[f"center: lat={clat:.6f} lng={clng:.6f}"],
             )
             uncompressed = len(tile_data) * 8192

@@ -1,24 +1,12 @@
 # -*- mode: python ; coding: utf-8 -*-
 
+
 a = Analysis(
-    ['launch.py'],
+    ['scripts\\eink_map_tiles_app.py'],
     pathex=['src'],
     binaries=[],
     datas=[],
-    hiddenimports=[
-        'mapbox_vector_tile',
-        'mapbox_vector_tile.decoder',
-        'mapbox_vector_tile.encoder',
-        'vt2geojson',
-        'PIL._tkinter_finder',
-        'lz4.frame',
-        'lz4.block',
-        'shapely',
-        'pyproj',
-        'urllib.request',
-        'urllib.parse',
-        'json',
-    ],
+    hiddenimports=[],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

@@ -2,6 +2,15 @@
 
 ---
 
+## v1.9.0
+
+### InkHUD tile compression
+
+- **InkHUD `MapTile.h` exports now fit more map data into the same flash** — fixed-grid exports use a more compact block layout instead of repeating per-tile coordinates, and fully white/black tiles are stored as sentinels with no payload bytes.
+- **Flash estimates now include the new compact InkHUD header layout** — the estimate path matches export behavior for LZ4 high-compression, deduplicated payloads, white/black sentinels, and grid-metadata savings.
+
+---
+
 ## v1.8.0
 
 ### Hospital cross icon

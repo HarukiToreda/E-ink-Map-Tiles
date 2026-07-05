@@ -215,7 +215,7 @@ Each 256×256 tile is packed to 1 bit per pixel using **column-major byte layout
 
 Column-major layout is chosen specifically to help LZ4. Map tiles have strong vertical structure — roads run top-to-bottom, building edges are vertical, water fills columns uniformly. In column-major order these features become long identical runs in memory, which LZ4's literal/match encoding compresses efficiently. Row-major order breaks those runs into 32-byte fragments (one row width), cutting compression ratio roughly in half.
 
-Each packed tile is then compressed as a **raw LZ4 block** (no frame header). Typical results on dense urban map tiles:
+Each packed tile is then compressed as a **raw LZ4 block** (no frame header). The exporter uses LZ4 high-compression mode, which keeps the exact same firmware decoder and tile bytes after decompression while usually shaving a bit more flash off the final header. Typical results on dense urban map tiles:
 
 | Layout | Compressed size per 4×4 zoom |
 |---|---|
@@ -230,16 +230,24 @@ buf[(px / 8) * 256 + py] & (1 << (px % 8))
 
 ### Header format
 
-The header uses parallel arrays, one entry per tile:
+The header uses parallel arrays. Sparse exports keep one metadata record per tile:
 
 ```c
 map_tile_count      // total number of tiles
 map_tile_zooms[]    // zoom level for each tile
 map_tile_tx[]       // tile X index
 map_tile_ty[]       // tile Y index
+map_tile_kinds[]    // 0=LZ4 payload, 1=all-white tile, 2=all-black tile
 map_tile_sizes[]    // compressed byte count for each tile
-map_tile_data[]     // pointers to per-tile LZ4 byte arrays
+map_tile_offsets[]  // byte offset into the shared LZ4 blob
+map_tile_data[]     // shared byte blob holding all unique compressed tiles
 ```
+
+If two tiles compress to identical bytes, the exporter stores that payload once and reuses it via `map_tile_offsets[]`. That is lossless and needs no special-case firmware logic beyond reading from the shared blob.
+
+Completely white and completely black tiles are stored as sentinels in `map_tile_kinds[]` with no payload bytes at all. The firmware synthesizes those 8192-byte buffers on demand, so blank ocean/land margin tiles no longer cost flash.
+
+Regular InkHUD fixed-grid exports use a more compact block layout instead: one origin tile per zoom (`map_tile_block_zooms[]`, `map_tile_block_tx[]`, `map_tile_block_ty[]`) plus `map_tile_grid_cols` / `map_tile_grid_rows`. The firmware reconstructs each tile's `tx/ty` from its block position, which removes repeated per-tile coordinate metadata without changing any pixels.
 
 The firmware decompresses tiles on demand into a 2-entry LRU cache using an inline LZ4 decompressor (~25 lines of C, no external dependencies). Cache entries are 8192 bytes each (one decompressed tile), so RAM cost is 16 KB regardless of how many tiles are in flash.
 
