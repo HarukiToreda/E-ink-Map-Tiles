@@ -1,6 +1,6 @@
 # E-ink Map Tiles
 
-[Version 1.8.0](https://github.com/HarukiToreda/E-ink-Map-Tiles/releases/download/v1.8.0/EinkMapTiles-windows.exe)
+[Version 1.9.0](https://github.com/HarukiToreda/E-ink-Map-Tiles/releases/download/v1.9.0/EinkMapTiles-windows.exe)
 
 Local-only desktop app for generating e-paper-friendly offline map tiles for InkHUD in the Meshtastic firmware repo. Runs on Windows (pre-built `.exe`) and Linux/macOS (from source).
 
