@@ -6,6 +6,7 @@ import lz4.block
 import math
 import queue
 import re
+import struct
 import tempfile
 import threading
 import time
@@ -768,7 +769,7 @@ class DesktopApp(tk.Tk):
                 if hasattr(self, "inkhud_zoom_toggles_frame"):
                     self.inkhud_zoom_toggles_frame.grid_remove()
                 self.inkhud_omit_zooms.clear()
-        # Show/hide and label the InkHUD export button
+        # Show/hide and label the InkHUD export buttons
         if hasattr(self, "inkhud_button"):
             if is_inkhud:
                 label = "⬡ Export for InkHUD2" if is_inkhud2 else "⬡ Export for InkHUD"
@@ -776,6 +777,13 @@ class DesktopApp(tk.Tk):
                 self.inkhud_button.grid()
             else:
                 self.inkhud_button.grid_remove()
+        if hasattr(self, "inkhud_sd_button"):
+            if is_inkhud:
+                sd_label = "⬡ Export for InkHUD2 (SD Card)" if is_inkhud2 else "⬡ Export for InkHUD (SD Card)"
+                self.inkhud_sd_button.configure(text=sd_label)
+                self.inkhud_sd_button.grid()
+            else:
+                self.inkhud_sd_button.grid_remove()
         if hasattr(self, "flash_bars_canvas"):
             if mode in ("inkhud", "inkhud2"):
                 self.flash_bars_canvas.grid()
@@ -1107,13 +1115,15 @@ class DesktopApp(tk.Tk):
         self.flat_button(content, "About", self.show_about_licenses).grid(row=2, column=3, sticky="ew", padx=(5, 0))
         self.inkhud_button = self.flat_button(content, "⬡ Export for InkHUD", self.export_for_inkhud)
         self.inkhud_button.grid(row=3, column=0, columnspan=4, sticky="ew", pady=(6, 0))
+        self.inkhud_sd_button = self.flat_button(content, "⬡ Export for InkHUD (SD Card)", self.export_for_inkhud_sd)
+        self.inkhud_sd_button.grid(row=4, column=0, columnspan=4, sticky="ew", pady=(4, 0))
         self.progress_bar = ttk.Progressbar(content, variable=self.vars["progress_value"], maximum=1, mode="determinate")
-        self.progress_bar.grid(row=4, column=0, columnspan=3, sticky="ew", pady=(8, 2))
+        self.progress_bar.grid(row=5, column=0, columnspan=3, sticky="ew", pady=(8, 2))
         self.progress_bar.grid_remove()
         self.cancel_button = self.flat_button(content, "Cancel", self.cancel_export)
-        self.cancel_button.grid(row=4, column=3, sticky="ew", padx=(5, 0), pady=(8, 2))
+        self.cancel_button.grid(row=5, column=3, sticky="ew", padx=(5, 0), pady=(8, 2))
         self.cancel_button.grid_remove()
-        ttk.Label(content, textvariable=self.vars["progress_text"], style="Hint.TLabel").grid(row=5, column=0, columnspan=4, sticky="ew")
+        ttk.Label(content, textvariable=self.vars["progress_text"], style="Hint.TLabel").grid(row=6, column=0, columnspan=4, sticky="ew")
         self.log = tk.Text(
             content,
             height=3,
@@ -1123,10 +1133,10 @@ class DesktopApp(tk.Tk):
             relief="flat",
             borderwidth=0,
         )
-        self.log.grid(row=6, column=0, columnspan=4, sticky="ew", pady=(6, 0))
+        self.log.grid(row=7, column=0, columnspan=4, sticky="ew", pady=(6, 0))
         self.log.grid_remove()
         session_row = ttk.Frame(content, style="Card.TFrame")
-        session_row.grid(row=7, column=0, columnspan=4, sticky="ew", pady=(6, 0))
+        session_row.grid(row=8, column=0, columnspan=4, sticky="ew", pady=(6, 0))
         session_row.columnconfigure(0, weight=1)
         session_row.columnconfigure(1, weight=1)
         self.flat_button(session_row, "Save Session", self.save_session).grid(row=0, column=0, sticky="ew", padx=(0, 3))
@@ -2087,6 +2097,55 @@ class DesktopApp(tk.Tk):
 
         return "\n".join(lines), total_bytes
 
+    # Map/MapTile.bin binary format (little-endian) - a direct binary serialization of the same
+    # arrays as the C headers above, read by MapTileSD.cpp on the device. See that file for the
+    # authoritative format documentation; keep the two in sync if either changes.
+    _BIN_MAGIC = b"MTB1"
+    _BIN_HEADER = "<4sBBBBII"  # magic, layout, gridCols, gridRows, blockCount, tileCount, dataSize
+    _BIN_POSITION = "<BHH"  # zoom, tx, ty
+    _BIN_PAYLOAD = "<BHI"  # kind, size, offset
+
+    @staticmethod
+    def _build_tile_binary(tile_data: list[tuple[int, int, int, list[int]]]) -> bytes:
+        """Sparse-layout equivalent of _build_tile_header, as Map/MapTile.bin bytes."""
+        payloads = DesktopApp._prepare_tile_payloads(tile_data)
+        data_blob = b"".join(payloads["unique_payloads"])
+
+        out = bytearray()
+        out += struct.pack(
+            DesktopApp._BIN_HEADER, DesktopApp._BIN_MAGIC,
+            DesktopApp.INKHUD_TILE_LAYOUT_SPARSE, 0, 0, 0, len(tile_data), len(data_blob),
+        )
+        for zoom, tx, ty, _ in tile_data:
+            out += struct.pack(DesktopApp._BIN_POSITION, zoom, tx, ty)
+        for kind, size, offset in zip(payloads["tile_kinds"], payloads["compressed_sizes"], payloads["tile_offsets"]):
+            out += struct.pack(DesktopApp._BIN_PAYLOAD, kind, size, offset)
+        out += data_blob
+        return bytes(out)
+
+    @staticmethod
+    def _build_grid_tile_binary(
+        tile_data: list[tuple[int, int, int, list[int]]],
+        zoom_specs: list[dict[str, Any]],
+        cols: int,
+        rows: int,
+    ) -> bytes:
+        """Grid-layout equivalent of _build_grid_tile_header, as Map/MapTile.bin bytes."""
+        payloads = DesktopApp._prepare_tile_payloads(tile_data)
+        data_blob = b"".join(payloads["unique_payloads"])
+
+        out = bytearray()
+        out += struct.pack(
+            DesktopApp._BIN_HEADER, DesktopApp._BIN_MAGIC,
+            DesktopApp.INKHUD_TILE_LAYOUT_GRID, cols, rows, len(zoom_specs), len(tile_data), len(data_blob),
+        )
+        for spec in zoom_specs:
+            out += struct.pack(DesktopApp._BIN_POSITION, int(spec["zoom"]), int(spec["tx"]), int(spec["ty"]))
+        for kind, size, offset in zip(payloads["tile_kinds"], payloads["compressed_sizes"], payloads["tile_offsets"]):
+            out += struct.pack(DesktopApp._BIN_PAYLOAD, kind, size, offset)
+        out += data_blob
+        return bytes(out)
+
     @staticmethod
     def _build_grid_tile_header(
         tile_data: list[tuple[int, int, int, list[int]]],
@@ -2533,11 +2592,16 @@ class DesktopApp(tk.Tk):
     def finish_export_failed(self, error: str) -> None:
         self.vars["progress_text"].set(f"Export failed: {error}")
 
-    def export_for_inkhud(self) -> None:
+    def export_for_inkhud_sd(self) -> None:
+        """Same export as export_for_inkhud(), but writes Map/MapTile.bin for the SD card
+        instead of a MapTile.h to compile into flash. See MapTileSD.cpp in the firmware repo."""
+        self.export_for_inkhud(binary=True)
+
+    def export_for_inkhud(self, binary: bool = False) -> None:
         if self.export_thread and self.export_thread.is_alive():
             return
         if self.vars["mode"].get() == "inkhud2":
-            self.export_for_inkhud2()
+            self.export_for_inkhud2(binary=binary)
             return
 
         self.apply_inkhud_defaults_if_unchanged()
@@ -2578,16 +2642,25 @@ class DesktopApp(tk.Tk):
         job["zooms"]  = [z for z in range(min_zoom, max_zoom + 1) if z not in self.inkhud_omit_zooms]
         job["layout"] = DESKTOP_TILE_LAYOUT
 
-        # Ask where to save MapTile.h
-        fw_default = Path(r"C:\firmware\src\graphics\niche\InkHUD\Applets\Bases\Map")
-        initial_dir = str(fw_default) if fw_default.exists() else str(Path.home())
-        save_path = filedialog.asksaveasfilename(
-            title="Save MapTile.h for InkHUD firmware",
-            defaultextension=".h",
-            initialfile="MapTile.h",
-            initialdir=initial_dir,
-            filetypes=[("C header files", "*.h")],
-        )
+        # Ask where to save MapTile.h (or MapTile.bin for the SD card)
+        if binary:
+            save_path = filedialog.asksaveasfilename(
+                title="Save MapTile.bin for the SD card",
+                defaultextension=".bin",
+                initialfile="MapTile.bin",
+                initialdir=str(Path.home()),
+                filetypes=[("Binary files", "*.bin")],
+            )
+        else:
+            fw_default = Path(r"C:\firmware\src\graphics\niche\InkHUD\Applets\Bases\Map")
+            initial_dir = str(fw_default) if fw_default.exists() else str(Path.home())
+            save_path = filedialog.asksaveasfilename(
+                title="Save MapTile.h for InkHUD firmware",
+                defaultextension=".h",
+                initialfile="MapTile.h",
+                initialdir=initial_dir,
+                filetypes=[("C header files", "*.h")],
+            )
         if not save_path:
             return
 
@@ -2600,18 +2673,19 @@ class DesktopApp(tk.Tk):
         self.vars["progress_text"].set(f"Exporting 0 / {inkhud_tile_count} tiles...")
         self._cancel_event = threading.Event()
         self.inkhud_button.configure(state="disabled")
+        self.inkhud_sd_button.configure(state="disabled")
         self.export_button.configure(state="disabled")
         self.progress_bar.grid()
         self.cancel_button.grid()
         self._last_zoom_specs = zoom_specs
         self.export_thread = threading.Thread(
             target=self._run_inkhud_export,
-            args=(job, zoom_specs, Path(save_path), self._cancel_event),
+            args=(job, zoom_specs, Path(save_path), self._cancel_event, binary),
             daemon=True,
         )
         self.export_thread.start()
 
-    def export_for_inkhud2(self) -> None:
+    def export_for_inkhud2(self, binary: bool = False) -> None:
         self.apply_inkhud_defaults_if_unchanged()
 
         if not any(self.inkhud2_selected_tiles.values()):
@@ -2643,15 +2717,24 @@ class DesktopApp(tk.Tk):
             return
         job["layout"] = DESKTOP_TILE_LAYOUT
 
-        fw_default = Path(r"C:\firmware\src\graphics\niche\InkHUD\Applets\Bases\Map")
-        initial_dir = str(fw_default) if fw_default.exists() else str(Path.home())
-        save_path = filedialog.asksaveasfilename(
-            title="Save MapTile.h for InkHUD2 firmware",
-            defaultextension=".h",
-            initialfile="MapTile.h",
-            initialdir=initial_dir,
-            filetypes=[("C header files", "*.h")],
-        )
+        if binary:
+            save_path = filedialog.asksaveasfilename(
+                title="Save MapTile.bin for the SD card",
+                defaultextension=".bin",
+                initialfile="MapTile.bin",
+                initialdir=str(Path.home()),
+                filetypes=[("Binary files", "*.bin")],
+            )
+        else:
+            fw_default = Path(r"C:\firmware\src\graphics\niche\InkHUD\Applets\Bases\Map")
+            initial_dir = str(fw_default) if fw_default.exists() else str(Path.home())
+            save_path = filedialog.asksaveasfilename(
+                title="Save MapTile.h for InkHUD2 firmware",
+                defaultextension=".h",
+                initialfile="MapTile.h",
+                initialdir=initial_dir,
+                filetypes=[("C header files", "*.h")],
+            )
         if not save_path:
             return
 
@@ -2664,18 +2747,19 @@ class DesktopApp(tk.Tk):
         self.vars["progress_text"].set(f"Exporting 0 / {total_tiles:,} tiles...")
         self._cancel_event = threading.Event()
         self.inkhud_button.configure(state="disabled")
+        self.inkhud_sd_button.configure(state="disabled")
         self.export_button.configure(state="disabled")
         self.progress_bar.grid()
         self.cancel_button.grid()
         selected_snapshot = {z: set(tiles) for z, tiles in self.inkhud2_selected_tiles.items()}
         self.export_thread = threading.Thread(
             target=self._run_inkhud2_export,
-            args=(job, selected_snapshot, Path(save_path), self._cancel_event),
+            args=(job, selected_snapshot, Path(save_path), self._cancel_event, binary),
             daemon=True,
         )
         self.export_thread.start()
 
-    def _run_inkhud2_export(self, job: dict[str, Any], selected: dict[int, set[tuple[int, int]]], save_path: Path, cancel_event: threading.Event | None = None) -> None:
+    def _run_inkhud2_export(self, job: dict[str, Any], selected: dict[int, set[tuple[int, int]]], save_path: Path, cancel_event: threading.Event | None = None, binary: bool = False) -> None:
         from PIL import Image
 
         style = job["style"]
@@ -2723,24 +2807,41 @@ class DesktopApp(tk.Tk):
                     tile_data.append((z, tx, ty, raw))
                     self.messages.put(f"  [{i+1}/{len(tile_list)}] z{z}/{tx}/{ty}: {len(raw):,} bytes\n")
 
-            header, total_bytes = self._build_tile_header(tile_data, style, "InkHUD2 sparse export")
+            if binary:
+                data = self._build_tile_binary(tile_data)
+                total_bytes = len(data)
+            else:
+                header, total_bytes = self._build_tile_header(tile_data, style, "InkHUD2 sparse export")
             uncompressed = len(tile_data) * 8192
             ratio = total_bytes / uncompressed * 100 if uncompressed else 100
             self.messages.put(f"  compressed: {total_bytes:,} bytes ({ratio:.0f}% of {uncompressed:,} uncompressed)\n")
 
-            save_path.write_text(header, encoding="utf-8")
+            if binary:
+                save_path.write_bytes(data)
+                saved_name = "MapTile.bin"
+            else:
+                save_path.write_text(header, encoding="utf-8")
+                saved_name = "MapTile.h"
             self.messages.put(f"__TILE_TOTAL_BYTES__:{total_bytes}\n")
-            self.messages.put(f"\nMapTile.h saved to: {save_path}\n")
+            self.messages.put(f"\n{saved_name} saved to: {save_path}\n")
             self.after(0, self.finish_export_success)
-            self.after(0, lambda: messagebox.showinfo(
-                "InkHUD2 Export Complete",
-                f"MapTile.h saved to:\n{save_path}\n\n{len(tile_data)} tiles exported.\nRebuild and flash your InkHUD2 firmware to apply.",
-            ))
+            if binary:
+                self.after(0, lambda: messagebox.showinfo(
+                    "InkHUD2 SD Export Complete",
+                    f"MapTile.bin saved to:\n{save_path}\n\n{len(tile_data)} tiles exported.\n"
+                    f"Copy this file to Map/MapTile.bin on your device's SD card.",
+                ))
+            else:
+                self.after(0, lambda: messagebox.showinfo(
+                    "InkHUD2 Export Complete",
+                    f"MapTile.h saved to:\n{save_path}\n\n{len(tile_data)} tiles exported.\nRebuild and flash your InkHUD2 firmware to apply.",
+                ))
         except Exception as exc:  # noqa: BLE001
             self.messages.put(f"\nInkHUD2 export failed: {exc}\n")
             self.after(0, lambda: self.finish_export_failed(str(exc)))
         finally:
             self.after(0, lambda: self.inkhud_button.configure(state="normal"))
+            self.after(0, lambda: self.inkhud_sd_button.configure(state="normal"))
             self.after(0, lambda: self.export_button.configure(state="normal"))
             self.after(0, self.cancel_button.grid_remove)
             self.after(0, self.progress_bar.grid_remove)
@@ -2749,7 +2850,7 @@ class DesktopApp(tk.Tk):
         """Shared inkhud pipeline used by both preview and export — always identical."""
         return cli.inkhud_process(rgb_image, contrast, brightness)
 
-    def _run_inkhud_export(self, job: dict[str, Any], zoom_specs: list[dict], save_path: Path, cancel_event: threading.Event | None = None) -> None:
+    def _run_inkhud_export(self, job: dict[str, Any], zoom_specs: list[dict], save_path: Path, cancel_event: threading.Event | None = None, binary: bool = False) -> None:
         from PIL import Image, ImageEnhance, ImageFilter
 
         clat = self.map_center_lat
@@ -2818,27 +2919,43 @@ class DesktopApp(tk.Tk):
             # Sort to deterministic order: zoom asc, tx asc, ty asc
             tile_data.sort(key=lambda t: (t[0], t[1], t[2]))
 
-            header, total_bytes = self._build_grid_tile_header(
-                tile_data, style, "InkHUD grid export", zoom_specs, cols, rows,
-                extra_comments=[f"center: lat={clat:.6f} lng={clng:.6f}"],
-            )
+            if binary:
+                data = self._build_grid_tile_binary(tile_data, zoom_specs, cols, rows)
+                total_bytes = len(data)
+            else:
+                header, total_bytes = self._build_grid_tile_header(
+                    tile_data, style, "InkHUD grid export", zoom_specs, cols, rows,
+                    extra_comments=[f"center: lat={clat:.6f} lng={clng:.6f}"],
+                )
             uncompressed = len(tile_data) * 8192
             ratio = total_bytes / uncompressed * 100 if uncompressed else 100
             self.messages.put(f"  compressed: {total_bytes:,} bytes ({ratio:.0f}% of {uncompressed:,} uncompressed)\n")
 
-            save_path.write_text(header, encoding="utf-8")
+            if binary:
+                save_path.write_bytes(data)
+                saved_name = "MapTile.bin"
+            else:
+                save_path.write_text(header, encoding="utf-8")
+                saved_name = "MapTile.h"
             self.messages.put(f"__TILE_TOTAL_BYTES__:{total_bytes}\n")
-            self.messages.put(f"\nMapTile.h saved to: {save_path}\n")
+            self.messages.put(f"\n{saved_name} saved to: {save_path}\n")
             self.after(0, self.finish_export_success)
-            self.after(0, lambda: messagebox.showinfo(
-                "InkHUD Export Complete",
-                f"MapTile.h saved to:\n{save_path}\n\nRebuild and flash your InkHUD firmware to apply.",
-            ))
+            if binary:
+                self.after(0, lambda: messagebox.showinfo(
+                    "InkHUD SD Export Complete",
+                    f"MapTile.bin saved to:\n{save_path}\n\nCopy this file to Map/MapTile.bin on your device's SD card.",
+                ))
+            else:
+                self.after(0, lambda: messagebox.showinfo(
+                    "InkHUD Export Complete",
+                    f"MapTile.h saved to:\n{save_path}\n\nRebuild and flash your InkHUD firmware to apply.",
+                ))
         except Exception as exc:  # noqa: BLE001
             self.messages.put(f"\nInkHUD export failed: {exc}\n")
             self.after(0, lambda: self.finish_export_failed(str(exc)))
         finally:
             self.after(0, lambda: self.inkhud_button.configure(state="normal"))
+            self.after(0, lambda: self.inkhud_sd_button.configure(state="normal"))
             self.after(0, lambda: self.export_button.configure(state="normal"))
             self.after(0, self.cancel_button.grid_remove)
             self.after(0, self.progress_bar.grid_remove)

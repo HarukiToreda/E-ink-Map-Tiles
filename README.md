@@ -6,13 +6,14 @@ Local-only desktop app for generating e-paper-friendly offline map tiles for Ink
 
 > **Also in this repo:** [InkHUD Firmware Builder](README-firmware-builder.md) — standalone Windows tool for building and flashing Meshtastic InkHUD firmware. Use both together: generate `MapTile.h` here, then flash it with the builder.
 
-Exports normal XYZ tile folders with attribution and a manifest, and InkHUD firmware headers (`MapTile.h`) with LZ4-compressed column-major tiles ready for ESP32-S3 and nRF52840 targets.
+Exports normal XYZ tile folders with attribution and a manifest, InkHUD firmware headers (`MapTile.h`) with LZ4-compressed column-major tiles ready for ESP32-S3 and nRF52840 targets, and `MapTile.bin` for devices that read map tiles from an SD card instead of flash.
 
 ## What It Does
 
 - Pan and zoom an interactive map preview with cursor-anchored scroll wheel zoom.
 - Export the visible map area as e-paper-ready PNG tiles rendered locally from OpenFreeMap vector data.
 - Export InkHUD firmware headers (`MapTile.h`) with LZ4-compressed tiles for direct inclusion in Meshtastic firmware.
+- Export the same tile data as `MapTile.bin` for devices that load map tiles from an SD card at runtime instead of compiling them into flash.
 - Configurable InkHUD grid sizes (1×1, 2×2, 3×3, 4×4, 5×5, 6×6, 8×8) to fit flash budgets on nRF52840 and ESP32-S3.
 - InkHUD2 mode for sparse per-tile selection across multiple zoom levels.
 - Coverage overlay showing the exact tile footprint per zoom level before export.
@@ -61,7 +62,7 @@ pyinstaller EinkMapTiles-linux.spec
 3. Check the attribution checkbox in **Map Source**.
 4. In **Export Settings**, choose zoom range, mode, style, and grid size.
 5. Click **Export Tiles** for a normal PNG tile bundle — a folder picker will open to choose where to save.
-6. In InkHUD/InkHUD2 mode, click **⬡ Export for InkHUD** to generate a firmware header.
+6. In InkHUD/InkHUD2 mode, click **⬡ Export for InkHUD** to generate a firmware header, or **⬡ Export for InkHUD (SD Card)** to generate a `MapTile.bin` for a device's SD card.
 
 Tile count and flash estimates update automatically as you change settings.
 
@@ -154,6 +155,7 @@ The **Export** section contains:
 - **Export Tiles** — opens a folder picker, then downloads and renders the tile bundle to the chosen folder.
 - **About** — license and attribution summary.
 - **⬡ Export for InkHUD** — generates `MapTile.h` for firmware inclusion (shown in InkHUD/InkHUD2 mode only).
+- **⬡ Export for InkHUD (SD Card)** — generates `MapTile.bin`, the same tile data in a binary format for a device's SD card instead of a compiled-in header (shown in InkHUD/InkHUD2 mode only).
 - **Coverage Boxes** toggle — draws solid per-zoom bounding boxes on the map preview showing the exact InkHUD tile footprint (shown in InkHUD/InkHUD2 mode only, located in Export Settings next to the Custom button; on by default when switching to InkHUD mode).
 - Progress bar and **Cancel** button (appear only while an export is running).
 - Export log showing downloaded tile paths and progress.
@@ -185,11 +187,7 @@ ATTRIBUTION.txt
 {export-name}.zip
 ```
 
-InkHUD exports save a single file to the chosen path:
-
-```
-MapTile.h
-```
+InkHUD exports save a single file to the chosen path: `MapTile.h` (firmware header) or `MapTile.bin` (SD card).
 
 ## InkHUD Firmware Export
 
@@ -199,6 +197,10 @@ Once you have `MapTile.h`, you have two options to get it into firmware:
 
 - **[InkHUD Firmware Builder](README-firmware-builder.md)** *(recommended — no setup required)* — open `InkHUDBuilder.exe`, paste the path to your `MapTile.h`, select your device, and click **Build**. The tool handles everything: cloning the firmware repo, running PlatformIO, and optionally flashing to your device over USB.
 - **Build from source** — copy `MapTile.h` into `src/graphics/niche/InkHUD/Applets/Bases/Map/` inside your local [meshtastic/firmware](https://github.com/meshtastic/firmware) clone and run `pio run -e <your-env>`.
+
+### SD card export
+
+**⬡ Export for InkHUD (SD Card)** generates `MapTile.bin` — the same tiles as `MapTile.h`, packed as a compact little-endian binary instead of a C header, for InkHUD builds that read tiles from an SD card instead of flash. Copy it to `Map/MapTile.bin` on the device's SD card.
 
 ### Image pipeline
 
@@ -284,7 +286,7 @@ The flash bars in the Export panel show estimated usage. The estimate is compute
 
 ### InkHUD vs InkHUD2
 
-Both modes use the same image pipeline and the same `MapTile.h` output format. The difference is in how tiles are selected:
+Both modes use the same image pipeline and the same `MapTile.h`/`MapTile.bin` output formats. The difference is in how tiles are selected:
 
 - **InkHUD** — fixed grid centered on the map bullseye. Every zoom level exports the same grid size (e.g. 4×4) in a square around the center. Simple and predictable.
 - **InkHUD2** — click individual tiles on the map to build a sparse, non-contiguous set across any combination of zoom levels. Useful when you want dense coverage of a specific corridor or route at one zoom level and broader context tiles at another, without paying for a full uniform grid.
