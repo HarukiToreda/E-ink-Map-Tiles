@@ -4,9 +4,8 @@
 
 ## Unreleased
 
-### SD card export
-
-- **New `MapTile.bin` export for SD-backed InkHUD builds** — **⬡ Export for InkHUD (SD Card)** writes the same tile selection, LZ4 payloads, and deduplication as `MapTile.h`, packed as a compact little-endian binary instead of a C header. Copy it to `Map/MapTile.bin` on the device's SD card to avoid baking tiles into flash.
+- **New `MapTile.bin` SD card export** — **⬡ Export for InkHUD (SD Card)** packs the same tiles as `MapTile.h` into a binary file for devices that read tiles from an SD card instead of flash.
+- **Fixed: InkHUD Firmware Builder required a system Git install** — first-run setup now bundles a portable Git, so no target device needs anything pre-installed.
 
 ---
 

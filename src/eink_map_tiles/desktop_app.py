@@ -2097,9 +2097,7 @@ class DesktopApp(tk.Tk):
 
         return "\n".join(lines), total_bytes
 
-    # Map/MapTile.bin binary format (little-endian) - a direct binary serialization of the same
-    # arrays as the C headers above, read by MapTileSD.cpp on the device. See that file for the
-    # authoritative format documentation; keep the two in sync if either changes.
+    # Map/MapTile.bin binary format (little-endian), read by MapTileSD.cpp on the device.
     _BIN_MAGIC = b"MTB1"
     _BIN_HEADER = "<4sBBBBII"  # magic, layout, gridCols, gridRows, blockCount, tileCount, dataSize
     _BIN_POSITION = "<BHH"  # zoom, tx, ty
@@ -2593,8 +2591,7 @@ class DesktopApp(tk.Tk):
         self.vars["progress_text"].set(f"Export failed: {error}")
 
     def export_for_inkhud_sd(self) -> None:
-        """Same export as export_for_inkhud(), but writes Map/MapTile.bin for the SD card
-        instead of a MapTile.h to compile into flash. See MapTileSD.cpp in the firmware repo."""
+        """Same as export_for_inkhud(), but writes Map/MapTile.bin for the SD card."""
         self.export_for_inkhud(binary=True)
 
     def export_for_inkhud(self, binary: bool = False) -> None:

@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
 InkHUD Firmware Builder — fully standalone Windows EXE.
-On first launch, downloads a portable Python and installs PlatformIO locally.
-Clones/updates the Meshtastic firmware repo automatically.
-No system-level prerequisites required.
+On first launch, downloads a portable Python, Git, and PlatformIO, then
+clones/updates the Meshtastic firmware repo automatically. No system-level
+prerequisites required.
 """
 
 import os
@@ -28,6 +28,8 @@ PYTHON_DIR  = TOOLS_DIR / "python"
 PIO_EXE     = PYTHON_DIR / "Scripts" / "pio.exe"
 PYTHON_EXE  = PYTHON_DIR / "python.exe"
 FIRMWARE_DIR = APP_DATA / "firmware"
+GIT_DIR     = TOOLS_DIR / "git"
+GIT_EXE     = GIT_DIR / "cmd" / "git.exe"
 # Isolate PlatformIO's package/platform/toolchain cache under APP_DATA so this
 # app never reads from or writes to an ambient system-wide PlatformIO install
 # (e.g. PLATFORMIO_CORE_DIR set by VSCode's PlatformIO extension). This also
@@ -48,6 +50,12 @@ FIRMWARE_BRANCH = "develop"
 PYTHON_URL = (
     "https://github.com/astral-sh/python-build-standalone/releases/download/"
     "20241016/cpython-3.12.7+20241016-x86_64-pc-windows-msvc-install_only.tar.gz"
+)
+
+# MinGit: portable, no-installer Git for Windows, downloaded like Python above.
+MINGIT_URL = (
+    "https://github.com/git-for-windows/git/releases/download/"
+    "v2.55.0.windows.2/MinGit-2.55.0.2-64-bit.zip"
 )
 
 
@@ -80,11 +88,18 @@ C_WARN    = "#f59e0b"
 # ── First-run setup ────────────────────────────────────────────────────────
 
 def pio_ready() -> bool:
-    return PIO_EXE.exists() and PYTHON_EXE.exists()
+    return PIO_EXE.exists() and PYTHON_EXE.exists() and GIT_EXE.exists()
 
 
 def git_available() -> bool:
-    return shutil.which("git") is not None
+    return GIT_EXE.exists() or shutil.which("git") is not None
+
+
+def resolve_git_exe() -> str:
+    """Prefer the bundled portable Git; fall back to a system install if present."""
+    if GIT_EXE.exists():
+        return str(GIT_EXE)
+    return shutil.which("git") or "git"
 
 
 def _download(url: str, dest: Path, progress_cb=None) -> None:
@@ -117,7 +132,7 @@ def setup_pio(log_cb, progress_cb):
         TOOLS_DIR.mkdir(parents=True, exist_ok=True)
 
         # 1. Download the standalone Python archive.
-        log_cb("── Step 1/3: Downloading Python 3.12 ──", "step")
+        log_cb("── Step 1/4: Downloading Python 3.12 ──", "step")
         log_cb(f"  Source: {PYTHON_URL}")
         archive = TOOLS_DIR / "python.tar.gz"
         last_pct = [-1]
@@ -126,13 +141,13 @@ def setup_pio(log_cb, progress_cb):
             if pct != last_pct[0] and pct % 10 == 0:
                 log_cb(f"  {pct}%…")
                 last_pct[0] = pct
-            progress_cb(p * 0.35, f"Downloading Python… {pct}%")
+            progress_cb(p * 0.25, f"Downloading Python… {pct}%")
         _download(PYTHON_URL, archive, py_progress)
         log_cb("  Download complete.", "ok")
 
         # 2. Extract. The archive's top-level "python/" dir becomes PYTHON_DIR.
-        log_cb("── Step 2/3: Extracting Python ──", "step")
-        progress_cb(0.35, "Extracting Python…")
+        log_cb("── Step 2/4: Extracting Python ──", "step")
+        progress_cb(0.25, "Extracting Python…")
         if PYTHON_DIR.exists():
             _force_rmtree(PYTHON_DIR)
         import tarfile
@@ -143,8 +158,34 @@ def setup_pio(log_cb, progress_cb):
             raise RuntimeError(f"Extraction did not produce {PYTHON_EXE}")
         log_cb(f"  Extracted to {PYTHON_DIR}", "ok")
 
-        # 3. Install PlatformIO
-        log_cb("── Step 3/3: Installing PlatformIO ──", "step")
+        # 3. Download and extract portable Git.
+        log_cb("── Step 3/4: Downloading Git ──", "step")
+        log_cb(f"  Source: {MINGIT_URL}")
+        git_archive = TOOLS_DIR / "mingit.zip"
+        last_git_pct = [-1]
+        def git_progress(p):
+            pct = int(p * 100)
+            if pct != last_git_pct[0] and pct % 10 == 0:
+                log_cb(f"  {pct}%…")
+                last_git_pct[0] = pct
+            progress_cb(0.25 + p * 0.15, f"Downloading Git… {pct}%")
+        _download(MINGIT_URL, git_archive, git_progress)
+        log_cb("  Download complete.", "ok")
+
+        progress_cb(0.40, "Extracting Git…")
+        if GIT_DIR.exists():
+            _force_rmtree(GIT_DIR)
+        import zipfile
+        GIT_DIR.mkdir(parents=True, exist_ok=True)
+        with zipfile.ZipFile(git_archive) as zf:
+            zf.extractall(GIT_DIR)
+        git_archive.unlink()
+        if not GIT_EXE.exists():
+            raise RuntimeError(f"Extraction did not produce {GIT_EXE}")
+        log_cb(f"  Extracted to {GIT_DIR}", "ok")
+
+        # 4. Install PlatformIO
+        log_cb("── Step 4/4: Installing PlatformIO ──", "step")
         log_cb("  Running: pip install platformio esptool")
         log_cb("  This downloads ~30 MB and may take a minute…", "warn")
         progress_cb(0.50, "Installing PlatformIO…")
@@ -196,7 +237,7 @@ class SetupDialog(tk.Toplevel):
                  font=("Segoe UI", 11, "bold")).grid(
             row=0, column=0, pady=(18, 4), padx=24, sticky="w")
         tk.Label(self,
-                 text="Downloading a private Python environment and PlatformIO (~100 MB).\n"
+                 text="Downloading a private Python environment, Git, and PlatformIO (~150 MB).\n"
                       "This happens once — subsequent launches are instant.",
                  bg=C_BG, fg=C_MUTED, font=("Segoe UI", 9),
                  justify="left").grid(row=1, column=0, padx=24, pady=(0, 10), sticky="w")
@@ -226,7 +267,8 @@ class SetupDialog(tk.Toplevel):
 
         self._status_var = tk.StringVar(value="Starting…")
         tk.Label(self, textvariable=self._status_var, bg=C_BG, fg=C_MUTED,
-                 font=("Segoe UI", 8)).grid(row=4, column=0, padx=24, pady=(0, 16), sticky="w")
+                 font=("Segoe UI", 8), anchor="w", justify="left").grid(
+            row=4, column=0, padx=24, pady=(0, 16), sticky="ew")
 
         self.after(200, self._start)
 
@@ -234,7 +276,9 @@ class SetupDialog(tk.Toplevel):
         """Must be called on the main thread only."""
         self._log_text.insert("end", msg + "\n", tag)
         self._log_text.see("end")
-        self._status_var.set(msg)
+        # Truncate: an unwrapped long line here would stretch the dialog off-screen.
+        short = msg if len(msg) <= 90 else msg[:87] + "…"
+        self._status_var.set(short)
 
     def _start(self):
         def log(msg, tag=""):
@@ -523,7 +567,7 @@ class BuilderApp(tk.Tk):
         if (FIRMWARE_DIR / ".git").exists():
             try:
                 result = subprocess.run(
-                    ["git", "-C", str(FIRMWARE_DIR), "log", "-1", "--format=%h %s"],
+                    [resolve_git_exe(), "-C", str(FIRMWARE_DIR), "log", "-1", "--format=%h %s"],
                     capture_output=True, text=True, timeout=5,
                     creationflags=subprocess.CREATE_NO_WINDOW,
                 )
@@ -555,8 +599,8 @@ class BuilderApp(tk.Tk):
 
     def _clean_setup(self):
         msg = (
-            f"Remove everything this app installed — Python, PlatformIO, the\n"
-            f"firmware clone, and the toolchain cache?\n\n"
+            f"Remove everything this app installed — Python, Git, PlatformIO,\n"
+            f"the firmware clone, and the toolchain cache?\n\n"
             f"  {APP_DATA}\n\n"
             "This app installs nothing outside that folder — nothing is\n"
             "registered with Windows, so deleting it removes 100% of what\n"
@@ -621,7 +665,7 @@ class BuilderApp(tk.Tk):
     def _sync_firmware(self) -> bool:
         """Clone or pull the firmware repo. Returns True on success."""
         if not git_available():
-            self._emit("Error: git not found in PATH. Install Git for Windows.", "fail")
+            self._emit("Error: bundled Git is missing. Restart the app to reinstall it.", "fail")
             return False
 
         branch = self._branch_var.get()
@@ -668,7 +712,7 @@ class BuilderApp(tk.Tk):
         cwd.mkdir(parents=True, exist_ok=True)
         try:
             proc = subprocess.Popen(
-                ["git"] + args, cwd=cwd,
+                [resolve_git_exe()] + args, cwd=cwd,
                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                 text=True, creationflags=subprocess.CREATE_NO_WINDOW,
             )
