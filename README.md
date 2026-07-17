@@ -19,7 +19,8 @@ Exports normal XYZ tile folders with attribution and a manifest, InkHUD firmware
 - Coverage overlay showing the exact tile footprint per zoom level before export.
 - Flash usage bars showing how much of the available firmware flash the tiles will consume on ESP32-S3 and nRF52840.
 - Custom map markers — place icons on the map that get baked into exported tiles. No firmware changes required.
-- Session save/load — save and restore the full tool state (map position, settings, markers, tile selection) to a JSON file.
+- GeoJSON overlays — import points/lines/polygons from a `.geojson` file, with per-layer zoom ranges and labels, baked into exported tiles the same way as markers.
+- Session save/load — save and restore the full tool state (map position, settings, markers, GeoJSON layers, tile selection) to a JSON file.
 - Map element toggles: land, water, roads, highways, paths, buildings, boundaries, labels, POI, transit.
 - Grayscale, mono, palette, and original output modes.
 - Regular map overzoom and a topo style with hillshade and contour lines.
@@ -97,6 +98,14 @@ The **Map Source** dropdown selects where tiles come from:
 - Works with all export modes including InkHUD.
 
 Check **I will keep required map attribution with exported tiles** before exporting. The generated `ATTRIBUTION.txt` and `manifest.json` must travel with any shared tile bundle.
+
+### GeoJSON overlays
+
+Click **Import GeoJSON...** (below Map Source) to draw points, lines, and polygons from a `.geojson`/`.json` file on the map. Supports Point, MultiPoint, LineString, MultiLineString, Polygon, MultiPolygon, and GeometryCollection geometry. Like markers, overlays are baked directly into exported tiles.
+
+- Each imported layer gets a **visibility** toggle, a **labels** toggle (if the file has a `name`/`NAME`/`label`/`title` property on its features), and a **min–max zoom** range that controls when its geometry draws.
+- A separate **Show labels at zoom** range (below the layer list) controls when labels appear, independent of each layer's own zoom range.
+- **Fit view to GeoJSON extent** centers/zooms the map to a layer's bounding box. **Select same-box InkHUD2 tiles** picks exactly the tiles needed to cover that box at every zoom in your Min–Max zoom range — useful when you want e.g. z15 and z16 to show the same area (InkHUD2 export only; the classic InkHUD grid format uses a fixed tile count per zoom and can't do this).
 
 ## Export Settings
 
@@ -299,7 +308,7 @@ Both modes use the same image pipeline and the same `MapTile.h`/`MapTile.bin` ou
 
 The **Markers** section lets you place custom icons on the map that are baked directly into the exported tile images. No firmware changes are needed — the firmware sees them as normal tile pixels.
 
-**Available icons:** Parking, Sun, Star, Home, Fish, Bridge, Picnic, Bathroom, Binoculars, Hunting, Tent, RV, Tree, Group, Car, Campfire, Hospital
+**Available icons:** Parking, Sun, Star, Home, Fish, Bridge, Picnic, Bathroom, Binoculars, Hunting, Tent, RV, Tree, Group, Car, Campfire, Hospital, Toilet, Heart
 
 **How to place an icon marker:**
 1. Set the zoom range — the marker will only appear in tiles at those zoom levels.
@@ -332,6 +341,7 @@ Icons are drawn as white symbols on a black square. Text labels are drawn as bla
 - All Export Settings (mode, style, zoom range, grid, brightness, contrast)
 - Map Elements toggle states
 - All placed markers and labels (icon/text, font size, position, zoom range)
+- Imported GeoJSON layers (file path, visibility, label toggle, zoom range — re-read from disk on load)
 - InkHUD2 selected tile set
 
 Use sessions to switch between different areas or projects without re-configuring everything from scratch.

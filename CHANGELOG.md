@@ -2,6 +2,27 @@
 
 ---
 
+## v2.1.0
+
+### GeoJSON overlays
+
+- **Import GeoJSON files as map overlays** — points, lines, and polygons are drawn on the preview and baked into InkHUD exports, same as markers. Supports `.geojson`/`.json` with Point/MultiPoint/LineString/MultiLineString/Polygon/MultiPolygon/GeometryCollection.
+- Per-layer visibility toggle, per-layer zoom range (geometry only draws within its configured zoom range), and per-layer label toggle.
+- Labels auto-extracted from `name`/`NAME`/`label`/`title` properties, rendered as black text with a white halo (no background box), with a separate global zoom range for when labels appear.
+- **Fit view to GeoJSON extent** and **Select same-box InkHUD2 tiles** — computes the exact tiles needed to cover a layer's bounding box at every zoom in your Min–Max zoom range, so e.g. z15 and z16 cover the same area (InkHUD2 export only — the classic InkHUD grid format can't vary tile count per zoom).
+
+### Markers
+
+- Added **Toilet** and **Heart** icons.
+- Marker icon picker buttons are bigger (32×32).
+- Retuned per-zoom marker sizes so z13/z14 stay legible instead of shrinking to a 6px floor.
+
+### Fixes
+
+- GeoJSON overlays and markers could render in the wrong stacking order, letting lines/polygons paint over marker icons. Markers now always render on top regardless of which overlay was redrawn most recently.
+
+---
+
 ## v2.0.0
 
 - **New `MapTile.bin` SD card export** — **⬡ Export for InkHUD (SD Card)** packs the same tiles as `MapTile.h` into a binary file for devices that read tiles from an SD card instead of flash.

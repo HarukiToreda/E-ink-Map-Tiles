@@ -371,6 +371,9 @@ class DesktopApp(tk.Tk):
         self._dragging_marker: bool = False
         self._icon_cache: dict[str, Any] = {}
         self._marker_photo_refs: list[Any] = []
+        self.geojson_layers: list[dict] = []  # [{"name", "path", "visible", "show_labels", "primitives"}]
+        self._geojson_label_photo_refs: list[Any] = []
+        self._geojson_label_cache: dict[tuple[str, int], Any] = {}
 
         self.vars = self.make_vars()
         self.configure_styles()
@@ -422,6 +425,8 @@ class DesktopApp(tk.Tk):
             "marker_icon": tk.StringVar(value="parking"),
             "marker_min_zoom": tk.StringVar(value="14"),
             "marker_max_zoom": tk.StringVar(value="16"),
+            "geojson_label_min_zoom": tk.StringVar(value="15"),
+            "geojson_label_max_zoom": tk.StringVar(value="16"),
             "marker_label_text": tk.StringVar(value=""),
             "marker_label_font_size": tk.StringVar(value="12"),
             "collapse_markers": tk.BooleanVar(value=True),
@@ -873,7 +878,464 @@ class DesktopApp(tk.Tk):
         perm_row.grid(row=2, column=0, sticky="w", pady=(6, 0))
         ToggleSwitch(perm_row, variable=self.vars["permission"], bg=self.C_PANEL).grid(row=0, column=0, padx=(0, 8))
         ttk.Label(perm_row, text="I will keep required map attribution.", style="Hint.TLabel").grid(row=0, column=1, sticky="w")
+
+        sep = ttk.Separator(content, orient="horizontal")
+        sep.grid(row=3, column=0, sticky="ew", pady=(8, 6))
+
+        ttk.Label(content, text="GeoJSON overlays", style="Section.TLabel").grid(row=4, column=0, sticky="w")
+        self.flat_button(content, "Import GeoJSON...", self.import_geojson_layer).grid(row=5, column=0, sticky="ew", pady=(2, 4))
+        ttk.Label(
+            content,
+            text="Points, lines, and polygons from a .geojson file are drawn on the map and baked into InkHUD exports.",
+            style="Hint.TLabel",
+        ).grid(row=6, column=0, sticky="ew", pady=(0, 4))
+
+        self.geojson_list_frame = ttk.Frame(content, style="Card.TFrame")
+        self.geojson_list_frame.grid(row=7, column=0, sticky="ew")
+        self.geojson_list_frame.columnconfigure(0, weight=1)
+        self.refresh_geojson_list()
+
+        label_zoom_row = ttk.Frame(content, style="Card.TFrame")
+        label_zoom_row.grid(row=8, column=0, sticky="ew", pady=(4, 2))
+        ttk.Label(label_zoom_row, text="Show labels at zoom:").grid(row=0, column=0, sticky="w", padx=(0, 6))
+        geojson_label_min_spin = ttk.Spinbox(
+            label_zoom_row, textvariable=self.vars["geojson_label_min_zoom"], from_=0, to=20, width=4)
+        geojson_label_min_spin.grid(row=0, column=1)
+        ttk.Label(label_zoom_row, text="–").grid(row=0, column=2, padx=4)
+        geojson_label_max_spin = ttk.Spinbox(
+            label_zoom_row, textvariable=self.vars["geojson_label_max_zoom"], from_=0, to=20, width=4)
+        geojson_label_max_spin.grid(row=0, column=3)
+        for spin in (geojson_label_min_spin, geojson_label_max_spin):
+            spin.bind("<KeyRelease>", lambda _e: self._on_geojson_label_zoom_range_changed())
+            spin.bind("<<Increment>>", lambda _e: self._on_geojson_label_zoom_range_changed())
+            spin.bind("<<Decrement>>", lambda _e: self._on_geojson_label_zoom_range_changed())
+            spin.bind("<FocusOut>", lambda _e: self._on_geojson_label_zoom_range_changed())
+
+        self.flat_button(content, "Fit view to GeoJSON extent", self.fit_view_to_geojson_extent).grid(
+            row=9, column=0, sticky="ew", pady=(6, 2))
+        self.flat_button(
+            content, "Select same-box InkHUD2 tiles (Min–Max zoom)", self.select_inkhud2_tiles_for_geojson_area,
+        ).grid(row=10, column=0, sticky="ew", pady=(2, 2))
+        ttk.Label(
+            content,
+            text=(
+                "\"Same-box\" only applies to the InkHUD2 (sparse tile) export mode — it selects exactly the "
+                "tiles needed to cover the GeoJSON extent at every zoom in Min–Max zoom, so e.g. z15 and z16 "
+                "show the same area. The classic InkHUD grid export uses a fixed N×N tile count per zoom "
+                "(a firmware format constraint), so its area still shrinks as zoom increases."
+            ),
+            style="Hint.TLabel",
+        ).grid(row=11, column=0, sticky="ew", pady=(0, 4))
         return frame
+
+    def _on_geojson_label_zoom_range_changed(self) -> None:
+        self.draw_geojson_overlay()
+        self.queue_live_update(preview=True, estimate=False)
+
+    def _geojson_combined_bbox(self, visible_only: bool = True) -> tuple[float, float, float, float] | None:
+        lons: list[float] = []
+        lats: list[float] = []
+        for layer in self.geojson_layers:
+            if visible_only and not layer["visible"]:
+                continue
+            for prim in layer["primitives"]:
+                if prim["kind"] == "point":
+                    lons.append(prim["lon"])
+                    lats.append(prim["lat"])
+                elif prim["kind"] == "line":
+                    for lon, lat in prim["coords"]:
+                        lons.append(lon)
+                        lats.append(lat)
+                elif prim["kind"] == "polygon":
+                    for ring in prim["rings"]:
+                        for lon, lat in ring:
+                            lons.append(lon)
+                            lats.append(lat)
+        if not lons:
+            return None
+        return min(lons), min(lats), max(lons), max(lats)
+
+    def fit_view_to_geojson_extent(self) -> None:
+        bbox = self._geojson_combined_bbox()
+        if bbox is None:
+            messagebox.showinfo("No GeoJSON data", "Import a visible GeoJSON layer first.")
+            return
+        west, south, east, north = bbox
+        self.map_center_lon = (west + east) / 2
+        self.map_center_lat = (south + north) / 2
+        span = max(east - west, north - south, 1e-6)
+        zoom = max(MIN_PREVIEW_ZOOM, min(MAX_PREVIEW_ZOOM, int(math.log2(360 / span)) - 1))
+        self.map_zoom = zoom
+        self.vars["center_lat"].set(f"{self.map_center_lat:.6f}")
+        self.vars["center_lon"].set(f"{self.map_center_lon:.6f}")
+        self.sync_view_area()
+        self.schedule_preview(delay_ms=250)
+
+    def select_inkhud2_tiles_for_geojson_area(self) -> None:
+        bbox = self._geojson_combined_bbox()
+        if bbox is None:
+            messagebox.showinfo("No GeoJSON data", "Import a visible GeoJSON layer first.")
+            return
+        west, south, east, north = bbox
+        try:
+            min_zoom = int(self.vars["min_zoom"].get())
+            max_zoom = int(self.vars["max_zoom"].get())
+        except ValueError:
+            messagebox.showerror("Invalid zoom range", "Set valid Min zoom / Max zoom values in Export Settings first.")
+            return
+        if min_zoom > max_zoom:
+            min_zoom, max_zoom = max_zoom, min_zoom
+        cli_bbox = cli.BBox(west=west, south=south, east=east, north=north)
+        per_zoom_tiles: dict[int, set[tuple[int, int]]] = {}
+        for z in range(min_zoom, max_zoom + 1):
+            tiles: set[tuple[int, int]] = set()
+            for x_min, x_max, y_min, y_max in cli.tile_ranges_for_bbox(cli_bbox, z):
+                for x in range(x_min, x_max + 1):
+                    for y in range(y_min, y_max + 1):
+                        tiles.add((x, y))
+            per_zoom_tiles[z] = tiles
+        projected_total = sum(
+            len(self.inkhud2_selected_tiles.get(z, set()) | tiles) for z, tiles in per_zoom_tiles.items()
+        )
+        if projected_total > 4000:
+            if not messagebox.askyesno(
+                "Large tile selection",
+                f"This selects {projected_total:,} tiles total across zooms {min_zoom}-{max_zoom} to cover "
+                f"the same area at every zoom. Large exports take longer and use more flash. Continue?",
+            ):
+                return
+        for z, tiles in per_zoom_tiles.items():
+            self.inkhud2_selected_tiles.setdefault(z, set()).update(tiles)
+        self.vars["mode"].set("inkhud2")
+        self.update_mode_sensitive_controls()
+        self.draw_tile_selection_overlay()
+        self.draw_tile_grid_overlay()
+        self.update_inkhud_flash_bars()
+        self.update_inkhud2_info()
+        self.queue_live_update(preview=True, estimate=False)
+
+    def import_geojson_layer(self) -> None:
+        paths = filedialog.askopenfilenames(
+            title="Import GeoJSON",
+            filetypes=[("GeoJSON files", "*.geojson *.json"), ("All files", "*.*")],
+        )
+        if not paths:
+            return
+        for path in paths:
+            try:
+                primitives = self._parse_geojson_file(path)
+            except Exception as exc:  # noqa: BLE001
+                messagebox.showerror("Import failed", f"{Path(path).name}: {exc}")
+                continue
+            if not primitives:
+                messagebox.showwarning("Empty layer", f"{Path(path).name} contains no supported geometry.")
+                continue
+            has_labels = any(p.get("label") for p in primitives)
+            self.geojson_layers.append({
+                "name": Path(path).stem,
+                "path": str(path),
+                "visible": True,
+                "show_labels": has_labels,
+                "min_zoom": 0,
+                "max_zoom": 20,
+                "primitives": primitives,
+            })
+        self.refresh_geojson_list()
+        self.draw_geojson_overlay()
+        self.queue_live_update(preview=True, estimate=False)
+
+    LABEL_PROPERTY_KEYS = ("name", "NAME", "Name", "label", "LABEL", "title")
+
+    @classmethod
+    def _parse_geojson_file(cls, path: str) -> list[dict]:
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
+        primitives: list[dict] = []
+
+        def label_for(properties: dict | None) -> str | None:
+            if not properties:
+                return None
+            for key in cls.LABEL_PROPERTY_KEYS:
+                value = properties.get(key)
+                if value:
+                    return str(value)
+            return None
+
+        def add_geometry(geom: dict | None, label: str | None) -> None:
+            if not geom:
+                return
+            gtype = geom.get("type")
+            coords = geom.get("coordinates")
+            if gtype == "Point":
+                primitives.append({"kind": "point", "lon": coords[0], "lat": coords[1], "label": label})
+            elif gtype == "MultiPoint":
+                for c in coords:
+                    primitives.append({"kind": "point", "lon": c[0], "lat": c[1], "label": label})
+            elif gtype == "LineString":
+                primitives.append({"kind": "line", "coords": [(c[0], c[1]) for c in coords], "label": label})
+            elif gtype == "MultiLineString":
+                for line in coords:
+                    primitives.append({"kind": "line", "coords": [(c[0], c[1]) for c in line], "label": label})
+            elif gtype == "Polygon":
+                primitives.append({
+                    "kind": "polygon",
+                    "rings": [[(c[0], c[1]) for c in ring] for ring in coords],
+                    "label": label,
+                })
+            elif gtype == "MultiPolygon":
+                for poly in coords:
+                    primitives.append({
+                        "kind": "polygon",
+                        "rings": [[(c[0], c[1]) for c in ring] for ring in poly],
+                        "label": label,
+                    })
+            elif gtype == "GeometryCollection":
+                for g in geom.get("geometries", []):
+                    add_geometry(g, label)
+
+        top_type = data.get("type")
+        if top_type == "FeatureCollection":
+            for feature in data.get("features", []):
+                add_geometry(feature.get("geometry"), label_for(feature.get("properties")))
+        elif top_type == "Feature":
+            add_geometry(data.get("geometry"), label_for(data.get("properties")))
+        else:
+            add_geometry(data, None)
+        return primitives
+
+    def _geojson_label_zoom_in_range(self, z: int) -> bool:
+        try:
+            lo = int(self.vars["geojson_label_min_zoom"].get())
+            hi = int(self.vars["geojson_label_max_zoom"].get())
+        except ValueError:
+            return True
+        if lo > hi:
+            lo, hi = hi, lo
+        return lo <= z <= hi
+
+    @staticmethod
+    def _geojson_layer_zoom_in_range(layer: dict, z: int) -> bool:
+        lo = layer.get("min_zoom", 0)
+        hi = layer.get("max_zoom", 20)
+        if lo > hi:
+            lo, hi = hi, lo
+        return lo <= z <= hi
+
+    @staticmethod
+    def _geojson_label_anchor(prim: dict) -> tuple[float, float] | None:
+        if prim["kind"] == "point":
+            return prim["lon"], prim["lat"]
+        if prim["kind"] == "line":
+            coords = prim["coords"]
+            if not coords:
+                return None
+            return coords[len(coords) // 2]
+        if prim["kind"] == "polygon":
+            ring = prim["rings"][0] if prim["rings"] else None
+            if not ring:
+                return None
+            xs = [c[0] for c in ring]
+            ys = [c[1] for c in ring]
+            return sum(xs) / len(xs), sum(ys) / len(ys)
+        return None
+
+    def refresh_geojson_list(self) -> None:
+        if not hasattr(self, "geojson_list_frame"):
+            return
+        for widget in self.geojson_list_frame.winfo_children():
+            widget.destroy()
+        if not self.geojson_layers:
+            ttk.Label(self.geojson_list_frame, text="No GeoJSON layers imported.", style="Hint.TLabel").grid(
+                row=0, column=0, sticky="w")
+            return
+        for i, layer in enumerate(self.geojson_layers):
+            card = ttk.Frame(self.geojson_list_frame, style="Card.TFrame")
+            card.grid(row=i, column=0, sticky="ew", pady=(1, 3))
+            card.columnconfigure(0, weight=1)
+
+            row = ttk.Frame(card, style="Card.TFrame")
+            row.grid(row=0, column=0, sticky="ew")
+            row.columnconfigure(1, weight=1)
+            visible_var = tk.BooleanVar(value=layer["visible"])
+
+            def on_toggle(idx=i, v=visible_var):
+                self.geojson_layers[idx]["visible"] = v.get()
+                self.draw_geojson_overlay()
+                self.queue_live_update(preview=True, estimate=False)
+
+            ttk.Checkbutton(row, variable=visible_var, command=on_toggle).grid(row=0, column=0, padx=(0, 4))
+            count = len(layer["primitives"])
+            ttk.Label(row, text=f"{layer['name']} ({count})", style="Hint.TLabel").grid(row=0, column=1, sticky="w")
+            has_labels = any(p.get("label") for p in layer["primitives"])
+            if has_labels:
+                labels_var = tk.BooleanVar(value=layer.get("show_labels", True))
+
+                def on_toggle_labels(idx=i, v=labels_var):
+                    self.geojson_layers[idx]["show_labels"] = v.get()
+                    self.draw_geojson_overlay()
+                    self.queue_live_update(preview=True, estimate=False)
+
+                ttk.Checkbutton(
+                    row, text="labels", variable=labels_var, command=on_toggle_labels,
+                ).grid(row=0, column=2, padx=(4, 4))
+            self.flat_button(row, "✕", lambda idx=i: self.remove_geojson_layer(idx)).grid(row=0, column=3, padx=(4, 0))
+
+            zoom_row = ttk.Frame(card, style="Card.TFrame")
+            zoom_row.grid(row=1, column=0, sticky="w", pady=(2, 0))
+            ttk.Label(zoom_row, text="Show geometry at zoom:", style="Hint.TLabel").grid(row=0, column=0, padx=(20, 4))
+            layer_min_var = tk.StringVar(value=str(layer.get("min_zoom", 0)))
+            layer_max_var = tk.StringVar(value=str(layer.get("max_zoom", 20)))
+
+            def on_layer_zoom_changed(idx=i, min_v=layer_min_var, max_v=layer_max_var):
+                try:
+                    self.geojson_layers[idx]["min_zoom"] = int(min_v.get())
+                    self.geojson_layers[idx]["max_zoom"] = int(max_v.get())
+                except ValueError:
+                    return
+                self.draw_geojson_overlay()
+                self.queue_live_update(preview=True, estimate=False)
+
+            min_spin = ttk.Spinbox(zoom_row, textvariable=layer_min_var, from_=0, to=20, width=4)
+            min_spin.grid(row=0, column=1)
+            ttk.Label(zoom_row, text="–", style="Hint.TLabel").grid(row=0, column=2, padx=3)
+            max_spin = ttk.Spinbox(zoom_row, textvariable=layer_max_var, from_=0, to=20, width=4)
+            max_spin.grid(row=0, column=3)
+            for spin in (min_spin, max_spin):
+                spin.bind("<KeyRelease>", lambda _e, cb=on_layer_zoom_changed: cb())
+                spin.bind("<<Increment>>", lambda _e, cb=on_layer_zoom_changed: cb())
+                spin.bind("<<Decrement>>", lambda _e, cb=on_layer_zoom_changed: cb())
+                spin.bind("<FocusOut>", lambda _e, cb=on_layer_zoom_changed: cb())
+
+    def remove_geojson_layer(self, index: int) -> None:
+        if 0 <= index < len(self.geojson_layers):
+            self.geojson_layers.pop(index)
+        self.refresh_geojson_list()
+        self.draw_geojson_overlay()
+        self.queue_live_update(preview=True, estimate=False)
+
+    def draw_geojson_overlay(self) -> None:
+        from PIL import ImageTk
+        self.map_canvas.delete("geojson-overlay")
+        self._geojson_label_photo_refs.clear()
+        if not self.geojson_layers:
+            return
+        z = self.map_zoom
+        canvas_w = max(self.preview_rendered_width, 1)
+        canvas_h = max(self.preview_rendered_height, 1)
+        cx_view, cy_view = self.lon_lat_to_world_pixel(self.map_center_lon, self.map_center_lat, z)
+        base_fs = 11
+        scaled_fs = max(6, int(base_fs * 2 ** (z - 16)))
+
+        def to_canvas(lon: float, lat: float) -> tuple[float, float]:
+            px, py = self.lon_lat_to_world_pixel(lon, lat, z)
+            return px - cx_view + canvas_w / 2, py - cy_view + canvas_h / 2
+
+        # Pass 1: all geometry for every layer, so later layers can't paint over earlier labels.
+        for layer in self.geojson_layers:
+            if not layer["visible"] or not self._geojson_layer_zoom_in_range(layer, z):
+                continue
+            for prim in layer["primitives"]:
+                if prim["kind"] == "point":
+                    x, y = to_canvas(prim["lon"], prim["lat"])
+                    r = 1
+                    self.map_canvas.create_oval(
+                        x - r, y - r, x + r, y + r, fill="#000000", outline="#ffffff", tags=("geojson-overlay",))
+                elif prim["kind"] == "line":
+                    pts = [c for lon, lat in prim["coords"] for c in to_canvas(lon, lat)]
+                    if len(pts) >= 4:
+                        self.map_canvas.create_line(*pts, fill="#000000", width=1, tags=("geojson-overlay",))
+                elif prim["kind"] == "polygon":
+                    for ring in prim["rings"]:
+                        pts = [c for lon, lat in ring for c in to_canvas(lon, lat)]
+                        if len(pts) >= 6:
+                            self.map_canvas.create_line(*pts, fill="#000000", width=1, tags=("geojson-overlay",))
+
+        # Pass 2: labels on top of all geometry (only within the configured label zoom range).
+        if self._geojson_label_zoom_in_range(z):
+            for layer in self.geojson_layers:
+                if not layer["visible"] or not layer.get("show_labels", True):
+                    continue
+                for prim in layer["primitives"]:
+                    if not prim.get("label"):
+                        continue
+                    anchor = self._geojson_label_anchor(prim)
+                    if anchor is None:
+                        continue
+                    x, y = to_canvas(anchor[0], anchor[1])
+                    label_img = self._get_geojson_label_image(prim["label"], scaled_fs)
+                    photo = ImageTk.PhotoImage(label_img)
+                    self._geojson_label_photo_refs.append(photo)
+                    w, h = label_img.size
+                    self.map_canvas.create_image(
+                        int(x - w / 2), int(y - h / 2), image=photo, anchor="nw", tags=("geojson-overlay",))
+
+        # Canvas stacking is by item creation order, not draw-call order — the
+        # geojson items just created above would otherwise sit on top of markers
+        # drawn earlier. Re-raise markers so they're always on top regardless of
+        # which overlay was redrawn most recently.
+        try:
+            self.map_canvas.tag_raise("marker-overlay")
+        except tk.TclError:
+            pass  # no marker items exist yet
+
+    def _draw_geojson_on_tile(self, rgb_image, z: int, tx: int, ty: int) -> None:
+        if not self.geojson_layers:
+            return
+        from PIL import ImageDraw
+        n = 2 ** z
+        draw = ImageDraw.Draw(rgb_image)
+
+        def to_px(lon: float, lat: float) -> tuple[float, float]:
+            fx = (lon + 180.0) / 360.0 * n
+            lat_rad = math.radians(lat)
+            fy = (1.0 - math.log(math.tan(lat_rad) + 1.0 / math.cos(lat_rad)) / math.pi) / 2.0 * n
+            return (fx - tx) * 256, (fy - ty) * 256
+
+        margin = 256
+        base_fs = 11
+        scaled_fs = max(6, int(base_fs * 2 ** (z - 16)))
+        # Pass 1: all geometry for every layer, so later layers can't paint over earlier labels.
+        for layer in self.geojson_layers:
+            if not layer["visible"] or not self._geojson_layer_zoom_in_range(layer, z):
+                continue
+            for prim in layer["primitives"]:
+                if prim["kind"] == "point":
+                    x, y = to_px(prim["lon"], prim["lat"])
+                    if -margin <= x <= 256 + margin and -margin <= y <= 256 + margin:
+                        r = 1
+                        draw.ellipse([x - r, y - r, x + r, y + r], fill=(0, 0, 0))
+                elif prim["kind"] == "line":
+                    pts = [to_px(lon, lat) for lon, lat in prim["coords"]]
+                    if any(-margin <= x <= 256 + margin and -margin <= y <= 256 + margin for x, y in pts):
+                        draw.line(pts, fill=(0, 0, 0), width=1)
+                elif prim["kind"] == "polygon":
+                    for ring in prim["rings"]:
+                        pts = [to_px(lon, lat) for lon, lat in ring]
+                        if any(-margin <= x <= 256 + margin and -margin <= y <= 256 + margin for x, y in pts):
+                            draw.line(pts + [pts[0]], fill=(0, 0, 0), width=1)
+
+        # Pass 2: labels on top of all geometry (only within the configured label zoom range).
+        if self._geojson_label_zoom_in_range(z):
+            for layer in self.geojson_layers:
+                if not layer["visible"] or not layer.get("show_labels", True):
+                    continue
+                for prim in layer["primitives"]:
+                    if not prim.get("label"):
+                        continue
+                    anchor = self._geojson_label_anchor(prim)
+                    if anchor is None:
+                        continue
+                    x, y = to_px(anchor[0], anchor[1])
+                    icon = self._get_geojson_label_image(prim["label"], scaled_fs)
+                    iw, ih = icon.size
+                    if x < -iw or x > 256 + iw or y < -ih or y > 256 + ih:
+                        continue
+                    paste_x, paste_y = int(x - iw / 2), int(y - ih / 2)
+                    x0, y0 = max(paste_x, 0), max(paste_y, 0)
+                    x1, y1 = min(paste_x + iw, 256), min(paste_y + ih, 256)
+                    if x1 <= x0 or y1 <= y0:
+                        continue
+                    crop = icon.crop((x0 - paste_x, y0 - paste_y, x1 - paste_x, y1 - paste_y))
+                    rgb_image.paste(crop, (x0, y0), crop)
 
     def search_location(self) -> None:
         raw = self.search_entry.get() if hasattr(self, "search_entry") else self.vars["search_query"].get()
@@ -2402,6 +2864,7 @@ class DesktopApp(tk.Tk):
         self.draw_tile_grid_overlay()
         self.draw_tile_selection_overlay()
         self.draw_inkhud_coverage_overlay()
+        self.draw_geojson_overlay()
         self.draw_markers_overlay()
 
     def render_preview_vector_tile(self, tile: cli.Tile, job: dict[str, Any]):
@@ -2484,6 +2947,7 @@ class DesktopApp(tk.Tk):
         self.draw_tile_grid_overlay()
         self.draw_tile_selection_overlay()
         self.draw_inkhud_coverage_overlay()
+        self.draw_geojson_overlay()
         self.draw_markers_overlay()
 
     def preview_failed(self) -> None:
@@ -2791,6 +3255,7 @@ class DesktopApp(tk.Tk):
                         return
                     tile_path = temp_out / "tiles" / style / str(z) / str(tx) / f"{ty}.png"
                     rgb = Image.open(tile_path).convert("RGB") if tile_path.exists() else Image.new("RGB", (256, 256), (255, 255, 255))
+                    self._draw_geojson_on_tile(rgb, z, tx, ty)
                     self._draw_markers_on_tile(rgb, z, tx, ty)
                     bw = cli.inkhud_process(rgb, float(job["contrast"]), float(job["brightness"]), protect_land="land" in set(job.get("elements", {}).get("include", [])))
                     raw: list[int] = []
@@ -2880,6 +3345,7 @@ class DesktopApp(tk.Tk):
                     )
                 except Exception:
                     rgb = Image.new("RGB", (256, 256), (255, 255, 255))
+                self._draw_geojson_on_tile(rgb, z, tx, ty)
                 self._draw_markers_on_tile(rgb, z, tx, ty)
                 bw = cli.inkhud_process(rgb, contrast, brightness, protect_land=protect_land)
                 arr = np.array(bw, dtype=np.uint8)  # (H=256, W=256), arr[y,x]
@@ -2960,7 +3426,7 @@ class DesktopApp(tk.Tk):
     # ── Markers ──────────────────────────────────────────────────────────────
 
     MARKER_ICONS = ["parking", "sun", "star", "home", "fish", "bridge", "picnic", "bathroom", "binoculars", "hunting",
-                    "tent", "rv", "tree", "group", "car", "campfire", "hospital"]
+                    "tent", "rv", "tree", "group", "car", "campfire", "hospital", "toilet", "heart"]
 
     def build_markers_section(self, parent: ttk.Frame) -> ttk.Frame:
         from PIL import Image as _Image, ImageTk
@@ -2976,7 +3442,7 @@ class DesktopApp(tk.Tk):
         icons_per_row = 8
         for i, icon_name in enumerate(self.MARKER_ICONS):
             icon_pil = self._get_icon_image(icon_name)
-            photo = ImageTk.PhotoImage(icon_pil.resize((24, 24), _Image.NEAREST))
+            photo = ImageTk.PhotoImage(icon_pil.resize((32, 32), _Image.NEAREST))
             self._icon_button_photos[icon_name] = photo
             btn = tk.Button(
                 picker, image=photo, relief="flat", bd=2, cursor="hand2",
@@ -3210,6 +3676,19 @@ class DesktopApp(tk.Tk):
         mx, my = self.lon_lat_to_world_pixel(m["lon"], m["lat"], z)
         return int(mx - cx_view + canvas_w / 2), int(my - cy_view + canvas_h / 2)
 
+    @staticmethod
+    def _marker_icon_size(z: int) -> int:
+        # z16 is the reference size (28px), doubling/halving per zoom above 15.
+        # Below that, sizes are explicit rather than pure halving, which shrank
+        # z13/z14 down to an indistinguishable floor.
+        if z >= 15:
+            return max(12, int(28 * 2 ** (z - 16)))
+        if z == 14:
+            return 12
+        if z == 13:
+            return 9
+        return 6
+
     def draw_markers_overlay(self) -> None:
         from PIL import Image as _Image, ImageTk
         self.map_canvas.delete("marker-overlay")
@@ -3217,7 +3696,7 @@ class DesktopApp(tk.Tk):
         if not self.markers:
             return
         z = self.map_zoom
-        size = max(6, int(20 * 2 ** (z - 16)))
+        size = self._marker_icon_size(z)
         half = size // 2
         canvas_w = max(self.preview_rendered_width, 1)
         canvas_h = max(self.preview_rendered_height, 1)
@@ -3382,13 +3861,27 @@ class DesktopApp(tk.Tk):
         elif name == "hospital":
             d.rectangle([6, 2, 9, 13], fill=W)   # vertical bar
             d.rectangle([2, 6, 13, 9], fill=W)   # horizontal bar
+        elif name == "toilet":
+            # Tank + bowl profile, side view
+            d.rectangle([2, 1, 7, 7], fill=W)      # tank
+            d.ellipse([2, 6, 13, 12], fill=W)      # bowl
+            d.rectangle([2, 6, 7, 8], fill=W)      # seam between tank and bowl
+            d.line([(2, 7), (7, 7)], fill=B)       # divider: tank from bowl
+            d.rectangle([6, 12, 9, 14], fill=W)    # base
+        elif name == "heart":
+            cx = 7.5
+            d.polygon(
+                [(cx, 13), (1, 6.5), (1, 4), (3, 2), (cx, 5.5), (12, 2), (14, 4), (14, 6.5)],
+                fill=W,
+            )
+            d.pieslice([1, 1, 8, 8], 180, 360, fill=W)
+            d.pieslice([7, 1, 14, 8], 180, 360, fill=W)
         self._icon_cache[name] = img
         return img
 
-    def _get_label_image(self, text: str, font_size: int):
-        from PIL import Image as _Image, ImageDraw, ImageFont
-        font_size = max(6, font_size)
-        font = None
+    @staticmethod
+    def _load_label_font(font_size: int):
+        from PIL import ImageFont
         candidates = [
             "arial.ttf",  # Windows
             "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",  # Debian/Ubuntu
@@ -3398,12 +3891,15 @@ class DesktopApp(tk.Tk):
         ]
         for candidate in candidates:
             try:
-                font = ImageFont.truetype(candidate, font_size)
-                break
+                return ImageFont.truetype(candidate, font_size)
             except Exception:
                 continue
-        if font is None:
-            font = ImageFont.load_default()
+        return ImageFont.load_default()
+
+    def _get_label_image(self, text: str, font_size: int):
+        from PIL import Image as _Image, ImageDraw
+        font_size = max(6, font_size)
+        font = self._load_label_font(font_size)
         tmp = _Image.new("RGB", (1, 1))
         td = ImageDraw.Draw(tmp)
         bbox = td.textbbox((0, 0), text, font=font)
@@ -3416,9 +3912,34 @@ class DesktopApp(tk.Tk):
         d.text((pad - bbox[0], pad - bbox[1]), text, fill=(0, 0, 0), font=font)
         return img
 
+    def _get_geojson_label_image(self, text: str, font_size: int):
+        """Halo-style label: black text with a white stroke, transparent background, no box."""
+        from PIL import Image as _Image, ImageDraw
+        cache_key = (text, font_size)
+        cached = self._geojson_label_cache.get(cache_key)
+        if cached is not None:
+            return cached
+        font_size = max(6, font_size)
+        font = self._load_label_font(font_size)
+        stroke_width = max(1, font_size // 7)
+        tmp = _Image.new("RGBA", (1, 1))
+        td = ImageDraw.Draw(tmp)
+        bbox = td.textbbox((0, 0), text, font=font, stroke_width=stroke_width)
+        tw = bbox[2] - bbox[0]
+        th = bbox[3] - bbox[1]
+        pad = stroke_width + 1
+        img = _Image.new("RGBA", (tw + pad * 2, th + pad * 2), (0, 0, 0, 0))
+        d = ImageDraw.Draw(img)
+        d.text(
+            (pad - bbox[0], pad - bbox[1]), text, font=font,
+            fill=(0, 0, 0, 255), stroke_width=stroke_width, stroke_fill=(255, 255, 255, 255),
+        )
+        self._geojson_label_cache[cache_key] = img
+        return img
+
     def _draw_markers_on_tile(self, rgb_image, z: int, tx: int, ty: int) -> None:
         n = 2 ** z
-        size = max(6, int(20 * 2 ** (z - 16)))
+        size = self._marker_icon_size(z)
         for marker in self.markers:
             if not (marker["min_zoom"] <= z <= marker["max_zoom"]):
                 continue
@@ -3471,6 +3992,7 @@ class DesktopApp(tk.Tk):
                     "output",
                     "center_lat", "center_lon", "radius_km",
                     "marker_icon", "marker_min_zoom", "marker_max_zoom", "marker_label_text", "marker_label_font_size",
+                    "geojson_label_min_zoom", "geojson_label_max_zoom",
                     "show_inkhud_coverage", "permission",
                     "collapse_map_source", "collapse_area", "collapse_export_settings",
                     "collapse_map_elements", "collapse_markers",
@@ -3480,6 +4002,17 @@ class DesktopApp(tk.Tk):
             "inkhud_custom_expanded": self._inkhud_custom_expanded,
             "elements": {e: bool(self.vars[f"element_{e}"].get()) for e in cli.MAP_ELEMENTS},
             "markers": self.markers,
+            "geojson_layers": [
+                {
+                    "name": layer["name"],
+                    "path": layer["path"],
+                    "visible": layer["visible"],
+                    "show_labels": layer.get("show_labels", True),
+                    "min_zoom": layer.get("min_zoom", 0),
+                    "max_zoom": layer.get("max_zoom", 20),
+                }
+                for layer in self.geojson_layers
+            ],
             "inkhud2_selected_tiles": {
                 str(z): [[tx, ty] for tx, ty in sorted(tiles)]
                 for z, tiles in self.inkhud2_selected_tiles.items()
@@ -3512,7 +4045,8 @@ class DesktopApp(tk.Tk):
                       "min_zoom", "max_zoom",
                       "output",
                       "center_lat", "center_lon", "radius_km",
-                      "marker_icon", "marker_min_zoom", "marker_max_zoom", "marker_label_text", "marker_label_font_size"]:
+                      "marker_icon", "marker_min_zoom", "marker_max_zoom", "marker_label_text", "marker_label_font_size",
+                      "geojson_label_min_zoom", "geojson_label_max_zoom"]:
                 if k in settings and k in self.vars:
                     self.vars[k].set(str(settings[k]))
             for k in ["brightness", "contrast", "threshold"]:
@@ -3530,6 +4064,24 @@ class DesktopApp(tk.Tk):
             self.inkhud_omit_zooms = set(data.get("inkhud_omit_zooms", []))
             self._inkhud_custom_expanded = bool(data.get("inkhud_custom_expanded", False))
             self.markers = data.get("markers", [])
+            self.geojson_layers = []
+            for saved in data.get("geojson_layers", []):
+                path = saved.get("path", "")
+                if not path or not Path(path).exists():
+                    continue
+                try:
+                    primitives = self._parse_geojson_file(path)
+                except Exception:  # noqa: BLE001
+                    continue
+                self.geojson_layers.append({
+                    "name": saved.get("name", Path(path).stem),
+                    "path": path,
+                    "visible": bool(saved.get("visible", True)),
+                    "show_labels": bool(saved.get("show_labels", True)),
+                    "min_zoom": int(saved.get("min_zoom", 0)),
+                    "max_zoom": int(saved.get("max_zoom", 20)),
+                    "primitives": primitives,
+                })
             raw = data.get("inkhud2_selected_tiles", {})
             self.inkhud2_selected_tiles = {int(z): {(tx, ty) for tx, ty in tiles} for z, tiles in raw.items()}
             # Rebuild UI that depends on the loaded values, still inside the guard
@@ -3542,6 +4094,7 @@ class DesktopApp(tk.Tk):
         if self.marker_placing:
             self._exit_marker_placing()
         self.refresh_marker_list()
+        self.refresh_geojson_list()
         self.sync_view_area()
         self.schedule_preview(delay_ms=250)
 
