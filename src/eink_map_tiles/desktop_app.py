@@ -374,6 +374,7 @@ class DesktopApp(tk.Tk):
         self.marker_placing = False
         self._editing_marker_index: int | None = None
         self._dragging_marker: bool = False
+        self._suppress_marker_field_trace: bool = False
         self._icon_cache: dict[str, Any] = {}
         self._marker_photo_refs: list[Any] = []
         self.geojson_layers: list[dict] = []  # [{"name", "path", "visible", "show_labels", "primitives"}]
@@ -646,6 +647,11 @@ class DesktopApp(tk.Tk):
         area_keys = ("west", "south", "east", "north")
         for key in area_keys:
             self.vars[key].trace_add("write", lambda *_args: self.queue_live_update(preview=True, estimate=True))
+
+        # When a placed marker is selected in the list, editing these fields updates
+        # that marker live (visible zoom range, and label text/size for text markers).
+        for key in ("marker_min_zoom", "marker_max_zoom", "marker_label_text", "marker_label_font_size"):
+            self.vars[key].trace_add("write", lambda *_args: self._on_marker_field_changed())
 
         for element in cli.MAP_ELEMENTS:
             self.vars[f"element_{element}"].trace_add("write", lambda *_args: self.element_changed())
@@ -1948,11 +1954,14 @@ class DesktopApp(tk.Tk):
         # Remove any omitted zooms / grid overrides that are no longer in range
         self.inkhud_omit_zooms = {z for z in self.inkhud_omit_zooms if min_z <= z <= max_z}
         self.inkhud_zoom_grids = {z: g for z, g in self.inkhud_zoom_grids.items() if min_z <= z <= max_z}
-        COLS_PER_ROW = 8
+        # Each column now carries a grid dropdown (~50px wide), so fewer fit per row
+        # than the old toggle-only layout — wrap at 5 so bands don't clip on the right.
+        COLS_PER_ROW = 5
         GRID_VALUES = ["8x8", "6x6", "5x5", "4x4", "3x3", "2x2", "1x1"]
         ttk.Label(self.inkhud_zoom_toggles_frame,
-                  text="Include zooms & per-zoom grid (each block is centered on the map center):",
-                  style="Hint.TLabel").grid(row=0, column=0, columnspan=COLS_PER_ROW, sticky="w", pady=(0, 2))
+                  text="Include zooms & per-zoom grid (centered on the map center):",
+                  style="Hint.TLabel", wraplength=260, justify="left").grid(
+                      row=0, column=0, columnspan=COLS_PER_ROW, sticky="w", pady=(0, 2))
         # 3 rows per band: toggle, z-label, grid dropdown
         for idx, z in enumerate(range(min_z, max_z + 1)):
             col = idx % COLS_PER_ROW
@@ -2107,6 +2116,12 @@ class DesktopApp(tk.Tk):
                 tile_zooms: list[int] = []
                 tile_tx: list[int] = []
                 tile_ty: list[int] = []
+                # Rendering + compressing every tile in every zoom's grid is the whole
+                # export — far too heavy for a live estimate (e.g. 9 zooms × 4×4 = 144
+                # renders). Instead render only a few tiles per zoom and extrapolate to
+                # the full grid. The flash bars already show "≤" (upper bound), so we
+                # skip dedup here and scale by tile count.
+                SAMPLE_PER_ZOOM = 3
                 for z in job["zooms"]:
                     if cancel.is_set():
                         return
@@ -2118,24 +2133,36 @@ class DesktopApp(tk.Tk):
                     block_zooms.append(z)
                     block_tx.append(max(0, min(n - 1, x0)))
                     block_ty.append(max(0, min(n - 1, y0)))
+                    # Enumerate the full grid coords (cheap — used for tile count and
+                    # metadata type widths); only a small sample is actually rendered.
+                    coords = []
                     for dx in range(g):
                         for dy in range(g):
-                            if cancel.is_set():
-                                return
                             tx = max(0, min(n - 1, x0 + dx))
                             ty = max(0, min(n - 1, y0 + dy))
                             tile_zooms.append(z)
                             tile_tx.append(tx)
                             tile_ty.append(ty)
-                            tile = cli.Tile(z=z, x=tx, y=ty)
-                            kind, payload = _compress_tile(tile, job)
-                            if kind != self.INKHUD_TILE_KIND_LZ4:
-                                continue
-                            compressed_sizes.append(len(payload))
-                            if payload in seen_payloads:
-                                continue
-                            seen_payloads.add(payload)
-                            total_payload_bytes += len(payload)
+                            coords.append((tx, ty))
+                    if len(coords) <= SAMPLE_PER_ZOOM:
+                        sample = coords
+                    else:
+                        step = len(coords) / SAMPLE_PER_ZOOM
+                        sample = [coords[int(i * step)] for i in range(SAMPLE_PER_ZOOM)]
+                    lz4_sizes: list[int] = []
+                    for tx, ty in sample:
+                        if cancel.is_set():
+                            return
+                        kind, payload = _compress_tile(cli.Tile(z=z, x=tx, y=ty), job)
+                        if kind == self.INKHUD_TILE_KIND_LZ4:
+                            lz4_sizes.append(len(payload))
+                    # Extrapolate this zoom's payload to the full grid (upper bound).
+                    if lz4_sizes:
+                        avg = sum(lz4_sizes) / len(lz4_sizes)
+                        frac_lz4 = len(lz4_sizes) / len(sample)
+                        est_lz4_tiles = int(round(g * g * frac_lz4))
+                        total_payload_bytes += int(avg * est_lz4_tiles)
+                        compressed_sizes.extend(lz4_sizes)
                 if uniform_grid:
                     g = next(iter(zoom_grids.values()))
                     total_bytes = self._estimate_grid_storage_bytes(
@@ -3768,18 +3795,46 @@ class DesktopApp(tk.Tk):
         m = self.markers[index]
         self._editing_marker_index = index
         self._dragging_marker = False
-        # Populate label controls from the marker
-        if m["icon"] == "__label__":
-            self.vars["marker_label_text"].set(m.get("label_text", ""))
-            self.vars["marker_label_font_size"].set(str(m.get("font_size", 12)))
-        self.vars["marker_min_zoom"].set(str(m["min_zoom"]))
-        self.vars["marker_max_zoom"].set(str(m["max_zoom"]))
-        self.vars["marker_icon"].set(m["icon"])
+        # Populate controls from the marker without the field traces writing back.
+        self._suppress_marker_field_trace = True
+        try:
+            if m["icon"] == "__label__":
+                self.vars["marker_label_text"].set(m.get("label_text", ""))
+                self.vars["marker_label_font_size"].set(str(m.get("font_size", 12)))
+            self.vars["marker_min_zoom"].set(str(m["min_zoom"]))
+            self.vars["marker_max_zoom"].set(str(m["max_zoom"]))
+            self.vars["marker_icon"].set(m["icon"])
+        finally:
+            self._suppress_marker_field_trace = False
         self.map_canvas.configure(cursor="fleur")
         if hasattr(self, "marker_status_label"):
             name = f"\"{m.get('label_text', '')}\"" if m["icon"] == "__label__" else m["icon"].title()
-            self.marker_status_label.configure(text=f"Drag {name} on the map to move it. Click row again to deselect.")
+            self.marker_status_label.configure(
+                text=f"Editing {name}: change the zoom range or drag it on the map. Click the row again to deselect."
+            )
         self._update_marker_list_display()
+        self.draw_markers_overlay()
+
+    def _on_marker_field_changed(self) -> None:
+        """Apply live edits from the marker fields to the currently selected marker."""
+        if self._suppress_marker_field_trace:
+            return
+        idx = self._editing_marker_index
+        if idx is None or not (0 <= idx < len(self.markers)):
+            return
+        m = self.markers[idx]
+        try:
+            m["min_zoom"] = int(self.vars["marker_min_zoom"].get())
+            m["max_zoom"] = int(self.vars["marker_max_zoom"].get())
+        except ValueError:
+            return  # mid-edit / empty field — ignore until valid
+        if m["icon"] == "__label__":
+            m["label_text"] = self.vars["marker_label_text"].get().strip() or m.get("label_text", "")
+            try:
+                m["font_size"] = max(6, int(self.vars["marker_label_font_size"].get()))
+            except ValueError:
+                pass
+        self.refresh_marker_list()
         self.draw_markers_overlay()
 
     def _canvas_marker_screen_pos(self, index: int):
@@ -3794,15 +3849,17 @@ class DesktopApp(tk.Tk):
 
     @staticmethod
     def _marker_icon_size(z: int) -> int:
-        # z16 is the reference size (28px), doubling/halving per zoom above 15.
-        # Below that, sizes are explicit rather than pure halving, which shrank
-        # z13/z14 down to an indistinguishable floor.
-        if z >= 15:
-            return max(12, int(28 * 2 ** (z - 16)))
+        # z16 is the reference size (18px — small enough not to swamp a street block),
+        # doubling above z16. Below that, sizes taper explicitly so z13/z14 stay
+        # visible instead of collapsing to an indistinguishable floor.
+        if z >= 16:
+            return int(18 * 2 ** (z - 16))
+        if z == 15:
+            return 13
         if z == 14:
-            return 12
+            return 10
         if z == 13:
-            return 9
+            return 8
         return 6
 
     def draw_markers_overlay(self) -> None:

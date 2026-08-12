@@ -296,7 +296,7 @@ Example combinations that fit nRF52840 (~47 KB budget):
 - z14 3×3 ≈ 32 KB — fits with room for a second zoom level
 - z13 2×2 + z14 3×3 ≈ 47 KB — two zoom levels at nRF budget
 
-The flash bars in the Export panel show estimated usage. The estimate is computed by rendering and LZ4-compressing one real tile per zoom level at the center of the export area, then multiplying by the grid size. This gives an accurate prediction that reflects actual map content and contrast settings. The sample runs automatically in the background about one second after settings change.
+The flash bars show estimated usage (upper bound). The estimate LZ4-compresses a few sample tiles per zoom and extrapolates to the full grid, running in the background ~1s after settings change. Decoded vector tiles are cached so repeat renders skip the network.
 
 ### InkHUD vs InkHUD2
 
@@ -331,8 +331,8 @@ Labels render as black text on a white background rectangle with a black outline
 **Moving and editing markers:**
 - Click any row in the marker list to select it. A blue highlight appears around it on the map and the cursor changes to a move cursor.
 - Drag the marker on the map to reposition it in real time.
+- While selected, the controls above populate with the marker's values — editing the **Show at zoom** range (and label text/size for text markers) applies to that marker live, no need to re-place.
 - Click the same row again to deselect.
-- For labels, the controls above populate with the label's current text, font size, and zoom range — edit them and place again to update.
 
 Placed markers appear in the list below the icon picker with their type, zoom range, and coordinates. Click **×** to remove one.
 

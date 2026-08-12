@@ -4,9 +4,11 @@ import json
 import math
 import shutil
 import tempfile
+import threading
 import time
 import urllib.error
 import urllib.request
+from collections import OrderedDict
 from io import BytesIO
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -225,6 +227,36 @@ def render_openfreemap_tile(
     image.save(destination, format="PNG", optimize=True)
 
 
+_VECTOR_DATA_CACHE: "OrderedDict[tuple, dict]" = OrderedDict()
+_VECTOR_DATA_CACHE_MAX = 160
+_VECTOR_DATA_CACHE_LOCK = threading.Lock()
+
+
+def _cached_vector_data(tile: Tile, user_agent: str, timeout: float, retries: int, overzoom: bool) -> dict:
+    """Decoded vector-tile data with a small thread-safe LRU cache. The decoded data
+    is read-only for the drawing code, so re-renders of the same tile (e.g. the flash
+    estimate re-running after a brightness/contrast/element tweak, or the preview and
+    estimate touching the same tile) reuse it instead of re-fetching over the network."""
+    key = (tile.z, tile.x, tile.y, overzoom)
+    with _VECTOR_DATA_CACHE_LOCK:
+        cached = _VECTOR_DATA_CACHE.get(key)
+        if cached is not None:
+            _VECTOR_DATA_CACHE.move_to_end(key)
+            return cached
+    if overzoom:
+        data = fetch_overzoomed_openfreemap_data(tile, user_agent, timeout, retries)
+    else:
+        from mapbox_vector_tile import decode
+        raw = fetch_bytes(tile_url(OPENFREEMAP_VECTOR_TEMPLATE, tile), user_agent, timeout, retries)
+        data = decode(raw, default_options={"y_coord_down": True}) if raw else {}
+    with _VECTOR_DATA_CACHE_LOCK:
+        _VECTOR_DATA_CACHE[key] = data
+        _VECTOR_DATA_CACHE.move_to_end(key)
+        while len(_VECTOR_DATA_CACHE) > _VECTOR_DATA_CACHE_MAX:
+            _VECTOR_DATA_CACHE.popitem(last=False)
+    return data
+
+
 def render_openfreemap_image(
     tile: Tile,
     user_agent: str,
@@ -233,16 +265,12 @@ def render_openfreemap_image(
     elements: list[str] | tuple[str, ...] | None = None,
     style: str = "osm-eink",
 ):
-    from mapbox_vector_tile import decode
     from PIL import Image, ImageDraw
 
     selected = set(elements if elements is not None else MAP_ELEMENTS)
     topo = is_topo_style(style)
-    if supports_vector_overzoom(style) and tile.z > OPENFREEMAP_MAX_DETAIL_ZOOM:
-        data = fetch_overzoomed_openfreemap_data(tile, user_agent, timeout, retries)
-    else:
-        raw = fetch_bytes(tile_url(OPENFREEMAP_VECTOR_TEMPLATE, tile), user_agent, timeout, retries)
-        data = decode(raw, default_options={"y_coord_down": True}) if raw else {}
+    overzoom = supports_vector_overzoom(style) and tile.z > OPENFREEMAP_MAX_DETAIL_ZOOM
+    data = _cached_vector_data(tile, user_agent, timeout, retries, overzoom)
     image = Image.new("RGB", (256, 256), "#f7f8f4")
     draw = ImageDraw.Draw(image)
 

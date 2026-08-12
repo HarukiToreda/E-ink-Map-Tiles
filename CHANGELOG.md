@@ -9,6 +9,10 @@
 - Pedestrian streets (`highway=path`/`pedestrian`, e.g. Black Rock City's grid) now render as solid streets instead of thin dashed lines; true trails stay dashed.
 - POI labels wrap and center below the marker (OSM style), are never truncated, skip overlaps, and stay inside the tile.
 
+### Performance
+
+- Much faster zooming, especially in dense areas. The InkHUD flash estimate now samples a few tiles per zoom and extrapolates instead of rendering every tile in every zoom's grid (previously up to 144 full tile renders per estimate), and decoded vector tiles are cached so repeated previews/estimates of the same area skip the network fetch.
+
 ### Per-zoom grid sizes (classic InkHUD)
 
 - **Each zoom level can now have its own grid size in classic InkHUD mode.** Open **Custom** in Export Settings and every zoom in the Min–Max range gets its own grid dropdown alongside its include toggle. This lets coarser zooms cover the *same* footprint as a finer one — e.g. set z16 to 8×8 and z15 to 4×4 so both cover an identical area (halve the grid for each zoom level you drop). Previously the classic InkHUD grid used one fixed tile count for every zoom.
@@ -27,6 +31,8 @@
 - Added **Toilet** and **Heart** icons.
 - Marker icon picker buttons are bigger (32×32).
 - Retuned per-zoom marker sizes so z13/z14 stay legible instead of shrinking to a 6px floor.
+- Selecting a placed marker in the list now lets you edit its visible zoom range (and label text/size) live — changes apply immediately, no need to re-place.
+- Smaller marker icons at z16 (18px instead of 28px) so they no longer swamp a street block; lower zooms taper proportionally.
 
 ### Fixes
 
