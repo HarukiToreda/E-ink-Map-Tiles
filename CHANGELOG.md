@@ -4,6 +4,11 @@
 
 ## v2.1.0
 
+### Map rendering
+
+- Pedestrian streets (`highway=path`/`pedestrian`, e.g. Black Rock City's grid) now render as solid streets instead of thin dashed lines; true trails stay dashed.
+- POI labels wrap and center below the marker (OSM style), are never truncated, skip overlaps, and stay inside the tile.
+
 ### Per-zoom grid sizes (classic InkHUD)
 
 - **Each zoom level can now have its own grid size in classic InkHUD mode.** Open **Custom** in Export Settings and every zoom in the Min–Max range gets its own grid dropdown alongside its include toggle. This lets coarser zooms cover the *same* footprint as a finer one — e.g. set z16 to 8×8 and z15 to 4×4 so both cover an identical area (halve the grid for each zoom level you drop). Previously the classic InkHUD grid used one fixed tile count for every zoom.

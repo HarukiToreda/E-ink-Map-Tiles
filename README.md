@@ -131,8 +131,13 @@ Click **Import GeoJSON...** (below Map Source) to draw points, lines, and polygo
 
 **Map styles:**
 
-- `osm-eink` — Clean e-paper map. Exports through zoom 16 by clipping and redrawing zoom-14 vector data into deeper tiles — stays sharp but adds no new detail beyond zoom 14.
+- `osm-eink` — Clean e-paper map. Exports through zoom 16 by clipping and redrawing zoom-14 vector data into deeper tiles — stays sharp but adds no new detail beyond zoom 14. Very small features osm.org shows only at native z16 (e.g. the plaza circles around the Man and Temple) aren't in the z14 source and won't render.
 - `osm-eink-topo` — Topo map with hillshade and contour lines from Mapzen Terrain Tiles on AWS Open Data. Roads, buildings, POI, and transit are off by default; boundaries can be re-enabled in **Map Elements**.
+
+**Label & street rendering:**
+
+- Pedestrian ways (`highway=path`/`pedestrian`, e.g. Black Rock City's grid) render as solid streets; true trails stay dashed.
+- POI labels wrap and center below the marker (OSM style), are never truncated, skip overlaps, and stay inside the tile.
 
 ## Map Elements
 

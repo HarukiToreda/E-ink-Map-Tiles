@@ -522,6 +522,13 @@ def draw_transportation(draw, data: dict, z: int, elements: set[str], topo: bool
     for feature in data.get("transportation", {}).get("features", []):
         properties = feature.get("properties", {})
         road_class = properties.get("class", "")
+        subclass = properties.get("subclass", "")
+        # Pedestrian ways (plazas, promenades, and temporary event-city streets such
+        # as Black Rock City) arrive as class="path"/subclass="pedestrian". These are
+        # real streets, so draw them as solid light lines with a casing rather than the
+        # thin dashed style used for hiking trails/footways — otherwise the whole street
+        # grid reads as faint dotted lines instead of streets.
+        pedestrian_street = road_class == "path" and subclass == "pedestrian"
         if z < 12 and road_class not in {"motorway", "trunk", "primary"} and not (topo and road_class in path_classes):
             continue
         if road_class in {"motorway", "trunk", "primary"} and "highways" not in elements:
@@ -533,7 +540,13 @@ def draw_transportation(draw, data: dict, z: int, elements: set[str], topo: bool
         if road_class == "rail" and "transit" not in elements:
             continue
         casing, fill, casing_width, fill_width = class_styles.get(road_class, ("#aeb6b0", "#ffffff", 2, 1))
-        dashed = road_class in path_classes
+        if pedestrian_street:
+            if topo:
+                casing, fill, casing_width, fill_width = ("#aab1ab", "#eef0ec", 2, 1)
+            else:
+                casing_width, fill_width = (4, 2) if z >= 15 else (3, 1)
+                casing, fill = ("#b7bdb7", "#ffffff")
+        dashed = road_class in path_classes and not pedestrian_street
         dash = 2 if topo and dashed else 1
         gap = 4 if topo and dashed else 5
         line_jobs.append((feature.get("geometry", {}), casing, fill, casing_width, fill_width, dashed, dash, gap))
@@ -653,23 +666,92 @@ def label_priority(properties: dict, z: int) -> int:
     }.get(label_class, 5)
 
 
+def _boxes_overlap(a: tuple[int, int, int, int], b: tuple[int, int, int, int], pad: int = 2) -> bool:
+    return not (a[2] + pad < b[0] or a[0] - pad > b[2] or a[3] + pad < b[1] or a[1] - pad > b[3])
+
+
+def _text_size(font, text: str) -> tuple[int, int]:
+    try:
+        b = font.getbbox(text)
+        return b[2] - b[0], b[3] - b[1]
+    except AttributeError:
+        return len(text) * 6, 11
+
+
+def _wrap_label(name: str, font, max_w: int = 84, max_lines: int | None = None) -> list[str]:
+    """Greedily wrap a name into lines each no wider than max_w px, so POI labels stack
+    under the marker like the OpenStreetMap style. With max_lines=None the full name is
+    always shown (no truncation); with a limit the last line is ellipsized if words remain."""
+    words = name.split()
+    lines: list[str] = []
+    i, n = 0, len(words)
+    while i < n and (max_lines is None or len(lines) < max_lines):
+        cur = words[i]
+        i += 1
+        while i < n and _text_size(font, cur + " " + words[i])[0] <= max_w:
+            cur += " " + words[i]
+            i += 1
+        lines.append(cur)
+    if i < n and lines:  # hit the line limit with words left — ellipsize the last line
+        lines[-1] = lines[-1] + "…"
+        while _text_size(font, lines[-1])[0] > max_w and " " in lines[-1]:
+            lines[-1] = lines[-1][: lines[-1].rfind(" ")].rstrip() + "…"
+    return lines
+
+
 def draw_pois(draw, data: dict, z: int, font) -> None:
     if z < 13:
         return
+    # Draw the most important POIs first (lower rank = more important) so that when
+    # labels collide the significant camps/landmarks keep their name and minor ones
+    # fall back to a plain dot. Keeps dense areas (e.g. Black Rock City) legible.
+    features = data.get("poi", {}).get("features", [])
+    features = sorted(features, key=lambda f: f.get("properties", {}).get("rank", 999))
+    placed: list[tuple[int, int, int, int]] = []
     labels_drawn = 0
-    for feature in data.get("poi", {}).get("features", []):
-        if labels_drawn >= 18:
-            return
+    line_h = max(_text_size(font, "Ag")[1], 8)
+    leading = 1  # extra px between wrapped lines
+    for feature in features:
         geometry = feature.get("geometry", {})
         point = representative_point(geometry)
         if not point:
             continue
-        name = label_text(feature.get("properties", {}))
+        # Use the full name (no 28-char cap) — POI labels wrap onto as many lines as
+        # needed and are never truncated.
+        name = label_text(feature.get("properties", {}), limit=10_000)
         if not name:
             continue
         x, y = scale_point(point)
+        if not (0 <= x < 256 and 0 <= y < 256):
+            continue
+        # Always mark the location with a dot; place the label only if it fits.
         draw.ellipse([x - 2, y - 2, x + 2, y + 2], fill="#111111", outline="#ffffff")
-        draw_readable_text(draw, (x + 4, y - 5), name, font, fill="#111111", stroke_width=2)
+        if labels_drawn >= 18:
+            continue
+        lines = _wrap_label(name, font)
+        if not lines:
+            continue
+        block_w = max(_text_size(font, ln)[0] for ln in lines)
+        block_h = line_h * len(lines) + leading * (len(lines) - 1)
+        if block_w > 253:
+            continue  # too wide for a tile even wrapped — dot only
+        # Center the block horizontally under the dot, clamped inside the tile.
+        half = block_w / 2
+        cx = max(1 + half, min(float(x), 255 - half))
+        # Prefer stacking below the marker; flip above if it would run off the bottom.
+        top = y + 3 + 2  # below the dot (radius ~2) with a small gap
+        if top + block_h > 255:
+            top = y - 3 - 2 - block_h
+        top = int(max(1, min(top, 255 - block_h)))
+        box = (int(cx - half), top, int(cx + half), top + block_h)
+        if any(_boxes_overlap(box, pb) for pb in placed):
+            continue  # would collide with an already-placed label — dot only
+        cur_y = top
+        for ln in lines:
+            lw = _text_size(font, ln)[0]
+            draw_readable_text(draw, (int(cx - lw / 2), cur_y), ln, font, fill="#111111", stroke_width=2)
+            cur_y += line_h + leading
+        placed.append(box)
         labels_drawn += 1
 
 
@@ -912,9 +994,19 @@ def representative_point(geometry: dict) -> list[float] | None:
     return None
 
 
-def label_text(properties: dict) -> str:
+def label_text(properties: dict, limit: int = 28) -> str:
     text = properties.get("name:en") or properties.get("name_int") or properties.get("name")
-    return str(text)[:28] if text else ""
+    if not text:
+        return ""
+    text = str(text).strip()
+    if len(text) <= limit:
+        return text
+    # Truncate on a word boundary and add an ellipsis so long names read cleanly
+    # (e.g. "Black Rock City Emergency…") instead of being chopped mid-word.
+    clipped = text[:limit].rstrip()
+    if " " in clipped and not text[limit].isspace():
+        clipped = clipped[:clipped.rfind(" ")].rstrip()
+    return clipped + "…"
 
 
 def scale_point(point: list[float] | tuple[float, float]) -> tuple[int, int]:
