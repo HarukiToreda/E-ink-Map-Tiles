@@ -14,7 +14,7 @@ Exports normal XYZ tile folders with attribution and a manifest, InkHUD firmware
 - Export the visible map area as e-paper-ready PNG tiles rendered locally from OpenFreeMap vector data.
 - Export InkHUD firmware headers (`MapTile.h`) with LZ4-compressed tiles for direct inclusion in Meshtastic firmware.
 - Export the same tile data as `MapTile.bin` for devices that load map tiles from an SD card at runtime instead of compiling them into flash.
-- Configurable InkHUD grid sizes (1×1, 2×2, 3×3, 4×4, 5×5, 6×6, 8×8) to fit flash budgets on nRF52840 and ESP32-S3.
+- Configurable InkHUD grid sizes (1×1, 2×2, 3×3, 4×4, 5×5, 6×6, 8×8) to fit flash budgets on nRF52840 and ESP32-S3 — set globally or per zoom level so coarser zooms can cover the same footprint as finer ones.
 - InkHUD2 mode for sparse per-tile selection across multiple zoom levels.
 - Coverage overlay showing the exact tile footprint per zoom level before export.
 - Flash usage bars showing how much of the available firmware flash the tiles will consume on ESP32-S3 and nRF52840.
@@ -105,7 +105,7 @@ Click **Import GeoJSON...** (below Map Source) to draw points, lines, and polygo
 
 - Each imported layer gets a **visibility** toggle, a **labels** toggle (if the file has a `name`/`NAME`/`label`/`title` property on its features), and a **min–max zoom** range that controls when its geometry draws.
 - A separate **Show labels at zoom** range (below the layer list) controls when labels appear, independent of each layer's own zoom range.
-- **Fit view to GeoJSON extent** centers/zooms the map to a layer's bounding box. **Select same-box InkHUD2 tiles** picks exactly the tiles needed to cover that box at every zoom in your Min–Max zoom range — useful when you want e.g. z15 and z16 to show the same area (InkHUD2 export only; the classic InkHUD grid format uses a fixed tile count per zoom and can't do this).
+- **Fit view to GeoJSON extent** centers/zooms the map to a layer's bounding box. **Select same-box InkHUD2 tiles** picks exactly the tiles needed to cover that box at every zoom in your Min–Max zoom range — useful when you want e.g. z15 and z16 to show the same area. (The classic InkHUD grid can also do this now via per-zoom grid sizes in **Custom** — see the InkHUD export section.)
 
 ## Export Settings
 
@@ -258,13 +258,13 @@ If two tiles compress to identical bytes, the exporter stores that payload once 
 
 Completely white and completely black tiles are stored as sentinels in `map_tile_kinds[]` with no payload bytes at all. The firmware synthesizes those 8192-byte buffers on demand, so blank ocean/land margin tiles no longer cost flash.
 
-Regular InkHUD fixed-grid exports use a more compact block layout instead: one origin tile per zoom (`map_tile_block_zooms[]`, `map_tile_block_tx[]`, `map_tile_block_ty[]`) plus `map_tile_grid_cols` / `map_tile_grid_rows`. The firmware reconstructs each tile's `tx/ty` from its block position, which removes repeated per-tile coordinate metadata without changing any pixels.
+Regular InkHUD fixed-grid exports use a more compact block layout instead: one origin tile per zoom (`map_tile_block_zooms[]`, `map_tile_block_tx[]`, `map_tile_block_ty[]`) plus `map_tile_grid_cols` / `map_tile_grid_rows`. The firmware reconstructs each tile's `tx/ty` from its block position, which removes repeated per-tile coordinate metadata without changing any pixels. This compact layout assumes every zoom block has the same tile count, so when you assign different grid sizes per zoom (via **Custom**) the export automatically falls back to the sparse per-tile layout above (`map_tile_grid_cols` = 0), which stores an explicit `tx/ty` per tile. Both layouts are read by the same firmware.
 
 The firmware decompresses tiles on demand into a 2-entry LRU cache using an inline LZ4 decompressor (~25 lines of C, no external dependencies). Cache entries are 8192 bytes each (one decompressed tile), so RAM cost is 16 KB regardless of how many tiles are in flash.
 
 ### Grid size and flash budget
 
-**Grid size** controls how many tiles are exported per zoom level, centered on the map bullseye. The grid is positioned so the tile containing the bullseye is always inside the exported area. For even-sized grids (2×2, 4×4, etc.) the boxes at different zoom levels are concentric to within one sub-tile width — a fundamental property of the doubling tile coordinate system.
+**Grid size** controls how many tiles are exported per zoom level, centered on the map bullseye. The grid is positioned so the tile containing the bullseye is always inside the exported area. For even-sized grids (2×2, 4×4, etc.) the boxes at different zoom levels are concentric to within one sub-tile width — a fundamental property of the doubling tile coordinate system. The global grid applies to every zoom by default, but each zoom can override it via **Custom** (see the InkHUD export section); a zoom's footprint is `grid × 360° / 2^zoom`, so halving the grid each time you drop a zoom level keeps the footprint constant.
 
 | Grid | Tiles/zoom | Uncompressed | Typical LZ4 |
 |---|---|---|---|
@@ -297,12 +297,12 @@ The flash bars in the Export panel show estimated usage. The estimate is compute
 
 Both modes use the same image pipeline and the same `MapTile.h`/`MapTile.bin` output formats. The difference is in how tiles are selected:
 
-- **InkHUD** — fixed grid centered on the map bullseye. Every zoom level exports the same grid size (e.g. 4×4) in a square around the center. Simple and predictable.
+- **InkHUD** — grid centered on the map bullseye. By default every zoom level exports the same grid size (e.g. 4×4) in a square around the center. You can also give each zoom its own grid size via **Custom** (see below) — e.g. z16 = 8×8 and z15 = 4×4 so both cover the same footprint.
 - **InkHUD2** — click individual tiles on the map to build a sparse, non-contiguous set across any combination of zoom levels. Useful when you want dense coverage of a specific corridor or route at one zoom level and broader context tiles at another, without paying for a full uniform grid.
 
 **Coverage Boxes** — enable the **Coverage Boxes** toggle (on by default in InkHUD mode) to see solid per-zoom bounding boxes on the preview showing the exact InkHUD tile footprint before exporting. The exported tiles match the overlay boxes exactly — what the overlay shows at each zoom level is what will be in `MapTile.h`.
 
-**Custom zoom selection** — click **Custom** in the InkHUD export settings to reveal per-zoom toggles for every zoom level in the min–max range. Toggle individual zooms off to exclude them from the export. The flash size estimate and coverage overlay update immediately to reflect the active set.
+**Custom zoom selection** — click **Custom** in the InkHUD export settings to reveal per-zoom controls for every zoom level in the min–max range. Each zoom has an include toggle (turn it off to exclude that zoom) and its own grid-size dropdown. Setting different grids per zoom lets coarser zooms cover the same footprint as finer ones — e.g. z16 = 8×8 and z15 = 4×4 both cover the same area (halve the grid for each zoom level you drop). The flash size estimate and coverage overlay update immediately to reflect the active set. When all active zooms share one grid the export stays in the compact fixed-grid layout; when they differ it automatically uses the sparse per-tile layout, which the current firmware already reads — no firmware change needed.
 
 ## Markers
 

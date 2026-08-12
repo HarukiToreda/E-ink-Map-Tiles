@@ -350,6 +350,11 @@ class DesktopApp(tk.Tk):
         self._inkhud_sample_job_key: tuple | None = None
         self._inkhud_sample_cancel: "threading.Event | None" = None
         self.inkhud_omit_zooms: set[int] = set()
+        # Per-zoom grid overrides (e.g. {15: 4} to give z15 a 4x4 grid). Zooms
+        # absent here use the global "inkhud_grid" value. When all active zooms
+        # resolve to the same grid the export stays in the compact GRID layout;
+        # when they differ it falls back to the SPARSE layout (per-tile origins).
+        self.inkhud_zoom_grids: dict[int, int] = {}
         self._inkhud_custom_expanded: bool = False
         self.preview_rendered_width: int = 0
         self.preview_rendered_height: int = 0
@@ -635,6 +640,8 @@ class DesktopApp(tk.Tk):
             self.vars[key].trace_add("write", lambda *_args: self.draw_inkhud_coverage_overlay())
         for key in ("min_zoom", "max_zoom"):
             self.vars[key].trace_add("write", lambda *_args: self._on_zoom_range_changed())
+        # Refresh the per-zoom grid dropdowns' shown defaults when the global grid changes
+        self.vars["inkhud_grid"].trace_add("write", lambda *_args: self._on_zoom_range_changed())
 
         area_keys = ("west", "south", "east", "north")
         for key in area_keys:
@@ -1938,12 +1945,15 @@ class DesktopApp(tk.Tk):
             max_z = int(self.vars["max_zoom"].get())
         except ValueError:
             return
-        # Remove any omitted zooms that are no longer in range
+        # Remove any omitted zooms / grid overrides that are no longer in range
         self.inkhud_omit_zooms = {z for z in self.inkhud_omit_zooms if min_z <= z <= max_z}
+        self.inkhud_zoom_grids = {z: g for z, g in self.inkhud_zoom_grids.items() if min_z <= z <= max_z}
         COLS_PER_ROW = 8
-        ttk.Label(self.inkhud_zoom_toggles_frame, text="Include zooms:", style="Hint.TLabel").grid(
-            row=0, column=0, columnspan=COLS_PER_ROW, sticky="w", pady=(0, 2)
-        )
+        GRID_VALUES = ["8x8", "6x6", "5x5", "4x4", "3x3", "2x2", "1x1"]
+        ttk.Label(self.inkhud_zoom_toggles_frame,
+                  text="Include zooms & per-zoom grid (each block is centered on the map center):",
+                  style="Hint.TLabel").grid(row=0, column=0, columnspan=COLS_PER_ROW, sticky="w", pady=(0, 2))
+        # 3 rows per band: toggle, z-label, grid dropdown
         for idx, z in enumerate(range(min_z, max_z + 1)):
             col = idx % COLS_PER_ROW
             band = idx // COLS_PER_ROW
@@ -1958,10 +1968,30 @@ class DesktopApp(tk.Tk):
                 self.update_inkhud_flash_bars()
                 self.draw_inkhud_coverage_overlay()
             toggle = ToggleSwitch(self.inkhud_zoom_toggles_frame, variable=var, command=on_toggle, bg=self.C_PANEL)
-            toggle.grid(row=1 + band * 2, column=col, padx=(0, 4))
+            toggle.grid(row=1 + band * 3, column=col, padx=(0, 4))
             ttk.Label(self.inkhud_zoom_toggles_frame, text=f"z{z}", style="Hint.TLabel").grid(
-                row=2 + band * 2, column=col, padx=(0, 4)
+                row=2 + band * 3, column=col, padx=(0, 4)
             )
+            gvar = tk.StringVar(value=f"{self._grid_for_zoom(z)}x{self._grid_for_zoom(z)}")
+            def on_grid(zoom=z, gv=gvar):
+                try:
+                    new_g = int(gv.get().split("x")[0])
+                except (ValueError, IndexError):
+                    return
+                # Only store an override when it differs from the global grid, so an
+                # all-default setup stays in the compact GRID export layout.
+                if new_g == self._global_grid():
+                    self.inkhud_zoom_grids.pop(zoom, None)
+                else:
+                    self.inkhud_zoom_grids[zoom] = new_g
+                self._inkhud_bytes_per_tile = None
+                self._inkhud_sample_job_key = None
+                self.update_inkhud_flash_bars()
+                self.draw_inkhud_coverage_overlay()
+            combo = ttk.Combobox(self.inkhud_zoom_toggles_frame, textvariable=gvar,
+                                 values=GRID_VALUES, state="readonly", width=4)
+            combo.grid(row=3 + band * 3, column=col, padx=(0, 4), pady=(0, 4))
+            combo.bind("<<ComboboxSelected>>", lambda _e, f=on_grid: f())
 
     def update_inkhud_flash_bars(self) -> None:
         mode = self.vars["mode"].get()
@@ -1973,14 +2003,20 @@ class DesktopApp(tk.Tk):
                 return
             active_zooms = [z for z in range(min_zoom, max_zoom + 1) if z not in self.inkhud_omit_zooms]
             num_zooms = len(active_zooms)
-            g = int(self.vars["inkhud_grid"].get()[0])  # "4x4" -> 4
+            grids = {self._grid_for_zoom(z) for z in active_zooms}
+            if len(grids) == 1:
+                g = next(iter(grids)) if grids else self._global_grid()
+                grid_desc = f"{g}×{g}"
+            else:
+                total_tiles = sum(self._grid_for_zoom(z) ** 2 for z in active_zooms)
+                grid_desc = f"mixed grids, {total_tiles} tiles"
             if self._inkhud_bytes_per_tile is not None:
                 estimated = self._inkhud_bytes_per_tile
                 self.draw_flash_bars(estimated, upper_bound=True)
-                label = f"InkHUD: {num_zooms} zoom(s) {g}×{g} — ≈{estimated // 1024} KB"
+                label = f"InkHUD: {num_zooms} zoom(s) {grid_desc} — ≈{estimated // 1024} KB"
             else:
                 self.draw_flash_bars(0, calculating=True)
-                label = f"InkHUD: {num_zooms} zoom(s) {g}×{g} — calculating…"
+                label = f"InkHUD: {num_zooms} zoom(s) {grid_desc} — calculating…"
             self.vars["tile_count"].set(label)
             self._schedule_inkhud_sample()
         elif mode == "inkhud2":
@@ -2010,6 +2046,7 @@ class DesktopApp(tk.Tk):
         try:
             job = self.build_job()
             key = (tuple(job["zooms"]), self.vars["inkhud_grid"].get(),
+                   tuple(sorted(self.inkhud_zoom_grids.items())),
                    round(self.map_center_lat, 5), round(self.map_center_lon, 5),
                    job["contrast"], job["brightness"],
                    str(job.get("elements", {})))
@@ -2059,16 +2096,21 @@ class DesktopApp(tk.Tk):
 
         def worker():
             try:
-                g = int(self.vars["inkhud_grid"].get()[0])
+                zoom_grids = {z: self._grid_for_zoom(z) for z in job["zooms"]}
+                uniform_grid = len(set(zoom_grids.values())) == 1
                 total_payload_bytes = 0
                 seen_payloads: set[bytes] = set()
                 compressed_sizes: list[int] = []
                 block_zooms: list[int] = []
                 block_tx: list[int] = []
                 block_ty: list[int] = []
+                tile_zooms: list[int] = []
+                tile_tx: list[int] = []
+                tile_ty: list[int] = []
                 for z in job["zooms"]:
                     if cancel.is_set():
                         return
+                    g = zoom_grids[z]
                     origin_tile = _center_tile(z, cli.BBox(**job["bbox"]))
                     x0 = origin_tile.x - g // 2
                     y0 = origin_tile.y - g // 2
@@ -2080,7 +2122,12 @@ class DesktopApp(tk.Tk):
                         for dy in range(g):
                             if cancel.is_set():
                                 return
-                            tile = cli.Tile(z=z, x=max(0, min(n - 1, x0 + dx)), y=max(0, min(n - 1, y0 + dy)))
+                            tx = max(0, min(n - 1, x0 + dx))
+                            ty = max(0, min(n - 1, y0 + dy))
+                            tile_zooms.append(z)
+                            tile_tx.append(tx)
+                            tile_ty.append(ty)
+                            tile = cli.Tile(z=z, x=tx, y=ty)
                             kind, payload = _compress_tile(tile, job)
                             if kind != self.INKHUD_TILE_KIND_LZ4:
                                 continue
@@ -2089,7 +2136,13 @@ class DesktopApp(tk.Tk):
                                 continue
                             seen_payloads.add(payload)
                             total_payload_bytes += len(payload)
-                total_bytes = self._estimate_grid_storage_bytes(block_zooms, block_tx, block_ty, g, total_payload_bytes, compressed_sizes)
+                if uniform_grid:
+                    g = next(iter(zoom_grids.values()))
+                    total_bytes = self._estimate_grid_storage_bytes(
+                        block_zooms, block_tx, block_ty, g, total_payload_bytes, compressed_sizes)
+                else:
+                    total_bytes = self._estimate_sparse_storage_bytes(
+                        tile_zooms, tile_tx, tile_ty, total_payload_bytes, compressed_sizes)
                 self.after(0, lambda: self._apply_inkhud_sample(key, total_bytes))
             except Exception:
                 pass
@@ -2463,6 +2516,34 @@ class DesktopApp(tk.Tk):
         )
 
     @staticmethod
+    def _estimate_sparse_storage_bytes(tile_zooms: list[int], tile_tx: list[int], tile_ty: list[int], total_payload_bytes: int, compressed_sizes: list[int]) -> int:
+        """Flash estimate for the SPARSE layout (explicit per-tile zoom/tx/ty),
+        matching the storage math in _build_tile_header. Used when per-zoom grids
+        differ so the compact GRID layout can't be used."""
+        tile_count = len(tile_zooms)
+        count_type = DesktopApp._tile_count_type(tile_count)
+        zoom_type = DesktopApp._smallest_uint_type(tile_zooms)
+        tx_type = DesktopApp._smallest_uint_type(tile_tx)
+        ty_type = DesktopApp._smallest_uint_type(tile_ty)
+        kind_type = "uint8_t"
+        size_type = DesktopApp._smallest_uint_type(compressed_sizes)
+        offset_type = DesktopApp._smallest_uint_type([total_payload_bytes])
+        payload_storage_bytes = total_payload_bytes if total_payload_bytes else 1
+        return (
+            4  # layout + grid cols + grid rows + block count
+            + DesktopApp._ctype_size(count_type)
+            + tile_count * (
+                DesktopApp._ctype_size(zoom_type)
+                + DesktopApp._ctype_size(tx_type)
+                + DesktopApp._ctype_size(ty_type)
+                + DesktopApp._ctype_size(kind_type)
+                + DesktopApp._ctype_size(size_type)
+                + DesktopApp._ctype_size(offset_type)
+            )
+            + payload_storage_bytes
+        )
+
+    @staticmethod
     def _build_tile_header(tile_data: list[tuple[int, int, int, list[int]]], style: str, label: str, extra_comments: list[str] | None = None) -> tuple[str, int]:
         """Compress tile_data with LZ4 and return (header_text, total_compressed_bytes).
 
@@ -2711,6 +2792,17 @@ class DesktopApp(tk.Tk):
 
         return "\n".join(lines), total_bytes
 
+    def _global_grid(self) -> int:
+        try:
+            return int(self.vars["inkhud_grid"].get()[0])
+        except (ValueError, IndexError, KeyError):
+            return 4
+
+    def _grid_for_zoom(self, z: int) -> int:
+        """Grid size (g, meaning a gxg tile block) for zoom z: the per-zoom
+        override if one is set, otherwise the global grid value."""
+        return self.inkhud_zoom_grids.get(z, self._global_grid())
+
     @staticmethod
     def _inkhud_grid_origin(lon: float, lat: float, z: int, g: int = 4, anchor_z: int | None = None) -> tuple[int, int]:
         """Return (gx0, gy0) — top-left tile of the gxg export grid at zoom z.
@@ -2759,7 +2851,6 @@ class DesktopApp(tk.Tk):
 
         colors = ["#e63946", "#f4a261", "#2a9d8f", "#457b9d", "#6a4c93", "#e9c46a"]
 
-        g = int(self.vars["inkhud_grid"].get()[0])
         active_zooms = [z for z in range(min_zoom, max_zoom + 1) if z not in self.inkhud_omit_zooms]
 
         # Item count changed (zoom range/omits edited) — rebuild from scratch.
@@ -2775,6 +2866,7 @@ class DesktopApp(tk.Tk):
 
         # Anchor to max_zoom: snapping error is 0.5 tiles at max_zoom = tiny at coarser views.
         for i, z in enumerate(active_zooms):
+            g = self._grid_for_zoom(z)
             gx0, gy0 = self._inkhud_grid_origin(self.map_center_lon, self.map_center_lat, z, g, anchor_z=max_zoom)
             gx1, gy1 = gx0 + g, gy0 + g
 
@@ -3075,13 +3167,14 @@ class DesktopApp(tk.Tk):
         except ValueError:
             min_zoom = max_zoom = self.map_zoom
 
-        # Compute per-zoom tile origins and bboxes (gxg grid centered on map center)
-        g = int(self.vars["inkhud_grid"].get()[0])
+        # Compute per-zoom tile origins and bboxes (gxg grid centered on map center).
+        # Each zoom can carry its own grid size (self.inkhud_zoom_grids override).
         zoom_specs = []
         eps = 1e-6
         for z in range(min_zoom, max_zoom + 1):
             if z in self.inkhud_omit_zooms:
                 continue
+            g = self._grid_for_zoom(z)
             tx, ty = self._inkhud_grid_origin(clng, clat, z, g, anchor_z=max_zoom)
             tx, ty = int(tx), int(ty)
             n = 2**z
@@ -3089,7 +3182,7 @@ class DesktopApp(tk.Tk):
             east  = (tx + g) / n * 360 - 180 - eps
             north = math.degrees(math.atan(math.sinh(math.pi * (1 - 2 * ty / n))))
             south = math.degrees(math.atan(math.sinh(math.pi * (1 - 2 * (ty + g) / n)))) + eps
-            zoom_specs.append({"zoom": z, "tx": tx, "ty": ty,
+            zoom_specs.append({"zoom": z, "tx": tx, "ty": ty, "grid": g,
                                 "bbox": {"west": west, "south": south, "east": east, "north": north}})
 
         # Build a combined job covering all zooms with the widest bbox (min_zoom)
@@ -3127,7 +3220,7 @@ class DesktopApp(tk.Tk):
 
         self.log.delete("1.0", "end")
         self.log.grid()
-        inkhud_tile_count = len(zoom_specs) * g * g
+        inkhud_tile_count = sum(spec["grid"] * spec["grid"] for spec in zoom_specs)
         self.export_total = inkhud_tile_count
         self.vars["progress_value"].set(0)
         self.progress_bar.configure(maximum=max(inkhud_tile_count, 1), mode="determinate")
@@ -3317,9 +3410,12 @@ class DesktopApp(tk.Tk):
 
         clat = self.map_center_lat
         clng = self.map_center_lon
-        g = int(self.vars["inkhud_grid"].get()[0])
-        half = g // 2
-        cols, rows = g, g
+        # Each zoom carries its own grid size (spec["grid"]). When they all match,
+        # the compact GRID layout is used; when they differ, the exporter falls back
+        # to the SPARSE layout (explicit per-tile origins), which the firmware reads
+        # via map_tile_zooms/tx/ty. Both layouts run on the current firmware.
+        grid_sizes = {int(spec["grid"]) for spec in zoom_specs}
+        uniform_grid = len(grid_sizes) == 1
         style = job["style"]
         min_zoom = zoom_specs[0]["zoom"]
         max_zoom = zoom_specs[-1]["zoom"]
@@ -3332,7 +3428,7 @@ class DesktopApp(tk.Tk):
             contrast = float(job["contrast"])
             brightness = float(job["brightness"])
             include_elements = job.get("elements", {}).get("include", [])
-            total_tiles = sum(rows * cols for _ in zoom_specs)
+            total_tiles = sum(int(spec["grid"]) ** 2 for spec in zoom_specs)
             completed_count = 0
 
             def process_tile(z, tx, ty):
@@ -3364,8 +3460,9 @@ class DesktopApp(tk.Tk):
                 for spec in zoom_specs:
                     z = spec["zoom"]
                     x0, y0 = spec["tx"], spec["ty"]
-                    for dy in range(rows):
-                        for dx in range(cols):
+                    g = int(spec["grid"])
+                    for dy in range(g):
+                        for dx in range(g):
                             tx, ty = x0 + dx, y0 + dy
                             future_map[executor.submit(process_tile, z, tx, ty)] = (z, tx, ty)
 
@@ -3379,17 +3476,36 @@ class DesktopApp(tk.Tk):
                     completed_count += 1
                     self.messages.put(f"  {completed_count}/{total_tiles} tiles rendered\n")
 
-            # Sort to deterministic order: zoom asc, tx asc, ty asc
+            # Sort to deterministic order: zoom asc, tx asc, ty asc. For the GRID
+            # layout the firmware reconstructs each block's tiles as tx-major/ty-minor,
+            # which this ordering matches; the SPARSE layout stores tx/ty explicitly so
+            # ordering only affects readability there.
             tile_data.sort(key=lambda t: (t[0], t[1], t[2]))
 
-            if binary:
-                data = self._build_grid_tile_binary(tile_data, zoom_specs, cols, rows)
-                total_bytes = len(data)
+            center_comment = f"center: lat={clat:.6f} lng={clng:.6f}"
+            if uniform_grid:
+                cols = rows = grid_sizes.pop()
+                if binary:
+                    data = self._build_grid_tile_binary(tile_data, zoom_specs, cols, rows)
+                    total_bytes = len(data)
+                else:
+                    header, total_bytes = self._build_grid_tile_header(
+                        tile_data, style, "InkHUD grid export", zoom_specs, cols, rows,
+                        extra_comments=[center_comment],
+                    )
             else:
-                header, total_bytes = self._build_grid_tile_header(
-                    tile_data, style, "InkHUD grid export", zoom_specs, cols, rows,
-                    extra_comments=[f"center: lat={clat:.6f} lng={clng:.6f}"],
-                )
+                # Mixed per-zoom grids can't use the compact block layout — fall back
+                # to the SPARSE layout, which stores an explicit position per tile.
+                grid_desc = ", ".join(f"z{spec['zoom']}={spec['grid']}x{spec['grid']}" for spec in zoom_specs)
+                self.messages.put(f"  mixed per-zoom grids ({grid_desc}) — using sparse layout\n")
+                if binary:
+                    data = self._build_tile_binary(tile_data)
+                    total_bytes = len(data)
+                else:
+                    header, total_bytes = self._build_tile_header(
+                        tile_data, style, "InkHUD per-zoom grid export",
+                        extra_comments=[center_comment, f"per-zoom grids: {grid_desc}"],
+                    )
             uncompressed = len(tile_data) * 8192
             ratio = total_bytes / uncompressed * 100 if uncompressed else 100
             self.messages.put(f"  compressed: {total_bytes:,} bytes ({ratio:.0f}% of {uncompressed:,} uncompressed)\n")
@@ -3999,6 +4115,7 @@ class DesktopApp(tk.Tk):
                 ]
             },
             "inkhud_omit_zooms": sorted(self.inkhud_omit_zooms),
+            "inkhud_zoom_grids": {str(z): g for z, g in sorted(self.inkhud_zoom_grids.items())},
             "inkhud_custom_expanded": self._inkhud_custom_expanded,
             "elements": {e: bool(self.vars[f"element_{e}"].get()) for e in cli.MAP_ELEMENTS},
             "markers": self.markers,
@@ -4062,6 +4179,7 @@ class DesktopApp(tk.Tk):
                 if e in elems:
                     self.vars[f"element_{e}"].set(bool(elems[e]))
             self.inkhud_omit_zooms = set(data.get("inkhud_omit_zooms", []))
+            self.inkhud_zoom_grids = {int(z): int(g) for z, g in data.get("inkhud_zoom_grids", {}).items()}
             self._inkhud_custom_expanded = bool(data.get("inkhud_custom_expanded", False))
             self.markers = data.get("markers", [])
             self.geojson_layers = []
