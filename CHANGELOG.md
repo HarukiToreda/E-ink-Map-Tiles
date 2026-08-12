@@ -34,6 +34,10 @@
 - Selecting a placed marker in the list now lets you edit its visible zoom range (and label text/size) live — changes apply immediately, no need to re-place.
 - Smaller marker icons at z16 (18px instead of 28px) so they no longer swamp a street block; lower zooms taper proportionally.
 
+### InkHUD Firmware Builder
+
+- COM port dropdown now hides Bluetooth serial ports (they can't flash firmware).
+
 ### Fixes
 
 - GeoJSON overlays and markers could render in the wrong stacking order, letting lines/polygons paint over marker icons. Markers now always render on top regardless of which overlay was redrawn most recently.

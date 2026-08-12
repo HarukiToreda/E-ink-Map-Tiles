@@ -649,6 +649,12 @@ class BuilderApp(tk.Tk):
         labels = []
         for p in sorted(infos, key=lambda x: x.device):
             desc = p.description or p.device
+            # Skip Bluetooth serial ports — they can't flash firmware and only clutter
+            # the list. Windows exposes them as "Standard Serial over Bluetooth link"
+            # with a BTHENUM hardware id.
+            hwid = (getattr(p, "hwid", "") or "").upper()
+            if "bluetooth" in desc.lower() or "BTHENUM" in hwid:
+                continue
             # Strip redundant port name that some drivers repeat in description
             if p.device.lower() in desc.lower():
                 label = desc

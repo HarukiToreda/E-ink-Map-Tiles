@@ -59,7 +59,7 @@ The hint text reads: *Generate MapTile.h file from EinkMapTile Tool* — use the
 
 ## COM Port and Flashing
 
-The COM port dropdown shows the device name reported by the USB driver alongside the port number (e.g. `COM4 — USB-SERIAL CH340`). Click **↻** to refresh the list after plugging in a device.
+The COM port dropdown shows the device name reported by the USB driver alongside the port number (e.g. `COM4 — USB-SERIAL CH340`). Click **↻** to refresh the list after plugging in a device. Bluetooth serial ports are hidden since they can't flash firmware.
 
 **Flash after build** — when checked, the build and flash happen in a single PlatformIO invocation. No rebuild occurs between compile and flash.
 
