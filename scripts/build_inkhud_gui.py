@@ -8,6 +8,7 @@ prerequisites required.
 
 import os
 import queue
+import re
 import shutil
 import subprocess
 import sys
@@ -87,8 +88,31 @@ C_WARN    = "#f59e0b"
 
 # ── First-run setup ────────────────────────────────────────────────────────
 
+# The pioarduino platform used by current Meshtastic firmware requires
+# PlatformIO Core >= 6.2.0, but PyPI's newest stable release is 6.1.19.
+# Install Core from the develop branch archive (a zip; no git needed).
+PIO_CORE_SPEC = "https://github.com/platformio/platformio-core/archive/develop.zip"
+PIO_MIN_VERSION = (6, 2, 0)
+
+
+def pio_core_version() -> tuple[int, ...]:
+    """Version of the installed PlatformIO Core, or () if unknown."""
+    try:
+        out = subprocess.run(
+            [str(PYTHON_EXE), "-c",
+             "import platformio.__init__ as p; print(p.__version__)"],
+            capture_output=True, text=True, timeout=30,
+            env={**os.environ, "PYTHONNOUSERSITE": "1"},
+            creationflags=subprocess.CREATE_NO_WINDOW,
+        ).stdout.strip()
+        return tuple(int(x) for x in re.findall(r"\d+", out)[:3])
+    except Exception:
+        return ()
+
+
 def pio_ready() -> bool:
-    return PIO_EXE.exists() and PYTHON_EXE.exists() and GIT_EXE.exists()
+    return (PIO_EXE.exists() and PYTHON_EXE.exists() and GIT_EXE.exists()
+            and pio_core_version() >= PIO_MIN_VERSION)
 
 
 def git_available() -> bool:
@@ -195,7 +219,7 @@ def setup_pio(log_cb, progress_cb):
         pio_env.pop("PYTHONUSERBASE", None)
 
         proc = subprocess.Popen(
-            [str(PYTHON_EXE), "-m", "pip", "install", "platformio", "esptool",
+            [str(PYTHON_EXE), "-m", "pip", "install", "-U", PIO_CORE_SPEC, "esptool",
              "--no-warn-script-location"],
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
             env=pio_env, creationflags=subprocess.CREATE_NO_WINDOW,
@@ -679,6 +703,15 @@ class BuilderApp(tk.Tk):
         if not (FIRMWARE_DIR / ".git").exists():
             self._emit(f"Cloning meshtastic/firmware ({branch})…", "head")
             self._emit("This may take a few minutes on first use.", "muted")
+            # Leftovers from an interrupted clone or a partial "Clean all" make
+            # git refuse with "destination path already exists".
+            if FIRMWARE_DIR.exists():
+                self._emit("Removing leftover non-repo firmware folder…", "warn")
+                _force_rmtree(FIRMWARE_DIR)
+                if FIRMWARE_DIR.exists():
+                    self._emit(f"Could not remove {FIRMWARE_DIR} — close anything "
+                               "using it (Explorer, editors, antivirus) and retry.", "fail")
+                    return False
             rc = self._run_git([
                 "clone", "--depth=1", "--branch", branch,
                 "--recurse-submodules", "--shallow-submodules",
@@ -906,8 +939,10 @@ class BuilderApp(tk.Tk):
         self._emit(f"esptool {' '.join(cmd[5:])}", "muted")
 
         try:
+            flash_env = {**os.environ, "PYTHONNOUSERSITE": "1"}
+            flash_env.pop("PYTHONPATH", None)
             proc = subprocess.Popen(
-                cmd,
+                cmd, env=flash_env,
                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                 text=True, encoding="utf-8", errors="replace",
                 creationflags=subprocess.CREATE_NO_WINDOW,
@@ -1056,6 +1091,11 @@ class BuilderApp(tk.Tk):
         pio_env = os.environ.copy()
         pio_env["PYTHONIOENCODING"] = "utf-8"
         pio_env["PYTHONUTF8"] = "1"
+        # Ignore %APPDATA%\Python\...\site-packages: an ambient user-level
+        # platformio there would shadow the one bundled with this app.
+        pio_env["PYTHONNOUSERSITE"] = "1"
+        pio_env.pop("PYTHONPATH", None)
+        pio_env.pop("PYTHONUSERBASE", None)
         pio_env["PLATFORMIO_CORE_DIR"] = str(CORE_DIR)
         # idf_tools.py refuses to install esptool if it sees MSYSTEM (Git Bash/MSYS2)
         # in the environment, even on a native Windows Python. Strip it so builds
