@@ -2,6 +2,20 @@
 
 ---
 
+## v2.1.1
+
+### InkHUD Firmware Builder
+
+- **Fixed builds failing with `IncompatiblePlatform` (PlatformIO Core >=6.2.0 required).** The builder now installs PlatformIO Core 6.2+ (PyPI's newest stable is 6.1.19), and runs PlatformIO and esptool ignoring any user-level Python packages, so an existing `pip install --user platformio` can no longer shadow the bundled one. Existing installs with an older Core are reinstalled automatically on next launch.
+- A leftover, non-repo firmware folder (from an interrupted clone or partial **Clean all**) is now removed before cloning instead of aborting with "destination path already exists".
+
+### Other
+
+- Label badge size and the zoom levels it appears at were adjusted.
+- Bluetooth serial ports are ignored in the port list.
+
+---
+
 ## v2.1.0
 
 ### Map rendering
