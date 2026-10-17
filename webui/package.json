@@ -1,0 +1,54 @@
+{
+  "name": "eink-map-tiles-webui",
+  "productName": "E-ink Map Tiles",
+  "private": true,
+  "version": "2.1.1",
+  "main": "electron/main.cjs",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "desktop": "npm run build && electron .",
+    "desktop:package": "npm run build && node scripts/prepare-electron.mjs && npm install --prefix electron-stage --omit=dev --ignore-scripts && electron-packager electron-stage \"E-ink Map Tiles\" --out=electron-dist --overwrite",
+    "typecheck": "tsc -b --pretty false",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test": "vitest run && npm run test:native",
+    "test:native": "node --test electron/*.test.cjs",
+    "check": "npm run typecheck && npm run lint && npm run format:check && npm test"
+  },
+  "dependencies": {
+    "@mapbox/vector-tile": "^3.0.0",
+    "@turf/boolean-intersects": "^7.4.0",
+    "@turf/helpers": "^7.4.0",
+    "archiver": "^8.0.0",
+    "fflate": "^0.8.3",
+    "idb": "^8.0.4",
+    "pbf": "^5.1.2",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0"
+  },
+  "devDependencies": {
+    "@electron/packager": "^20.3.0",
+    "@eslint/js": "^10.0.1",
+    "@types/archiver": "^8.0.0",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "@vitejs/plugin-react": "^5.1.1",
+    "electron": "^44.8.0",
+    "eslint": "^10.12.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "eslint-plugin-react-refresh": "^0.5.7",
+    "globals": "^17.13.0",
+    "pmtiles": "^4.5.0",
+    "prettier": "^3.9.10",
+    "typescript": "^5.9.0",
+    "typescript-eslint": "^8.71.1",
+    "vite": "^7.2.0",
+    "vitest": "^4.0.0"
+  }
+}
