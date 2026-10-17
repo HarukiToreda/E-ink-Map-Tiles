@@ -1,0 +1,6 @@
+node_modules/
+dist/
+electron-dist/
+electron-stage/
+package-lock.json
+*.tsbuildinfo

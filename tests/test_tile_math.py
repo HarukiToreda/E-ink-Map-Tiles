@@ -1,6 +1,6 @@
 import unittest
 
-from eink_map_tiles.cli import BBox, parse_zooms, tiles_for_bbox
+from eink_map_tiles.core import BBox, parse_zooms, tiles_for_bbox
 
 
 class TileMathTests(unittest.TestCase):

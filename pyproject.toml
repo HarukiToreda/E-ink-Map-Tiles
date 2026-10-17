@@ -18,8 +18,16 @@ dependencies = [
 [project.scripts]
 eink-map-tiles-app = "eink_map_tiles.desktop_app:main"
 
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0",
+]
+
 [tool.setuptools]
 package-dir = { "" = "src" }
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
