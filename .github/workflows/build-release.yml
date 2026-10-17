@@ -3,7 +3,7 @@ name: Build and Release
 on:
   push:
     tags:
-      - 'v*'
+      - "v*"
 
 permissions:
   contents: write
@@ -32,7 +32,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: "3.12"
 
       - name: Install system dependencies (Linux)
         if: runner.os == 'Linux'
@@ -81,10 +81,53 @@ jobs:
           name: ${{ matrix.asset_name }}
           path: upload/
 
+  electron:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            platform: windows
+          - os: ubuntu-latest
+            platform: linux
+          - os: macos-latest
+            platform: macos
 
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: webui/package-lock.json
+      - name: Install Web UI dependencies
+        working-directory: webui
+        run: npm ci
+      - name: Check and package Electron app
+        working-directory: webui
+        run: |
+          npm run check
+          npm run desktop:package
+      - name: Archive Electron app (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Compress-Archive -Path "webui/electron-dist/*" -DestinationPath "EinkMapTiles-electron-${{ matrix.platform }}.zip"
+      - name: Archive Electron app (Linux)
+        if: runner.os == 'Linux'
+        run: cd webui/electron-dist && zip -qr ../../EinkMapTiles-electron-${{ matrix.platform }}.zip .
+      - name: Archive Electron app (macOS)
+        if: runner.os == 'macOS'
+        run: ditto -c -k --sequesterRsrc --keepParent webui/electron-dist EinkMapTiles-electron-${{ matrix.platform }}.zip
+      - name: Upload Electron artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: EinkMapTiles-electron-${{ matrix.platform }}
+          path: EinkMapTiles-electron-${{ matrix.platform }}.zip
 
   release:
-    needs: build
+    needs: [build, electron]
     runs-on: ubuntu-latest
 
     steps:
@@ -138,3 +181,6 @@ jobs:
             artifacts/InkHUDBuilder-windows.exe
             artifacts/EinkMapTiles-linux
             artifacts/EinkMapTiles-mac
+            artifacts/EinkMapTiles-electron-windows.zip
+            artifacts/EinkMapTiles-electron-linux.zip
+            artifacts/EinkMapTiles-electron-macos.zip

@@ -2,6 +2,19 @@
 
 ---
 
+## Unreleased
+
+### Web UI and desktop app
+
+- Added an independent browser-native map tile generator alongside the existing Python desktop application.
+- Added downloadable Electron builds for Windows, Linux, and macOS. Electron streams ZIP64, PMTiles, and InkHUD exports through disk-backed writers so multi-gigabyte exports do not accumulate in browser memory.
+- Large browser exports now recommend the matching desktop download while leaving browser export available.
+- Electron InkHUD exports preserve compressed-payload deduplication and reject payloads beyond the format's 32-bit offset limit instead of producing corrupt files.
+
+### Development
+
+- Added browser, launcher, native export-writer, and Electron packaging checks to pull-request CI.
+
 ## v2.1.1
 
 ### InkHUD Firmware Builder
