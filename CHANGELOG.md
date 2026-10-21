@@ -4,18 +4,48 @@
 
 ## v2.2.0
 
-### Web UI and desktop app
+### Browser Web UI
 
-- Added an independent browser-native map tile generator alongside the existing Python desktop application.
-- Added downloadable Electron builds for Windows, Linux, and macOS. Electron streams ZIP64, PMTiles, and InkHUD exports through disk-backed writers so multi-gigabyte exports do not accumulate in browser memory.
-- Large browser exports now recommend the matching desktop download while leaving browser export available.
-- Electron InkHUD exports preserve compressed-payload deduplication and reject payloads beyond the format's 32-bit offset limit instead of producing corrupt files.
+- **Added a browser-native map tile generator** alongside the existing Python/Tk desktop application. Tile planning, rendering, e-paper conversion, project storage, and export run locally in the browser, without a Python backend. Map tiles and location searches still use external providers.
+- Interactive pan and zoom, location search, marker placement and labels, and GeoJSON overlays are available in the new interface.
+- Projects are saved locally and can be moved between computers through `eink-map-session.json` import/export. Source and rendered-tile caches reuse matching work between preview and export.
+
+### Maps, selections, and rendering
+
+- OpenFreeMap vector maps support configurable map elements and optional Mapzen topography. USGS topographic raster maps are also available for U.S. coverage.
+- **Choose full color, MTB1 monochrome, MTB2 four-shade grayscale, or MTB4 sixteen-shade grayscale.** Preview and export share the rendering and conversion pipeline.
+- Export multiple areas with independent minimum and maximum zoom levels. Selections can use bounding rectangles or exact boundary geometry resolved after a location is chosen.
+- Imported GeoJSON layers can be shown or hidden, fitted into view, and used to create export selections. Optional smooth zoom transitions add stepped rings between overlapping zoom regions.
+- Live tile-count and size estimates, export progress, and cancellation are included. Worker-based planning and conversion keep expensive calculations off the main UI thread where supported.
+
+### Export formats
+
+- **MUI XYZ ZIP:** `MUI-Tiles.zip` contains PNG tiles under `maps/liberty/` or `maps/liberty-topo/`, together with a manifest and attribution text.
+- **Raster PMTiles v3:** export `liberty.pmtiles` or `liberty-topo.pmtiles`, including map attribution metadata.
+- **InkHUD firmware and SD card:** export `MapTile.h` or `MapTile.bin` with MTB1/MTB2/MTB4 column-major pixels, LZ4 compression, shared payloads for identical tiles, and white/black sentinel tiles.
+- The existing Python desktop application and InkHUD Firmware Builder remain available with their established output paths and release filenames.
+
+### Electron desktop app and downloads
+
+- **Added a desktop version of the new Web UI for Windows, Linux, and macOS.** Download `EinkMapTiles-electron-windows.zip`, `EinkMapTiles-electron-linux.zip`, or `EinkMapTiles-electron-macos.zip`, extract the archive, and run the application inside.
+- Electron writes ZIP64, PMTiles, and InkHUD exports incrementally through disk-backed writers, allowing large outputs without keeping the whole artifact in browser memory. Cancelled or failed exports clean up temporary output files.
+- InkHUD compressed payloads remain limited to `2^32 - 1` bytes by the firmware format. Exports above that limit fail explicitly instead of wrapping offsets and producing corrupt files.
+- The browser recommends the matching Electron download at an estimate of 512 MiB of raw tile data or 50,000 tiles. This is a memory recommendation; browser export remains available.
+- **The existing `EinkMapTiles-windows.exe` continues to run the Python/Tk interface.** The new Electron app is a separate download. Electron builds are portable archives rather than installers and are not yet code-signed or notarized.
+
+### Launchers and fixes
+
+- Added Bash and PowerShell launchers that select the original desktop application or the new browser application. Run `./scripts/eink-map-tiles.sh --ui=web` or `.\scripts\eink-map-tiles.ps1 --ui=web` with Node.js 22 or newer.
+- Launchers install missing browser dependencies, build the UI, and serve it locally. Custom ports and `--no-open` are supported; the original Python desktop mode remains the default.
+- Fixed Node.js version detection in the Windows PowerShell launcher.
+- Kept Web UI files on LF line endings so formatting checks also pass on Windows.
 
 ### Development
 
-- Added browser, launcher, native export-writer, and Electron packaging checks to pull-request CI.
-- Fixed Node.js version detection in the Windows PowerShell launcher.
-- Kept Web UI files on LF line endings so formatting checks also pass on Windows.
+- Added browser, launcher, native export-writer, and Electron packaging checks to pull-request CI, plus Electron release builds on all three desktop platforms.
+- Added a developer handbook covering architecture, rendering, providers, project storage, output formats, testing, and contribution workflows.
+
+---
 
 ## v2.1.1
 
