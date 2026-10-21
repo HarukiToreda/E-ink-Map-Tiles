@@ -2,7 +2,7 @@
 
 ---
 
-## Unreleased
+## v2.2.0
 
 ### Web UI and desktop app
 
@@ -14,6 +14,8 @@
 ### Development
 
 - Added browser, launcher, native export-writer, and Electron packaging checks to pull-request CI.
+- Fixed Node.js version detection in the Windows PowerShell launcher.
+- Kept Web UI files on LF line endings so formatting checks also pass on Windows.
 
 ## v2.1.1
 

@@ -149,7 +149,7 @@ if (-not (Get-Command node -ErrorAction SilentlyContinue) -or -not (Get-Command 
   Stop-WithError "Node.js 22 or newer and npm are required for --ui=web" 1
 }
 
-$NodeMajorText = & node --eval 'process.stdout.write(process.versions.node.split(".")[0])'
+$NodeMajorText = (& node --version).TrimStart("v").Split(".")[0]
 $NodeMajor = 0
 if (-not [int]::TryParse($NodeMajorText, [ref]$NodeMajor) -or $NodeMajor -lt 22) {
   $NodeVersion = & node --version

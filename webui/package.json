@@ -2,7 +2,7 @@
   "name": "eink-map-tiles-webui",
   "productName": "E-ink Map Tiles",
   "private": true,
-  "version": "2.1.1",
+  "version": "2.2.0",
   "main": "electron/main.cjs",
   "type": "module",
   "engines": {
