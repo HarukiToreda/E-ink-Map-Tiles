@@ -11,3 +11,10 @@
 __pycache__/
 *.py[cod]
 .venv/
+/webui/node_modules/
+/webui/dist/
+/webui/electron-dist/
+/webui/electron-stage/
+/webui/*.tsbuildinfo
+/webui/vite.config.js
+/webui/vite.config.d.ts

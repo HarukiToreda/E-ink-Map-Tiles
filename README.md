@@ -8,6 +8,32 @@ Local-only desktop app for generating e-paper-friendly offline map tiles for Ink
 
 Exports normal XYZ tile folders with attribution and a manifest, InkHUD firmware headers (`MapTile.h`) with LZ4-compressed column-major tiles ready for ESP32-S3 and nRF52840 targets, and `MapTile.bin` for devices that read map tiles from an SD card instead of flash.
 
+## Browser Web UI
+
+The repository also includes an independent browser-native application. It runs alongside the existing Python/Tk desktop application and does not require a Python backend.
+
+```bash
+./scripts/eink-map-tiles.sh --ui=web
+```
+
+On Windows:
+
+```powershell
+.\scripts\eink-map-tiles.ps1 --ui=web
+```
+
+Node.js 22 or newer is required. The launcher installs locked dependencies with `npm ci` when needed, builds the Web UI, and starts it locally on `127.0.0.1:8765`. Use `--no-open` on a headless machine or `--port PORT` to choose another port.
+
+The Web UI produces these files:
+
+- `MUI-Tiles.zip` for MUI XYZ tiles under `maps/liberty/` or `maps/liberty-topo/`.
+- `liberty.pmtiles` or `liberty-topo.pmtiles` for MUI PMTiles storage.
+- `MapTile.h` for compiling InkHUD tiles into firmware.
+- `MapTile.bin` for InkHUD SD-card storage.
+- `eink-map-session.json` for moving a browser project between computers.
+
+The browser architecture and development workflow are documented in the [developer handbook](docs/README.md).
+
 ## What It Does
 
 - Pan and zoom an interactive map preview with cursor-anchored scroll wheel zoom.
