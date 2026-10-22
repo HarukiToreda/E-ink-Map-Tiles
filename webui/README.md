@@ -16,6 +16,23 @@ npm run build
 `npm run check` is the local quality gate: strict TypeScript, ESLint, Prettier, and Vitest. `npm run build` writes the production application to the ignored `webui/dist/` directory. Generated bundles are deployment output and are not committed.
 The version shown in the UI is injected from `package.json` at build time.
 
+## Cloudflare Workers deployment
+
+The production Web UI can be deployed as a Cloudflare Workers application with static assets. `wrangler.jsonc` points Cloudflare at the Vite output in `dist/` and enables single-page-application fallback routing.
+
+When connecting this repository in **Workers & Pages → Create application**, use these build settings:
+
+| Setting         | Value                  |
+| --------------- | ---------------------- |
+| Root directory  | `webui`                |
+| Build command   | `npm run build`        |
+| Deploy command  | `npx wrangler deploy`  |
+| Preview command | `npx wrangler preview` |
+
+Cloudflare installs the locked npm dependencies before running the build. The build command performs TypeScript compilation and creates the production assets; Wrangler then uploads the generated `dist/` directory described by `wrangler.jsonc`. No server-side Worker entry point is required for this browser-only application.
+
+The Wrangler `name` is `eink-map-tiles`. Use the same name when creating the Cloudflare Worker, or update the name in `wrangler.jsonc` to match an existing Worker before connecting the repository.
+
 From the repository root, `./scripts/eink-map-tiles.sh --ui=web` on Unix-like systems or `.\scripts\eink-map-tiles.ps1 --ui=web` on Windows installs locked dependencies when `node_modules/` is absent, builds this application, and serves `dist/` through Node/Vite. Python is not involved in the Web UI runtime. Use `npm run dev` directly when you want Vite’s development server and hot-module replacement.
 
 ## Electron desktop build
