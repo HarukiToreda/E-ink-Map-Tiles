@@ -1360,7 +1360,7 @@ class DesktopApp(tk.Tk):
             "q": query, "format": "json", "limit": 1
         })
         try:
-            req = urllib.request.Request(url, headers={"User-Agent": "EinkMapTiles/1.3"})
+            req = urllib.request.Request(url, headers={"User-Agent": cli.DEFAULT_USER_AGENT})
             with urllib.request.urlopen(req, timeout=8) as resp:
                 results = _json.loads(resp.read())
             if not results:

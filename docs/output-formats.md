@@ -190,9 +190,17 @@ Deduplication compares compressed payload bytes. Tiles with identical packed pix
 
 ## `MapTile.bin`
 
-Downloaded filename: `MapTile.bin`.
+Downloaded bundle: `MapTiles.zip`.
 
-Destination: `/Map/MapTile.bin` on the device SD card.
+Extract the bundle at the device SD-card root. It contains:
+
+```text
+Map/MapTile.bin
+LICENSE.txt
+ATTRIBUTION.txt
+```
+
+`ATTRIBUTION.txt` identifies the source, style, e-ink bit depth, tile count, zoom levels, enabled map elements, terrain setting, and applicable provider attribution. `LICENSE.txt` includes the license and terms links applicable to the selected source and optional terrain data.
 
 ```mermaid
 flowchart LR
@@ -222,6 +230,9 @@ Destination in Meshtastic firmware source:
 `src/graphics/niche/InkHUD/Applets/Bases/Map/MapTile.h`
 
 The header represents the same logical data with C arrays:
+
+- `map_tile_attribution[]` and `map_tile_license[]` are null-terminated compile-time strings containing the same metadata and applicable terms as the SD-card bundle notices.
+- These strings exist only in `MapTile.h`; the MTB1/MTB2/MTB4 binary format is unchanged.
 
 ```mermaid
 classDiagram

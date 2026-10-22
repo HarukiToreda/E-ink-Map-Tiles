@@ -227,7 +227,7 @@ ATTRIBUTION.txt
 {export-name}.zip
 ```
 
-InkHUD exports save a single file to the chosen path: `MapTile.h` (firmware header) or `MapTile.bin` (SD card).
+InkHUD header exports save `MapTile.h`. SD-card exports save `MapTiles.zip`, ready to extract at the SD-card root.
 
 ## InkHUD Firmware Export
 
@@ -240,7 +240,7 @@ Once you have `MapTile.h`, you have two options to get it into firmware:
 
 ### SD card export
 
-**⬡ Export for InkHUD (SD Card)** generates `MapTile.bin` — the same tiles as `MapTile.h`, packed as a compact little-endian binary instead of a C header, for InkHUD builds that read tiles from an SD card instead of flash. Copy it to `Map/MapTile.bin` on the device's SD card.
+**⬡ Export for InkHUD (SD Card)** generates `MapTiles.zip`. Extract it at the SD-card root to install `Map/MapTile.bin`, `LICENSE.txt`, and `ATTRIBUTION.txt`. The attribution file records the selected source, style, bit depth, tile count, zooms, enabled map elements, terrain setting, and required provider credits so the map applet can display the correct notice for the installed map.
 
 ### Image pipeline
 

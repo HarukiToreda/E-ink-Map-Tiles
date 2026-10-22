@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
+from . import __version__
 
 DEFAULT_URL_TEMPLATE = None
 OPENFREEMAP_VECTOR_TEMPLATE = "https://tiles.openfreemap.org/planet/latest/{z}/{x}/{y}.pbf"
@@ -21,7 +22,10 @@ OPENFREEMAP_MAX_DETAIL_ZOOM = 14
 OVERZOOM_MAX_DETAIL_ZOOM = 16
 TOPO_MAX_DETAIL_ZOOM = OVERZOOM_MAX_DETAIL_ZOOM
 TERRAIN_TERRARIUM_TEMPLATE = "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png"
-DEFAULT_USER_AGENT = "eink-map-tiles/1.1.0 (+https://github.com/HarukiToreda/E-ink-Map-Tiles)"
+DEFAULT_USER_AGENT = (
+    f"eink-map-tiles/{__version__} "
+    "(+https://github.com/HarukiToreda/E-ink-Map-Tiles)"
+)
 MAX_MERCATOR_LAT = 85.05112878
 VECTOR_EXTENT = 4096
 MAP_ELEMENTS = ("land", "water", "roads", "highways", "paths", "buildings", "boundaries", "labels", "pois", "transit")

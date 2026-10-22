@@ -3,9 +3,11 @@ const { mkdtemp, readFile, rm, writeFile } = require("node:fs/promises");
 const os = require("node:os");
 const path = require("node:path");
 const { afterEach, test } = require("node:test");
+const { unzipSync } = require("fflate");
 const {
   createZipWriter,
   finishMtb,
+  finishMtbBundle,
   finishPmtiles,
   planMtbPayload,
   zxyToTileId,
@@ -115,12 +117,22 @@ test("deduplicates InkHUD payloads in binary and header exports", async () => {
     kind: "inkhud-header",
     records,
     offset: state.offset,
-    options: { depth: 1, style: "test" },
+    options: {
+      depth: 1,
+      style: "test",
+      sdCardAttribution: "OpenStreetMap contributors\nhttps://example.test",
+      sdCardLicense: "ODbL terms",
+    },
     spoolPath,
     tempPath: headerPath,
   });
   const header = await readFile(headerPath, "utf8");
   assert.match(header, /map_tile_offsets\[\] = \{ 0, 0 \};/);
+  assert.match(
+    header,
+    /map_tile_attribution\[\] = "OpenStreetMap contributors\\nhttps:\/\/example\.test";/,
+  );
+  assert.match(header, /map_tile_license\[\] = "ODbL terms";/);
   assert.equal(header.match(/0x01/g)?.length, 1);
 });
 
@@ -139,4 +151,27 @@ test("represents white and black InkHUD tiles without payload bytes", () => {
     writePayload: false,
   });
   assert.equal(state.offset, 0);
+});
+
+test("packages an SD card binary with license and attribution files", async () => {
+  const directory = await temporaryDirectory(),
+    spoolPath = path.join(directory, "tiles.spool"),
+    bundlePath = path.join(directory, "MapTiles.zip");
+  await writeFile(spoolPath, Buffer.from([1, 2, 3]));
+  await finishMtbBundle({
+    kind: "inkhud-binary",
+    records: [{ z: 7, x: 1, y: 2, length: 3, offset: 0, payloadKind: 0 }],
+    offset: 3,
+    options: {
+      depth: 1,
+      sdCardLicense: "license details",
+      sdCardAttribution: "attribution details",
+    },
+    spoolPath,
+    tempPath: bundlePath,
+  });
+  const files = unzipSync(await readFile(bundlePath));
+  assert.equal(Buffer.from(files["Map/MapTile.bin"]).subarray(0, 4).toString(), "MTB1");
+  assert.equal(Buffer.from(files["LICENSE.txt"]).toString(), "license details");
+  assert.equal(Buffer.from(files["ATTRIBUTION.txt"]).toString(), "attribution details");
 });

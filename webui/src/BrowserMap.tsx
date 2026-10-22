@@ -4,6 +4,7 @@ import { ConversionWorkerClient } from "./browser/conversionWorkerClient";
 import { errorMessage } from "./browser/format";
 import { isJsonObject } from "./browser/geojson";
 import { renderCacheNamespace } from "./browser/mapRenderer";
+import { renderPreviewTile } from "./browser/renderActivity";
 import {
   boundsCenter,
   lonLatToWorld,
@@ -26,6 +27,7 @@ interface BrowserMapProps {
   fitRequest: FitRequest | null;
   placement: Marker | null;
   selectedMarkerId: string | null;
+  exporting: boolean;
   onView: (view: ProjectSnapshot["session"]["view"]) => void;
   onPlace: (lat: number, lon: number) => void;
   onSelectMarker: (markerId: string | null) => void;
@@ -114,6 +116,7 @@ export function BrowserMap({
   fitRequest,
   placement,
   selectedMarkerId,
+  exporting,
   onView,
   onPlace,
   onSelectMarker,
@@ -137,7 +140,7 @@ export function BrowserMap({
   useEffect(() => {
     const container = containerRef.current;
     const output = canvasRef.current;
-    if (!container || !output) return;
+    if (!container || !output || exporting) return;
 
     let cancelled = false;
     let sequence = 0;
@@ -191,7 +194,9 @@ export function BrowserMap({
         while (!controller.signal.aborted) {
           const tile = visibleTiles[nextTile++];
           if (!tile) return;
-          const image = await renderNativeTile(session, tile, cacheNamespace, controller.signal);
+          const image = await renderPreviewTile(() =>
+            renderNativeTile(session, tile, cacheNamespace, controller.signal),
+          );
           controller.signal.throwIfAborted();
           context.drawImage(
             image,
@@ -201,7 +206,7 @@ export function BrowserMap({
         }
       };
 
-      await Promise.all(Array.from({ length: Math.min(6, visibleTiles.length) }, renderNextTile));
+      await Promise.all(Array.from({ length: Math.min(4, visibleTiles.length) }, renderNextTile));
       if (cancelled || renderId !== sequence) return;
 
       const pixels = context.getImageData(0, 0, width, height);
@@ -294,6 +299,7 @@ export function BrowserMap({
   }, [
     onError,
     overlayKey,
+    exporting,
     project.project_id,
     project.render_revision,
     project.session.view.center_lat,

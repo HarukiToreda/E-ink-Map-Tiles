@@ -3,15 +3,22 @@ const fs = require("node:fs");
 const { unlink } = require("node:fs/promises");
 const path = require("node:path");
 const { app, BrowserWindow, dialog, ipcMain, shell } = require("electron");
+const { version } = require("../package.json");
 const {
   createZipWriter,
   finishMtb,
+  finishMtbBundle,
   finishPmtiles,
   planMtbPayload,
   zxyToTileId,
 } = require("./streaming-writers.cjs");
 
 const zipJobs = new Map();
+const APP_USER_AGENT = `eink-map-tiles/${version} (+https://github.com/HarukiToreda/E-ink-Map-Tiles)`;
+
+// Browser JavaScript cannot set the forbidden User-Agent header itself. Electron's
+// fallback applies this identity to renderer fetches, including preview and export tiles.
+app.userAgentFallback = APP_USER_AGENT;
 
 function senderWindow(event) {
   const window = BrowserWindow.fromWebContents(event.sender);
@@ -213,6 +220,7 @@ ipcMain.handle("desktop:export:finish", async (event, { jobId } = {}) => {
     job.output.once("error", reject);
   });
   if (job.kind === "mui-pmtiles") await finishPmtiles(job);
+  else if (job.kind === "inkhud-binary") await finishMtbBundle(job);
   else await finishMtb(job);
   await unlink(job.finalPath).catch((error) => {
     if (error.code !== "ENOENT") throw error;

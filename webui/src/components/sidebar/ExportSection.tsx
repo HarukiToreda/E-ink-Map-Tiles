@@ -201,12 +201,12 @@ export function ExportSection({
                 </div>
                 <div className="export-action">
                   <button onClick={() => onStartExport("inkhud-binary")}>
-                    Download MapTile.bin (SD Card)
+                    Download SD Card Bundle (.zip)
                   </button>
                   {exportJob?.kind === "inkhud-binary" && exportJob.status === "completed" && (
                     <div className="file-destination">
                       <span>SD card destination</span>
-                      <code>/Map/MapTile.bin</code>
+                      <code>Extract ZIP to SD card root</code>
                     </div>
                   )}
                 </div>

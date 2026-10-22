@@ -4,6 +4,7 @@ import { ConversionWorkerClient } from "./conversionWorkerClient";
 import { formatBytes } from "./format";
 import { mapAttributionText, muiStyleName } from "./mapConfig";
 import { renderCacheNamespace, renderTilePixels } from "./mapRenderer";
+import { renderExportTiles } from "./renderActivity";
 import {
   buildSparseMtbBinary,
   buildSparseMtbHeader,
@@ -14,6 +15,7 @@ import {
 import { encodeMuiIndexedPng } from "./muiPng";
 import { buildRasterPmtiles } from "./pmtilesWriter";
 import { rawBytesPerTile, type TileCoordinate } from "./tiles";
+import { sdCardAttributionText, sdCardLicenseText } from "./sdCardBundle";
 import type { TilePlanRequest, TilePlanResponse } from "./workerProtocol";
 
 type Progress = (job: ExportJob) => void;
@@ -187,13 +189,15 @@ export async function exportInBrowser({
         "normal-zip": "MUI-Tiles.zip",
         "mui-pmtiles": `${styleName}.pmtiles`,
         "inkhud-header": "MapTile.h",
-        "inkhud-binary": "MapTile.bin",
+        "inkhud-binary": "MapTiles.zip",
       };
       desktopFileJob = await desktopFile.startExport(kind, names[kind], {
         depth: session.inkhud.tile_depth,
         style: session.render.style,
         styleName,
         attribution: mapAttributionText(session),
+        sdCardAttribution: sdCardAttributionText(session, tiles),
+        sdCardLicense: sdCardLicenseText(session),
       });
       if (!desktopFileJob) {
         Object.assign(job, { status: "cancelled", message: "Export cancelled" });
@@ -248,7 +252,9 @@ export async function exportInBrowser({
         publishRenderProgress(completed === tiles.length);
       }
     };
-    await Promise.all(Array.from({ length: Math.min(4, tiles.length) }, renderNext));
+    await renderExportTiles(() =>
+      Promise.all(Array.from({ length: Math.min(4, tiles.length) }, renderNext)),
+    );
     const packedTiles = packed.filter((tile): tile is PackedTile => Boolean(tile));
     let artifact: Blob, name: string;
     if (desktopFileJob) {
@@ -328,16 +334,36 @@ export async function exportInBrowser({
       name = `${styleName}.pmtiles`;
     } else if (kind === "inkhud-header") {
       artifact = new Blob(
-        [buildSparseMtbHeader(packedTiles, session.inkhud.tile_depth, session.render.style)],
+        [
+          buildSparseMtbHeader(
+            packedTiles,
+            session.inkhud.tile_depth,
+            session.render.style,
+            sdCardAttributionText(session, tiles),
+            sdCardLicenseText(session),
+          ),
+        ],
         { type: "text/x-c" },
       );
       name = "MapTile.h";
     } else {
+      const binary = buildSparseMtbBinary(packedTiles, session.inkhud.tile_depth);
       artifact = new Blob(
-        [blobPart(buildSparseMtbBinary(packedTiles, session.inkhud.tile_depth))],
-        { type: "application/octet-stream" },
+        [
+          blobPart(
+            zipSync(
+              {
+                "Map/MapTile.bin": binary,
+                "LICENSE.txt": strToU8(sdCardLicenseText(session)),
+                "ATTRIBUTION.txt": strToU8(sdCardAttributionText(session, tiles)),
+              },
+              { level: 6 },
+            ),
+          ),
+        ],
+        { type: "application/zip" },
       );
-      name = "MapTile.bin";
+      name = "MapTiles.zip";
     }
     downloadBlob(name, artifact);
     Object.assign(job, {

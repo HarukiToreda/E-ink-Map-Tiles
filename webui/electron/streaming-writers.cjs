@@ -1,6 +1,6 @@
 const { createHash } = require("node:crypto");
 const fs = require("node:fs");
-const { open } = require("node:fs/promises");
+const { open, unlink } = require("node:fs/promises");
 const archiverModule = require("archiver");
 
 function createZipWriter(tempPath) {
@@ -204,6 +204,10 @@ function numberType(maximum) {
   return maximum <= 0xff ? "uint8_t" : maximum <= 0xffff ? "uint16_t" : "uint32_t";
 }
 
+function cString(value) {
+  return JSON.stringify(value || "").replace(/\\u00a9/gi, "©");
+}
+
 async function writeText(output, text) {
   if (!output.write(text)) await new Promise((resolve) => output.once("drain", resolve));
 }
@@ -277,7 +281,7 @@ async function finishMtb(job) {
       );
     await writeText(
       output,
-      `#pragma once\n#include <stdint.h>\n\n// ${job.options.style} InkHUD sparse tile export: ${count} tiles\nstatic const uint8_t map_tile_bit_depth = ${job.options.depth};\nstatic const uint8_t map_tile_layout = 0;\nstatic const uint8_t map_tile_grid_cols = 0;\nstatic const uint8_t map_tile_grid_rows = 0;\nstatic const uint8_t map_tile_block_count = 0;\nstatic const ${count <= 0xffff ? "uint16_t" : "uint32_t"} map_tile_count = ${count};\nstatic const ${numberType(maxima.z)} map_tile_zooms[] = `,
+      `#pragma once\n#include <stdint.h>\n\n// ${job.options.style} InkHUD sparse tile export: ${count} tiles\nstatic const char map_tile_attribution[] = ${cString(job.options.sdCardAttribution)};\nstatic const char map_tile_license[] = ${cString(job.options.sdCardLicense)};\n\nstatic const uint8_t map_tile_bit_depth = ${job.options.depth};\nstatic const uint8_t map_tile_layout = 0;\nstatic const uint8_t map_tile_grid_cols = 0;\nstatic const uint8_t map_tile_grid_rows = 0;\nstatic const uint8_t map_tile_block_count = 0;\nstatic const ${count <= 0xffff ? "uint16_t" : "uint32_t"} map_tile_count = ${count};\nstatic const ${numberType(maxima.z)} map_tile_zooms[] = `,
     );
     await writeArray(output, job.records, (item) => item.z);
     await writeText(output, `static const ${numberType(maxima.x)} map_tile_tx[] = `);
@@ -323,9 +327,29 @@ async function finishMtb(job) {
   }
 }
 
+async function finishMtbBundle(job) {
+  const binaryPath = `${job.tempPath}.bin`;
+  await finishMtb({ ...job, tempPath: binaryPath });
+  const { archive, output, failure } = createZipWriter(job.tempPath),
+    closed = new Promise((resolve, reject) => {
+      output.once("close", resolve);
+      output.once("error", reject);
+    });
+  archive.file(binaryPath, { name: "Map/MapTile.bin" });
+  archive.append(job.options.sdCardLicense, { name: "LICENSE.txt" });
+  archive.append(job.options.sdCardAttribution, { name: "ATTRIBUTION.txt" });
+  try {
+    await archive.finalize();
+    await Promise.race([closed, failure]);
+  } finally {
+    await unlink(binaryPath).catch(() => {});
+  }
+}
+
 module.exports = {
   createZipWriter,
   finishMtb,
+  finishMtbBundle,
   finishPmtiles,
   planMtbPayload,
   zxyToTileId,

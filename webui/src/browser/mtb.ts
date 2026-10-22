@@ -136,8 +136,18 @@ function values(values: number[]): string {
   return values.join(", ");
 }
 
+function cString(value: string): string {
+  return JSON.stringify(value).replace(/\\u00a9/gi, "©");
+}
+
 /** Build the legacy firmware C header byte-for-byte in the same schema as Python. */
-export function buildSparseMtbHeader(tiles: PackedTile[], depth: TileDepth, style: string): string {
+export function buildSparseMtbHeader(
+  tiles: PackedTile[],
+  depth: TileDepth,
+  style: string,
+  attribution = "",
+  license = "",
+): string {
   const payloads = preparePayloads(tiles),
     zooms = [...new Set(tiles.map((tile) => tile.z))].sort((a, b) => a - b);
   const compressed = payloads.kinds.filter((kind) => kind === 0).length;
@@ -151,6 +161,9 @@ export function buildSparseMtbHeader(tiles: PackedTile[], depth: TileDepth, styl
     "// map_tile_kinds: 0=LZ4 payload, 1=all-white tile, 2=all-black tile",
     `// unique payloads: ${payloads.unique.length} / ${compressed} compressed tiles (${compressed - payloads.unique.length} deduplicated)`,
     `// sentinels: ${payloads.kinds.filter((kind) => kind === 1).length} white, ${payloads.kinds.filter((kind) => kind === 2).length} black`,
+    "",
+    `static const char map_tile_attribution[] = ${cString(attribution)};`,
+    `static const char map_tile_license[] = ${cString(license)};`,
     "",
     `static const uint8_t map_tile_bit_depth = ${depth};`,
     "static const uint8_t map_tile_layout = 0;",

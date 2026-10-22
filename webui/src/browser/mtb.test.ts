@@ -62,10 +62,27 @@ describe("browser MTB artifacts", () => {
       "osm-eink",
     );
     expect(header).toContain("static const uint8_t map_tile_bit_depth = 1;");
+    expect(header).toContain('static const char map_tile_attribution[] = "";');
     expect(header).toContain("static const uint16_t map_tile_count = 1;");
     expect(header).toContain("static const uint8_t map_tile_zooms[] = { 7 };");
     expect(header).toContain("static const uint8_t map_tile_kinds[] = { 2 };");
     expect(header).toContain("0x00,  // padding byte when all tiles are sentinel-filled");
+  });
+
+  it("embeds escaped attribution in the C header without changing MTB binary data", () => {
+    const tile = { z: 0, x: 0, y: 0, pixels: new Uint8Array(8192) };
+    const header = buildSparseMtbHeader(
+      [tile],
+      1,
+      "test",
+      'OpenStreetMap "contributors"\nline two',
+      "ODbL\\terms",
+    );
+    expect(header).toContain(
+      'static const char map_tile_attribution[] = "OpenStreetMap \\"contributors\\"\\nline two";',
+    );
+    expect(header).toContain('static const char map_tile_license[] = "ODbL\\\\terms";');
+    expect(new TextDecoder().decode(buildSparseMtbBinary([tile], 1).subarray(0, 4))).toBe("MTB1");
   });
 
   it("describes the byte-column count for each depth", () => {

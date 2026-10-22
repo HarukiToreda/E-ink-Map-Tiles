@@ -85,3 +85,39 @@ export function mapAttributionText(session: Pick<ProjectSession, "render">): str
     .map(({ label, url }) => `${label}\n${url}`)
     .join("\n\n")}\n`;
 }
+
+export function mapLicenseText(session: Pick<ProjectSession, "render">): string {
+  if (session.render.source === "usgs-topo")
+    return [
+      "U.S. Geological Survey map data and services",
+      "Terms and licensing information:",
+      USGS_ATTRIBUTION.url,
+      "",
+    ].join("\n");
+
+  const sections = [
+    "OpenStreetMap data",
+    "Open Data Commons Open Database License (ODbL) 1.0:",
+    "https://opendatacommons.org/licenses/odbl/1-0/",
+    "Copyright and attribution guidance:",
+    "https://www.openstreetmap.org/copyright",
+    "",
+    "OpenMapTiles schema and OpenFreeMap distribution",
+    "Project license and usage information:",
+    "https://github.com/openmaptiles/openmaptiles/blob/master/LICENSE.md",
+    "https://openfreemap.org/",
+    "",
+    "Liberty reference style",
+    "Project license:",
+    "https://github.com/hyperknot/openfreemap-styles/blob/master/LICENSE.md",
+    "",
+  ];
+  if (session.render.style === "osm-eink-topo")
+    sections.push(
+      "Mapzen terrain data",
+      "Attribution and license information:",
+      MAPZEN_ATTRIBUTION.url,
+      "",
+    );
+  return sections.join("\n");
+}

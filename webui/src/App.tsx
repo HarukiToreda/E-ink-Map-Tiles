@@ -325,6 +325,7 @@ export default function App() {
               fitRequest={fitRequest}
               placement={placement}
               selectedMarkerId={selectedMarkerId}
+              exporting={exportJob?.status === "running"}
               onView={updateView}
               onPlace={(lat, lon) => {
                 if (!placement) return;
