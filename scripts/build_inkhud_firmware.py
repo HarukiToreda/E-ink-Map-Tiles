@@ -40,6 +40,18 @@ INKHUD_TARGETS = [
         "chip":     "esp32s3",
     },
     {
+        "env":      "t-deck-pro-inkhud",
+        "label":    "LilyGO T-Deck Pro (16 MB)",
+        "flash_mb": 16,
+        "chip":     "esp32s3",
+    },
+    {
+        "env":      "thinknode_m5-inkhud",
+        "label":    "Elecrow ThinkNode M5 (4 MB)",
+        "flash_mb": 4,
+        "chip":     "esp32s3",
+    },
+    {
         "env":      "heltec-wireless-paper-inkhud",
         "label":    "Heltec Wireless Paper (8 MB)",
         "flash_mb": 8,
@@ -67,6 +79,12 @@ INKHUD_TARGETS = [
     {
         "env":      "t-echo-inkhud",
         "label":    "LilyGO T-Echo (1 MB)",
+        "flash_mb": 1,
+        "chip":     "nrf52840",
+    },
+    {
+        "env":      "t-echo-plus-inkhud",
+        "label":    "LilyGO T-Echo Plus (1 MB)",
         "flash_mb": 1,
         "chip":     "nrf52840",
     },
